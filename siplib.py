@@ -2,9 +2,10 @@ from __future__ import print_function, unicode_literals, absolute_import
 
 import socket
 import uuid
-from pprint import pprint
+from pprint import pprint, pformat
 
 import format
+from format import Addr, Uri, Contact, Via, Status
 
 # addr = (host, port)
 # user = (username, displayname)
@@ -24,27 +25,18 @@ def safe_update(target, source):
 
 
 class Leg(object):
-    def __init__(self, local_addr, local_user, remote_addr=None, remote_user=None, proxy_addr=None):
+    def __init__(self, local_uri, local_name, remote_uri=None, proxy_addr=None):
         # Things in the From/To fields
-        self.local_addr = local_addr
-        self.local_user = local_user
-        self.local_tag = uuid.uuid4().hex
-        self.remote_addr = remote_addr
-        self.remote_user = remote_user
-        self.remote_tag = None
+        self.local_contact = Contact(local_uri, local_name, dict(tag=uuid.uuid4().hex))
+        self.remote_contact = Contact(remote_uri)
 
         # The peer's contact address, received in Contact, sent in RURI
-        self.peer_addr = remote_addr
-        self.peer_user = remote_user
+        self.peer_uri = remote_uri
         self.proxy_addr = proxy_addr
 
         self.call_id = None
         self.routes = []
-
         self.last_sent_cseq = 0
-        self.last_recved_method = None
-        self.last_recved_cseq = None
-        self.last_recved_vias = None
 
         self.socket = None
 
@@ -52,7 +44,7 @@ class Leg(object):
     def socket(self):
         if not self.local_socket:
             self.local_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.local_socket.bind(local_addr)
+            self.local_socket.bind(self.local_contact.uri.addr)
 
         return self.local_socket
 
@@ -65,14 +57,14 @@ class Leg(object):
             self.call_id = uuid.uuid4().hex
 
         f = {
-            "uri": (self.remote_addr, self.remote_user),
-            "from": (self.local_addr, self.local_user, dict(tag=self.local_tag)),
-            "to": (self.remote_addr, self.remote_user, dict(tag=self.remote_tag)),
+            "uri": self.peer_uri,
+            "from": self.local_contact,
+            "to": self.remote_contact,
             "call_id": self.call_id,
             "cseq": self.last_sent_cseq,
-            "via": [(self.local_addr, branch)],
+            "via": [Via(self.local_contact.uri.addr, branch)],
             "maxfwd": 50,
-            "contact": (self.local_addr, self.local_user, {})
+            "contact": Contact(self.local_contact.uri)
         }
         safe_update(f, user_params)
 
@@ -85,51 +77,51 @@ class Leg(object):
         if "uri" not in params:
             raise Error("Not a request!")
 
-        from_addr, from_user, from_params = params["from"]
-        from_tag = from_params["tag"]
-        to_addr, to_user, to_params = params["to"]
-        to_tag = to_params.get("tag", None)
+        from_contact = params["from"]
+        from_tag = from_contact.params["tag"]
+        to_contact = params["to"]
+        to_tag = to_contact.params.get("tag", None)
         call_id = params["call_id"]
+        local_tag = self.local_contact.params["tag"]
+        remote_tag = self.remote_contact.params.get("tag")
         #cseq = params["cseq"]  # TODO: use?
 
-        if to_addr != self.local_addr or to_user[0] != self.local_user[0]:
-            raise Error("Mismatching recipient!")
+        if to_contact.uri != self.local_contact.uri:
+            raise Error("Mismatching recipient: %s %s" % (to_contact.uri, self.local_contact.uri))
 
-        if self.remote_tag:
+        if remote_tag:
             if call_id != self.call_id:
                 raise Error("Mismatching call id!")
 
-            if from_tag != self.remote_tag:
+            if from_tag != remote_tag:
                 raise Error("Mismatching remote tag!")
 
-            if to_tag != self.local_tag:
+            if to_tag != local_tag:
                 raise Error("Mismatching local tag!")
         else:
             if to_tag:
                 raise Error("Unexpected to tag!")
 
-            self.remote_addr = from_addr
-            self.remote_user = from_user
-            self.remote_tag = from_tag
+            self.remote_contact = from_contact
             self.call_id = call_id
 
         return params
 
 
     def print_response(self, user_params, request_params):
-        code, reason = user_params["status"]
-        to_addr, to_user, to_params = request_params["to"]
-        if code != 100:
-            to_params = dict(to_params, tag=self.local_tag)
+        status = user_params["status"]
+        to_contact = request_params["to"]  # TODO: don't alter
+        if status.code != 100:
+            to_contact.params["tag"] = self.local_contact.params["tag"]
 
         params = {
             "from": request_params["from"],
-            "to": (to_addr, to_user, to_params),
+            "to": request_params["to"],
             "call_id": request_params["call_id"],
             "cseq": request_params["cseq"],
             "via": request_params["via"],
             "method": request_params["method"],  # only for internal use
-            "contact": (self.local_addr, self.local_user, {})
+            "contact": Contact(self.local_contact.uri)
         }
         safe_update(params, user_params)
 
@@ -142,24 +134,25 @@ class Leg(object):
         if "status" not in params:
             raise Error("Not a response!")
 
-        from_addr, from_user, from_params = params["from"]
-        from_tag = from_params["tag"]
-        to_addr, to_user, to_params = params["to"]
-        to_tag = to_params.get("tag", None)
+        from_contact = params["from"]
+        from_tag = from_contact.params["tag"]
+        to_contact = params["to"]
+        to_tag = to_contact.params.get("tag", None)
         call_id = params["call_id"]
-        #cseq = params["cseq"]  # TODO: use?
+        local_tag = self.local_contact.params["tag"]
+        remote_tag = self.remote_contact.params.get("tag")
 
-        if from_addr != self.local_addr or from_user[0] != self.local_user[0]:
+        if from_contact != self.local_contact:
             raise Error("Mismatching recipient!")
 
-        if self.remote_tag:
+        if remote_tag:
             if call_id != self.call_id:
                 raise Error("Mismatching call id!")
 
-            if to_tag != self.remote_tag:
+            if to_tag != remote_tag:
                 raise Error("Mismatching remote tag!")
 
-            if from_tag != self.local_tag:
+            if from_tag != local_tag:
                 raise Error("Mismatching local tag!")
         else:
             if not to_tag:

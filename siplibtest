@@ -2,10 +2,20 @@
 
 from __future__ import print_function, unicode_literals
 from pprint import pprint
+
+from format import Addr, Uri, Contact, Status
 import siplib
 
-caller = siplib.Leg(("CALLER", 5060), ("caller", "Caller"), ("CALLEE", 5060), ("callee", None))
-callee = siplib.Leg(("CALLEE", 5060), ("callee", "Callee"))
+caller_addr = Addr("CALLER", 5060)
+caller_uri = Uri(caller_addr, "caller")
+caller_contact = Contact(caller_uri, "Caller")
+
+callee_addr = Addr("CALLEE", 5060)
+callee_uri = Uri(callee_addr, "callee")
+callee_contact = Contact(callee_uri, "Callee")
+
+caller = siplib.Leg(caller_uri, caller_contact.name, callee_uri)
+callee = siplib.Leg(callee_uri, callee_contact.name)
 
 req_params = dict(method="INVITE")
 request = caller.print_request(req_params)
@@ -14,7 +24,7 @@ print(request)
 req_params = callee.parse_request(request)
 pprint(req_params)
 
-res_params = dict(status=(200, "OK"))
+res_params = dict(status=Status(200, "OK"))
 response = callee.print_response(res_params, req_params)
 print(response)
 

@@ -4,74 +4,94 @@ import re
 import collections
 
 
-# addr = (host, port)
-# user = (username, displayname)
-# ...
-# uri = (addr, username, uriparameters)
-# headerfield = (uri, displayname, headerparameters)
+Addr = collections.namedtuple("Addr", ["host", "port"])
+Status = collections.namedtuple("Status", ["code", "reason"])
+Via = collections.namedtuple("Via", ["addr", "branch"])  # TODO: improve!
+
+
+def parse_parts(parts):
+    params = collections.OrderedDict()
+
+    for part in parts:
+        if "=" in part:
+            k, v = part.split("=")
+            params[k] = v
+        else:
+            params[part] = True
+
+    return params
+
+
+def print_params(params):
+    return [ "%s=%s" % (k, v) if v is not True else k for k, v in params.items() if v]
 
 
 class FormatError(Exception):
     pass
 
 
-# TODO: We can't handle URI parameters yet, only header parameters
-
-def print_sip_uri(addr, user):
-    u, d = user
-    h, p = addr
-
-    return "sip:%s@%s:%d" % (u, h, p) if u else "sip:%s:%d" % (h, p)
+class Uri(collections.namedtuple("Uri", "addr user params")):
+    def __new__(cls, addr, user=None, params=None):
+        return super(Uri, cls).__new__(cls, addr, user, params or {})
 
 
-def parse_sip_uri(uri, display_name=None):
-    m = re.search("^sip:(([\\w.+-]+)@)?([\\w.-]+)(:(\\d+))?$", uri)
-    if not m:
-        raise FormatError("Invalid SIP URI: %r" % uri)
+    def print(self):
+        host, port = self.addr
+        hostport = "%s:%d" % (host, port) if port else host
+        userhostport = "%s@%s" % (self.user, hostport) if self.user else hostport
+        params = print_params(self.params)
 
-    u = m.group(2)
-    h = m.group(3)
-    p = int(m.group(5)) if m.group(5) else 5060
-
-    addr = h, p
-    user = u, display_name
-
-    return addr, user
+        return "sip:" + ";".join([userhostport] + params)
 
 
-def print_user(addr, user, header_params):
-    dn = user[1]
+    @classmethod
+    def parse(cls, uri):
+        parts = uri.split(";")
+        m = re.search("^sip:(([\\w.+-]+)@)?([\\w.-]+)(:(\\d+))?$", parts[0])
+        if not m:
+            raise FormatError("Invalid SIP URI: %r" % uri)
 
-    # If the URI contains URI parameters, not enclosing it in angle brackets would
-    # be interpreted as header parameters. So enclose them always just to be safe.
-    uri = print_sip_uri(addr, user)
-    name = '"%s"' if dn and " " in dn else dn
-    first_part = ["%s <%s>" % (name, uri) if name else "<%s>" % uri]
-    last_parts = ["%s=%s" % (k, v) for k, v in header_params.items() if v]
-    full = ";".join(first_part + last_parts)
+        user = m.group(2)
+        host = m.group(3)
+        port = int(m.group(5)) if m.group(5) else None
 
-    return full
+        params = parse_parts(parts[1:])
+
+        return cls(Addr(host, port), user, params)
 
 
-def parse_user(s):
-    parts = s.split(";")
+class Contact(collections.namedtuple("Contact", "uri name params")):
+    def __new__(cls, uri, name=None, params=None):
+        return super(Contact, cls).__new__(cls, uri, name, params or {})
 
-    m = re.search('^\\s*("(.*?)"|\\S*?)\\s*<(\\S+?)>', parts[0])
-    if m:
-        display_name = m.group(2) or m.group(1)
-        addr, user = parse_sip_uri(m.group(3), display_name)
-    else:
-        addr, user = parse_sip_uri(parts[0])
 
-    header_params = collections.OrderedDict()
-    for part in parts[1:]:
-        if "=" in part:
-            k, v = part.split("=")
-            header_params[k] = v
+    def print(self):
+        # If the URI contains URI parameters, not enclosing it in angle brackets would
+        # be interpreted as header parameters. So enclose them always just to be safe.
+
+        uri = self.uri.print()
+        name = '"%s"' if self.name and " " in self.name else self.name
+        first_part = ["%s <%s>" % (name, uri) if name else "<%s>" % uri]
+        last_parts = print_params(self.params)
+        full = ";".join(first_part + last_parts)
+
+        return full
+
+
+    @classmethod
+    def parse(cls, contact):
+        m = re.search('^\\s*(".*?"|[^"]*?)\\s*<(.*?)>(.*)$', contact)
+        if m:
+            name = m.group(1).strip('"')
+            name = name or None
+            uri = m.group(2)  # may contain semicolons itself
+            parts = m.group(3).split(";")
         else:
-            header_params[part] = True
+            name = None
+            parts = contact.split(";")
+            uri = parts[0]
 
-    return addr, user, header_params
+        return cls(uri=Uri.parse(uri), name=name, params=parse_parts(parts[1:]))
 
 
 def print_message(initial_line, params, body):
@@ -126,8 +146,7 @@ def print_structured_message(params):
         code, reason = params["status"]
         initial_line = "SIP/2.0 %d %s" % (code, reason)
     elif "uri" in params:
-        addr, user = params["uri"]
-        initial_line = "%s %s SIP/2.0" % (params["method"], print_sip_uri(addr, user))
+        initial_line = "%s %s SIP/2.0" % (params["method"], params["uri"].print())
     else:
         raise FormatError("Invalid structured message!")
 
@@ -137,8 +156,7 @@ def print_structured_message(params):
 
     for field in mandatory_fields + other_fields:
         if field in ("from", "to", "contact"):
-            addr, user, header_params = params[field]
-            p[field] = print_user(addr, user, header_params)
+            p[field] = params[field].print()
         elif field == "cseq":
             p[field] = "%d %s" % (params[field], params["method"])  # ACK? CANCEL?
         elif field == "via":
@@ -157,22 +175,20 @@ def parse_structured_message(msg):
 
     m = re.search("^SIP/2.0\\s+(\\d\\d\\d)\\s+(.+)$", initial_line)
     if m:
-        code, reason = int(m.group(1)), m.group(2)
-        p["status"] = code, reason
+        p["status"] = Status(code=int(m.group(1)), reason=m.group(2))
 
     m = re.search("^(\\w+)\\s+(\\S+)\\s*SIP/2.0\\s*$", initial_line)
     if m:
         method, uri = m.groups()
         p["method"] = method
-        p["uri"] = parse_sip_uri(uri)
+        p["uri"] = Uri.parse(uri)
 
     if not p:
         raise FormatError("Invalid message!")
 
     for field in params:
         if field in ("from", "to", "contact"):
-            addr, user, header_params = parse_user(params[field])
-            p[field] = (addr, user, header_params)
+            p[field] = Contact.parse(params[field])
         elif field == "cseq":
             p[field] = int(params[field].split()[0])
         elif field == "via":
@@ -180,8 +196,8 @@ def parse_structured_message(msg):
                 m = re.search("SIP/2.0/UDP ([^:;]+)(:(\\d+))?;branch=z9hG4bK([^;]+)", s)
                 if not m:
                     raise FormatError("Invalid Via!")
-                host, port, branch = m.group(1), int(m.group(3)) if m.group(3) else 5060, m.group(4)
-                return ((host, port), branch)
+                host, port, branch = m.group(1), int(m.group(3)) if m.group(3) else None, m.group(4)
+                return Via(Addr(host, port), branch)
 
             p[field] = [do_one(s) for s in params[field]]
         else:
