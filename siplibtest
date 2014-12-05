@@ -1,6 +1,7 @@
 #! /usr/bin/python
 
 from __future__ import print_function, unicode_literals
+from pprint import pprint
 import siplib
 
 caller = siplib.Leg(("CALLER", 5060), ("caller", "Caller"), ("CALLEE", 5060), ("callee", None))
@@ -11,12 +12,12 @@ request = caller.print_request(req_params)
 print(request)
 
 req_params = callee.parse_request(request)
-print(req_params)
+pprint(req_params)
 
-res_params = dict(status=200, reason="OK")
+res_params = dict(status=(200, "OK"))
 response = callee.print_response(res_params, req_params)
 print(response)
 
 res_params = caller.parse_response(response)
-print(res_params)
+pprint(res_params)
 
