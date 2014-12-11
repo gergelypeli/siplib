@@ -60,9 +60,9 @@ class Uri(collections.namedtuple("Uri", "addr user params")):
         return cls(Addr(host, port), user, params)
 
 
-class Contact(collections.namedtuple("Contact", "uri name params")):
+class Nameaddr(collections.namedtuple("Nameaddr", "uri name params")):
     def __new__(cls, uri, name=None, params=None):
-        return super(Contact, cls).__new__(cls, uri, name, params or {})
+        return super(Nameaddr, cls).__new__(cls, uri, name, params or {})
 
 
     def print(self):
@@ -188,7 +188,7 @@ def parse_structured_message(msg):
 
     for field in params:
         if field in ("from", "to", "contact"):
-            p[field] = Contact.parse(params[field])
+            p[field] = Nameaddr.parse(params[field])
         elif field == "cseq":
             p[field] = int(params[field].split()[0])
         elif field == "via":

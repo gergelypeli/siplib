@@ -3,31 +3,70 @@
 from __future__ import print_function, unicode_literals
 from pprint import pprint
 
-from format import Addr, Uri, Contact, Status
+from format import Addr, Uri, Nameaddr, Status, Via, print_structured_message, parse_structured_message
+from transactions import TransactionManager
 import siplib
 
 caller_addr = Addr("CALLER", 5060)
 caller_uri = Uri(caller_addr, "caller")
-caller_contact = Contact(caller_uri, "Caller")
+caller_nameaddr = Nameaddr(caller_uri, "Caller")
 
 callee_addr = Addr("CALLEE", 5060)
 callee_uri = Uri(callee_addr, "callee")
-callee_contact = Contact(callee_uri, "Callee")
+callee_nameaddr = Nameaddr(callee_uri, "Callee")
 
-caller = siplib.Leg(caller_uri, caller_contact.name, callee_uri)
-callee = siplib.Leg(callee_uri, callee_contact.name)
+caller = siplib.Leg(caller_uri, caller_nameaddr.name, callee_uri)
+callee = siplib.Leg(callee_uri, callee_nameaddr.name)
 
-req_params = dict(method="INVITE")
-request = caller.print_request(req_params)
-print(request)
+#req_params = dict(method="INVITE")
+#request = caller.print_request(req_params)
+#print(request)
 
-req_params = callee.parse_request(request)
-pprint(req_params)
+#req_params = callee.parse_request(request)
+#pprint(req_params)
 
-res_params = dict(status=Status(200, "OK"))
-response = callee.print_response(res_params, req_params)
-print(response)
+#res_params = dict(status=Status(200, "OK"))
+#response = callee.print_response(res_params, req_params)
+#print(response)
 
-res_params = caller.parse_response(response)
-pprint(res_params)
+#res_params = caller.parse_response(response)
+#pprint(res_params)
+
+
+class Transport(object):
+    def get_addr(self):
+        return callee_addr
+
+    def send(self, msg):
+        print("Transport sending:")
+        print(print_structured_message(msg))
+
+    def recved(self, s):
+        print("Transport receiving:")
+        print(s)
+        return parse_structured_message(s)
+
+transport = Transport()
+
+trm = TransactionManager(transport)
+
+class Owner(object):
+    def recved(self, msg):
+        print("Owner received:")
+        pprint(msg)
+
+        callee.take_request(msg)
+        response = callee.make_response(dict(status=Status(200, "Yeah")), msg)
+
+        print("Owner sending:")
+        pprint(response)
+        trm.send(response)
+
+owner = Owner()
+
+req_params = dict(method="INVITE", via=[Via(caller_addr, "bbbb")])
+req_text = caller.print_request(req_params)
+
+req_params = transport.recved(req_text)
+trm.recved(req_params, owner.recved)
 
