@@ -4,6 +4,8 @@ import re
 import collections
 
 
+META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "sdp" ]
+
 Addr = collections.namedtuple("Addr", ["host", "port"])
 Status = collections.namedtuple("Status", ["code", "reason"])
 Via = collections.namedtuple("Via", ["addr", "branch"])  # TODO: improve!
@@ -142,10 +144,10 @@ def parse_message(msg):
 
 
 def print_structured_message(params):
-    if "status" in params:
+    if params["is_response"] is True:
         code, reason = params["status"]
         initial_line = "SIP/2.0 %d %s" % (code, reason)
-    elif "uri" in params:
+    elif params["is_response"] is False:
         initial_line = "%s %s SIP/2.0" % (params["method"], params["uri"].print())
     else:
         raise FormatError("Invalid structured message!")
@@ -161,7 +163,7 @@ def print_structured_message(params):
             p[field] = "%d %s" % (params[field], params["method"])  # ACK? CANCEL?
         elif field == "via":
             p[field] = ["SIP/2.0/UDP %s:%d;branch=z9hG4bK%s" % (a + (b,)) for a, b in params[field]]
-        elif field not in ("method", "uri", "status", "sdp"):
+        elif field not in META_HEADER_FIELDS:
             p[field] = params[field]
 
     body = params.get("sdp", "")
@@ -175,10 +177,12 @@ def parse_structured_message(msg):
 
     m = re.search("^SIP/2.0\\s+(\\d\\d\\d)\\s+(.+)$", initial_line)
     if m:
+        p["is_response"] = True
         p["status"] = Status(code=int(m.group(1)), reason=m.group(2))
 
     m = re.search("^(\\w+)\\s+(\\S+)\\s*SIP/2.0\\s*$", initial_line)
     if m:
+        p["is_response"] = False
         method, uri = m.groups()
         p["method"] = method
         p["uri"] = Uri.parse(uri)
@@ -200,8 +204,10 @@ def parse_structured_message(msg):
                 return Via(Addr(host, port), branch)
 
             p[field] = [do_one(s) for s in params[field]]
-        else:
+        elif field not in META_HEADER_FIELDS:
             p[field] = params[field]
+        else:
+            print("Warning, header field ignored: '%s'!" % field)
 
     p["sdp"] = body
 

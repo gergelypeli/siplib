@@ -3,6 +3,7 @@ from __future__ import print_function, unicode_literals, absolute_import
 from pprint import pprint, pformat
 import uuid
 import datetime
+import weakref
 
 import format
 from format import Addr, Uri, Nameaddr, Via, Status
@@ -52,15 +53,15 @@ from format import Addr, Uri, Nameaddr, Via, Status
 class Error(Exception): pass
 
 
-class Owner(object):
-    def recved_request(self, request):
-        pass
+def identify(params):
+    try:
+        branch = params["via"][0].branch
+    except Exception:
+        raise Error("No Via header in incoming message!")
 
-    def recved_response(self, response):
-        pass
-
-    def no_response(self, request):
-        pass
+    method = params["method"]
+        
+    return branch, method
 
 
 class Transaction(object):
@@ -73,12 +74,11 @@ class Transaction(object):
     T2 = datetime.timedelta(milliseconds=4000)
     TP = datetime.timedelta(milliseconds=10000)
 
-    def __init__(self, transport, report, branch=None):
-        self.transport = transport
+    def __init__(self, manager, report, branch=None):
+        self.manager = manager
         self.report = report
         self.branch = branch or uuid.uuid4().hex
 
-        self.incoming_msg = None
         self.outgoing_msg = None
         self.state = self.WAITING
 
@@ -112,7 +112,7 @@ class Transaction(object):
 
 
     def retransmit(self):
-        self.transport.send(self.outgoing_msg)
+        self.manager.send(self.outgoing_msg)
 
         if self.retransmit_interval:
             self.retransmit_deadline = datetime.datetime.now() + self.retransmit_interval
@@ -137,9 +137,9 @@ class Transaction(object):
         pass
 
 
-class PlainRequest(Transaction):
+class PlainClientTransaction(Transaction):
     def prepare(self, msg):
-        msg["via"] = [ Via(self.transport.get_addr(), self.branch) ]
+        msg["via"] = [ Via(self.manager.get_addr(), self.branch) ]
         return msg
 
 
@@ -149,7 +149,6 @@ class PlainRequest(Transaction):
 
     def recved(self, response):
         if self.state == self.TRANSMITTING:
-            self.incoming_msg = response
             self.report(response)
             self.change_state(self.LINGERING)
         elif self.state == self.LINGERING:
@@ -163,9 +162,15 @@ class PlainRequest(Transaction):
             self.report(None)
 
 
-class PlainResponse(Transaction):
+class PlainServerTransaction(Transaction):
+    def __init__(self, *args, **kwargs):
+        super(PlainServerTransaction, self).__init__(*args, **kwargs)
+        
+        self.incoming_via = None
+        
+        
     def prepare(self, msg):
-        if msg["via"] != self.incoming_msg["via"]:
+        if msg["via"] != self.incoming_via:  # FIXME: what kind of equality is this?
             raise Error("Don't mess with the Via headers!")
 
         return msg
@@ -173,8 +178,8 @@ class PlainResponse(Transaction):
 
     def recved(self, request):
         if self.state == self.WAITING:
-            if not self.incoming_msg:
-                self.incoming_msg = request
+            if not self.incoming_via:
+                self.incoming_via = request["via"]
                 self.report(request)
         elif self.state == self.LINGERING:
             self.retransmit()
@@ -186,7 +191,7 @@ class PlainResponse(Transaction):
         self.change_state(self.LINGERING, response)
 
 
-class AckRequest(PlainRequest):
+class AckClientTransaction(PlainClientTransaction):
     def send(self, request):
         self.change_state(self.LINGERING, request)
 
@@ -195,62 +200,78 @@ class AckRequest(PlainRequest):
         raise Error("WAT?")
 
 
-class InviteRequest(PlainRequest):
+class InviteClientTransaction(PlainClientTransaction):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        super(InviteClientTransaction, self).__init__(*args, **kwargs)
 
-        self.ack = None
-
-
-    def create_ack(self):
-        code = self.incoming_msg["status"].code
-
-        if code < 200:
-            raise Error("Hm?")
-        elif code < 300:
-            ack_branch = self.generate_branch()
-        else:
-            ack_branch = self.branch
-
-        self.change_state(self.LINGERING)  # now we can expire
-        self.ack = AckRequest(self.transport, self.report, ack_branch)
-        return self.ack
+        self.acks_by_remote_tag = {}
+        self.statuses_by_remote_tag = {}
 
 
-    def create_cancel(self):
-        return PlainRequest(self.transport, self.report, self.branch)
+    def create_and_send_ack(self, ack_branch, remote_tag, sdp):
+        if self.state != self.LINGERING:
+            self.change_state(self.LINGERING)  # now we can expire
+        
+        ack = AckClientTransaction(self.manager, None, ack_branch)
+        
+        ack_params = self.outgoing_msg.copy()
+        to = ack_params["to"]
+        
+        ack_params["method"] = "ACK"
+        ack_params["to"] = Nameaddr(to.uri, to.name, dict(to.params, tag=remote_tag))
+        ack_params["sdp"] = sdp
+
+        # These won't be public
+        self.acks_by_remote_tag[remote_tag] = ack
+        ack.send(ack_params)
+
+
+    #def create_cancel(self):
+    #    self.change_state(self.LINGERING)  # may extend lingering time (for 487)
+    #    return PlainClientTransaction(self.manager, self.report, self.branch)
 
 
     def recved(self, response):
-        if self.ack:
-            self.ack.retransmit()  # so we don't extend the lingering time as well
-        elif self.state in (self.TRANSMITTING, self.LINGERING):
-            if response != self.incoming_msg:
-                self.incoming_msg = response
+        remote_tag = response["to"].params["tag"]
+        ack = self.acks_by_remote_tag.get(remote_tag)
+        
+        if ack:
+            ack.retransmit()  # so we don't extend the lingering time as well
+        else:
+            code = response["status"].code
+            statuses = self.statuses_by_remote_tag.setdefault(remote_tag, set())
+            
+            if code not in statuses:
+                statuses.add(code)
                 self.report(response)
 
-            # linger for provisional responses, wait (for ack creation) for final ones
-            new_state = self.LINGERING if response["status"].code < 200 else self.WAITING
-            self.change_state(new_state)
-        else:
-            raise Error("Hm?")
+            if code >= 300:
+                # final non-2xx responses are ACK-ed here in the same transaction
+                self.create_and_send_ack(self.branch, remote_tag, None)
+
+            if self.state != self.WAITING:
+                if code < 200:
+                    self.change_state(self.LINGERING)  # may extend lingering time
+                else:
+                    self.change_state(self.WAITING)  # indefinitely for creating an ACK
 
 
     def expired(self):
         if self.state == self.TRANSMITTING:
             self.report(None)  # nothing at all
         elif self.state == self.LINGERING:
-            if not self.ack:
-                self.report(None)  # no final response
+            # expired only after a provisional response, or after sending an ACK
+            if not self.acks_by_remote_tag:
+                self.report(None)
         else:
             raise Error("Hm?")
 
 
-class InviteResponse(PlainResponse):
+class InviteServerTransaction(PlainServerTransaction):
     def recved(self, request):
         if self.state == self.WAITING:
-            if not self.incoming_msg:
-                self.incoming_msg = request
+            if not self.incoming_via:
+                self.incoming_via = request["via"]
                 self.report(request)
         elif self.state == self.PROVISIONING:
             self.retransmit()
@@ -281,7 +302,7 @@ class InviteResponse(PlainResponse):
             pass  # stupid client, we haven't even responded yet
 
 
-class AckSink(PlainResponse):
+class AckServerTransaction(PlainServerTransaction):
     def recved(self, request):
         pass
 
@@ -291,18 +312,29 @@ class AckSink(PlainResponse):
 
 
 class TransactionManager(object):
-    def __init__(self, transport):
-        self.transport = transport
+    def __init__(self, transmission, addr):
+        self.transmission = transmission
+        self.addr = addr
         self.transactions = {}  # by (branch, method)
 
 
-    def cleanup(self):
+    def send(self, msg):
+        self.transmission(msg)
+        
+        
+    def get_addr(self):
+        return self.addr
+        
+
+    def maintenance(self):
         now = datetime.datetime.now()
 
         for tr_id, tr in list(self.transactions.items()):
             if tr.expiration_deadline and tr.expiration_deadline <= now:
                 tr.expired()
                 self.transactions.pop(tr_id)
+            elif tr.retransmit_deadline and tr.retransmit_deadline <= now:
+                tr.retransmit()
 
 
     def add_transaction(self, tr, method):
@@ -311,14 +343,8 @@ class TransactionManager(object):
 
 
     def find_transaction(self, msg):
-        try:
-            branch = msg["via"][0].branch
-        except Exception as e:
-            raise Error("No Via header in message!")
-
-        method = msg["method"]  # present in responses, too
-        tr_id = (branch, method)
-        return self.transactions.get(tr_id, None)
+        tr_id = identify(msg)
+        return self.transactions.get(tr_id)
 
 
     def find_invite_transaction(self, related_msg, goal):
@@ -335,62 +361,111 @@ class TransactionManager(object):
         return invite_tr
 
 
-    def recved(self, msg, report=None):
+    def match_incoming_message(self, msg):
         tr = self.find_transaction(msg)
 
-        if not tr:
-            method = msg["method"]
-            try:
-                branch = msg["via"][0].branch
-            except Exception:
-                raise Error("No Via header in incoming message!")
+        if tr:
+            tr.recved(msg)
+            return True
+            
+        branch, method = identify(msg)
+            
+        if method == "CANCEL":
+            # CANCEL-s may happen outside of any dialogs, so process them here
+            report = None
 
-            if not report:
-                if method == "CANCEL":
-                    invite_tr = self.transactions.get((branch, "INVITE"), None)
-                    if not invite_tr:
-                        # CANCEL for nonexistent INVITE? Consider it handled
-                        return True
+            # FIXME: not necessarily INVITE
+            invite_tr = self.transactions.get((branch, "INVITE"))
+            if invite_tr:
+                report = invite_tr.report
 
-                    report = invite_tr.report
-                else:
-                    return False
+            tr = PlainServerTransaction(weakref.proxy(self), report, branch=branch)
+            self.add_transaction(tr, "CANCEL")
 
-            # We're now retrying after finding an owner, so it must be an incoming request
-            if method == "INVITE":
-                tr = InviteResponse(self.transport, report, branch=branch)
-            elif method == "ACK":
-                tr = AckSink(self.transport, report, branch=branch)
+            tr.recved(msg)
+            
+            if invite_tr:
+                pass # Send OK here for the cancel
             else:
-                tr = PlainResponse(self.transport, report, branch=branch)
-
-            self.add_transaction(tr, method)
-
-        tr.recved(msg)
+                pass # Or an error
+                
+            return True
+            
+        if method == "ACK":
+            invite_tr = self.transactions.get((branch, "INVITE"))
+            if invite_tr:
+                # We must have sent a non-200 response to this, so no dialog was created
+                invite_tr.recved_ack()
+                return True
+                
         return False
 
 
-    def send(self, msg, report=None, related_msg=None):
+    def create_incoming_request(self, msg, report):
+        method = msg["method"]
+        try:
+            branch = msg["via"][0].branch
+        except Exception:
+            raise Error("No Via header in incoming message!")
+
+        if method == "INVITE":
+            tr = InviteServerTransaction(weakref.proxy(self), report, branch=branch)
+        elif method == "ACK":
+            # TODO: notify the INVITE!
+            # TODO: but only the dialog can do that, so make an interface for it!
+            tr = AckServerTransaction(weakref.proxy(self), report, branch=branch)
+        else:
+            tr = PlainServerTransaction(weakref.proxy(self), report, branch=branch)
+
+        self.add_transaction(tr, method)
+        tr.recved(msg)
+        
+
+    def send_message(self, msg, report=None, related_msg=None):
         tr = self.find_transaction(msg)
+        if tr:
+            tr.send(msg)
+            return
 
-        if not tr:
-            if "status" in msg:
-                raise Error("No transaction for sending response!")
+        if msg["is_response"]:
+            raise Error("No transaction for sending response!")
 
-            if not report:
-                raise Error("No owner to send request!")
+        if not report:
+            raise Error("No report handler for a response!")
 
-            method = msg["method"]
-            if method == "INVITE":
-                tr = InviteRequest(self.transport, report)
-            elif method == "ACK":
-                tr = self.find_invite_transaction(related_msg, "ACK").create_ack()
-            elif method == "CANCEL":
-                tr = self.find_invite_transaction(related_msg, "CANCEL").create_cancel()
-            else:
-                tr = PlainRequest(self.transport, report)
+        method = msg["method"]
 
+        if method == "ACK":
+            if not related_msg:
+                raise Error("Related response is not given for ACK!")
+                
+            response_params = related_msg
+            invite_tr = self.find_transaction(response_params)
+            if not invite_tr:
+                raise Error("No transaction to ACK!")
+            
+            branch = invite_tr.generate_branch()
+            remote_tag = response_params["to"].params["tag"]
+            invite_tr.create_and_send_ack(branch, remote_tag, sdp)
+        elif method == "CANCEL":
+            if not related_msg:
+                raise Error("Related request is not given for CANCEL!")
+            
+            request_params = related_msg
+            branch, method = identify(request_params)
+
+            tr = PlainClientTransaction(weakref.proxy(self), report, branch)
+            self.add_transaction(tr, "CANCEL")
+        
+            cancel_params = request_params.copy()
+            cancel_params["method"] = "CANCEL"
+        
+            tr.send(cancel_params)
+        elif method == "INVITE":
+            tr = InviteClientTransaction(weakref.proxy(self), report)
             self.add_transaction(tr, method)
-
-        tr.send(msg)
-
+            tr.send(msg)
+        else:
+            tr = PlainClientTransaction(weakref.proxy(self), report)
+            self.add_transaction(tr, method)
+            tr.send(msg)

@@ -2,10 +2,16 @@
 
 from __future__ import print_function, unicode_literals
 from pprint import pprint
+import weakref
+from datetime import timedelta
+import logging
+
+from async import Metapoll, WeakMethod
+from coroutine import coroutine
 
 from format import Addr, Uri, Nameaddr, Status, Via, print_structured_message, parse_structured_message
 from transactions import TransactionManager
-import siplib
+from dialog import Dialog, DialogManager
 
 caller_addr = Addr("CALLER", 5060)
 caller_uri = Uri(caller_addr, "caller")
@@ -15,25 +21,55 @@ callee_addr = Addr("CALLEE", 5060)
 callee_uri = Uri(callee_addr, "callee")
 callee_nameaddr = Nameaddr(callee_uri, "Callee")
 
-caller = siplib.Leg(caller_uri, caller_nameaddr.name, callee_uri)
-callee = siplib.Leg(callee_uri, callee_nameaddr.name)
 
-#req_params = dict(method="INVITE")
-#request = caller.print_request(req_params)
-#print(request)
+class DummyCallee(Dialog):
+    def handle_request(self, msg):
+        print("DummyCallee received:")
+        #pprint(msg)
+        self.msg = msg
+        self.take_request(msg)
+        self.trying()
+        
+        
+    def sleep(self, secs, method):
+        metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
+        
+        
+    def send_message(self, msg):
+        print("DummyCallee sending:")
+        #pprint(response)
+        super(DummyCallee, self).send_message(msg)
+        
 
-#req_params = callee.parse_request(request)
-#pprint(req_params)
+    def trying(self):
+        response = self.make_response(dict(status=Status(100, "Trying")), self.msg)
+        self.send_message(response)
+        self.sleep(1, self.ringing)
+        
+        
+    def ringing(self):
+        response = self.make_response(dict(status=Status(180, "Ringing")), self.msg)
+        self.send_message(response)
+        self.sleep(1, self.answering)
 
-#res_params = dict(status=Status(200, "OK"))
-#response = callee.print_response(res_params, req_params)
-#print(response)
 
-#res_params = caller.parse_response(response)
-#pprint(res_params)
+    def answering(self):
+        response = self.make_response(dict(status=Status(200, "OK")), self.msg)
+        self.send_message(response)
 
+
+class TestDialogManager(DialogManager):
+    def auth_invite(self, uri):
+        print("Authing callee: %s" % str(uri))
+        wself = weakref.proxy(self)
+        callee = DummyCallee(wself, callee_uri, callee_nameaddr.name)
+        return callee
+        
 
 class Transport(object):
+    def __init__(self, reception):
+        self.reception = reception
+        
     def get_addr(self):
         return callee_addr
 
@@ -43,30 +79,51 @@ class Transport(object):
 
     def recved(self, s):
         print("Transport receiving:")
-        print(s)
-        return parse_structured_message(s)
+        #print(s)
+        self.reception(parse_structured_message(s))
 
-transport = Transport()
 
-trm = TransactionManager(transport)
+def reception(params):
+    print("Got message from transport.")
+    #print("Req params: %s" % req_params)
+    matched = transaction_manager.match_incoming_message(params)
+    
+    if not matched:
+        report = dialog_manager.handle_incoming_message(params)
+        
+        if report:
+            transaction_manager.create_incoming_request(params, report)
+        else:
+            raise Exception("Couldn't create dialog!")
 
-class Owner(object):
-    def recved(self, msg):
-        print("Owner received:")
-        pprint(msg)
 
-        callee.take_request(msg)
-        response = callee.make_response(dict(status=Status(200, "Yeah")), msg)
+def transmission(msg):
+    print("Sending message by transport.")
+    transport.send(msg)
 
-        print("Owner sending:")
-        pprint(response)
-        trm.send(response)
 
-owner = Owner()
+def transmission2(msg):
+    print("Sending message by transaction.")
+    transaction_manager.send_message(msg)
 
-req_params = dict(method="INVITE", via=[Via(caller_addr, "bbbb")])
-req_text = caller.print_request(req_params)
 
-req_params = transport.recved(req_text)
-trm.recved(req_params, owner.recved)
+def testing():
+    print("Testing begins.")
+    caller = DummyCallee(None, caller_uri, caller_nameaddr.name, callee_uri)
+    req_params = dict(method="INVITE", via=[Via(caller_addr, "bbbb")])
+    req_text = print_structured_message(caller.make_request(req_params))
+    transport.recved(req_text)
 
+
+logging.basicConfig(level=logging.DEBUG)
+metapoll = Metapoll()
+transport = Transport(reception)
+transaction_manager = TransactionManager(transmission, callee_addr)
+dialog_manager = TestDialogManager(transmission2)
+
+metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(transaction_manager.maintenance), repeat=True)
+metapoll.register_timeout(timedelta(seconds=1), testing)
+
+while True:
+    #print("Polling.")
+    metapoll.do_poll()

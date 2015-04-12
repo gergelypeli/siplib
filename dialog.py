@@ -1,14 +1,12 @@
 from __future__ import print_function, unicode_literals, absolute_import
 
-import socket
-import uuid
 from pprint import pprint, pformat
+import uuid
+import datetime
 
 import format
 from format import Addr, Uri, Nameaddr, Via, Status
-
-# addr = (host, port)
-# user = (username, displayname)
+from async import WeakMethod
 
 
 class Error(Exception):
@@ -24,8 +22,10 @@ def safe_update(target, source):
     return target
 
 
-class Leg(object):
-    def __init__(self, local_uri, local_name, remote_uri=None, proxy_addr=None):
+class Dialog(object):
+    def __init__(self, dialog_manager, local_uri, local_name, remote_uri=None, proxy_addr=None):
+        self.dialog_manager = dialog_manager
+    
         # Things in the From/To fields
         self.local_nameaddr = Nameaddr(local_uri, local_name, dict(tag=uuid.uuid4().hex))
         self.remote_nameaddr = Nameaddr(remote_uri)
@@ -39,16 +39,6 @@ class Leg(object):
         self.routes = []
         self.last_sent_cseq = 0
 
-        self.socket = None
-
-
-    def socket(self):
-        if not self.local_socket:
-            self.local_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.local_socket.bind(self.local_nameaddr.uri.addr)
-
-        return self.local_socket
-
 
     def make_request(self, user_params):
         self.last_sent_cseq += 1
@@ -58,6 +48,7 @@ class Leg(object):
             self.call_id = uuid.uuid4().hex
 
         params = {
+            "is_response": False,
             "uri": self.peer_contact.uri,
             "from": self.local_nameaddr,
             "to": self.remote_nameaddr,
@@ -75,14 +66,14 @@ class Leg(object):
         return params
 
 
-    def print_request(self, user_params):
-        params = self.make_request(user_params)
-        return format.print_structured_message(params)
+    #def print_request(self, user_params):
+    #    params = self.make_request(user_params)
+    #    return format.print_structured_message(params)
 
 
-    def parse_request(self, msg):
-        params = format.parse_structured_message(msg)
-        return self.take_request(params)
+    #def parse_request(self, msg):
+    #    params = format.parse_structured_message(msg)
+    #    return self.take_request(params)
 
 
     def take_request(self, params):
@@ -131,6 +122,7 @@ class Leg(object):
             to = Nameaddr(to.uri, to.name, dict(to.params, tag=self.local_nameaddr.params["tag"]))
 
         params = {
+            "is_response": True,
             "from": request_params["from"],
             "to": to,
             "call_id": request_params["call_id"],
@@ -147,14 +139,14 @@ class Leg(object):
         return params
 
 
-    def print_response(self, user_params, request_params):
-        params = self.make_response(user_params, request_params)
-        return format.print_structured_message(params)
+    #def print_response(self, user_params, request_params):
+    #    params = self.make_response(user_params, request_params)
+    #    return format.print_structured_message(params)
 
 
-    def parse_response(self, msg):
-        params = format.parse_structured_message(msg)
-        return self.take_response(params)
+    #def parse_response(self, msg):
+    #    params = format.parse_structured_message(msg)
+    #    return self.take_response(params)
 
 
     def take_reponse(self, params):
@@ -194,12 +186,60 @@ class Leg(object):
         return params
 
 
-    def send_request(self, params):
-        msg = self.print_request(params)
-        self.socket().sendto(msg, proxy_addr or peer_addr)
+    def send_message(self, params):
+        self.dialog_manager.send_message(params)
+        
+
+    def handle_message(self, params):
+        pass  # TODO: call take_{request,response}
 
 
-    def recv_request(self):
-        msg, addr = self.socket().recvfrom(65535)
-        return parse_request(msg)
+class DialogManager(object):
+    def __init__(self, transmission):
+        self.dialogs_by_id = {}
+        self.transmission = transmission
 
+
+    def auth_invite(self, uri):
+        # Accept everything for now
+        wself = weakref.proxy(self)
+        dialog = Dialog(wself, uri, "Lo Cal")  # TODO: dialogs are created by INVITE responses!
+        return dialog
+        
+    
+    def handle_incoming_message(self, params):
+        if params["is_response"]:
+            print("Response not handled in DialogManager.")
+            return None  # Oops
+            
+        call_id = params["call_id"]
+        from_tag = params["from"].params.get("tag")
+        to_tag = params["to"].params.get("tag")
+
+        did = (call_id, to_tag, from_tag)
+        dialog = self.dialogs_by_id.get(did)
+        
+        if dialog:
+            return WeakMethod(dialog.handle_request)
+
+        if to_tag:
+            print("In-dialog request has no dialog.")
+            return None
+            
+        if params["method"] == "INVITE":
+            uri = params["uri"]
+            
+            dialog = self.auth_invite(uri)
+            # TODO: send a proper message if rejected
+            
+            to_tag = dialog.local_nameaddr.params["tag"]
+            did = (call_id, to_tag, from_tag)
+            self.dialogs_by_id[did] = dialog
+            
+            return WeakMethod(dialog.handle_request)
+            
+        return None
+
+
+    def send_message(self, params):
+        self.transmission(params)
