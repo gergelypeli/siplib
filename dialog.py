@@ -186,8 +186,8 @@ class Dialog(object):
         return params
 
 
-    def send_message(self, params):
-        self.dialog_manager.send_message(params)
+    def send_message(self, params, related_params=None):
+        self.dialog_manager.send_message(params, related_params)
         
 
     def handle_message(self, params):
@@ -241,5 +241,5 @@ class DialogManager(object):
         return None
 
 
-    def send_message(self, params):
-        self.transmission(params)
+    def send_message(self, params, related_params=None):
+        self.transmission(params, related_params)

@@ -7,7 +7,6 @@ from datetime import timedelta
 import logging
 
 from async import Metapoll, WeakMethod
-from coroutine import coroutine
 
 from format import Addr, Uri, Nameaddr, Status, Via, print_structured_message, parse_structured_message
 from transactions import TransactionManager
@@ -35,27 +34,27 @@ class DummyCallee(Dialog):
         metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
         
         
-    def send_message(self, msg):
+    def send_message(self, msg, related_msg=None):
         print("DummyCallee sending:")
         #pprint(response)
-        super(DummyCallee, self).send_message(msg)
+        super(DummyCallee, self).send_message(msg, related_msg)
         
 
     def trying(self):
         response = self.make_response(dict(status=Status(100, "Trying")), self.msg)
-        self.send_message(response)
+        self.send_message(response, self.msg)
         self.sleep(1, self.ringing)
         
         
     def ringing(self):
         response = self.make_response(dict(status=Status(180, "Ringing")), self.msg)
-        self.send_message(response)
+        self.send_message(response, self.msg)
         self.sleep(1, self.answering)
 
 
     def answering(self):
         response = self.make_response(dict(status=Status(200, "OK")), self.msg)
-        self.send_message(response)
+        self.send_message(response, self.msg)
 
 
 class TestDialogManager(DialogManager):
@@ -102,9 +101,9 @@ def transmission(msg):
     transport.send(msg)
 
 
-def transmission2(msg):
+def transmission2(msg, related_msg):
     print("Sending message by transaction.")
-    transaction_manager.send_message(msg)
+    transaction_manager.send_message(msg, related_msg)
 
 
 def testing():
