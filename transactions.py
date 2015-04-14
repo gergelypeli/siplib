@@ -66,6 +66,14 @@ def identify(params):
 
 def generate_branch():
     return uuid.uuid4().hex
+
+
+def make_virtual_response():
+    return dict(status=Status(0, "Virtual"))
+    
+    
+def is_virtual_response(msg):
+    return msg["status"].code == 0
     
 
 class Transaction(object):
@@ -91,7 +99,7 @@ class Transaction(object):
         self.expiration_deadline = None
 
 
-    def change_state(self, state, outgoing_msg=None):
+    def change_state(self, state):
         if state == self.state and state == self.TRANSMITTING:
             raise Error("Oops, transmitting twice!")
 
@@ -113,23 +121,20 @@ class Transaction(object):
         else:
             raise Error("Change to what state?")
 
-        if outgoing_msg:
-            self.outgoing_msg = self.prepare(outgoing_msg)
-            self.retransmit()
+
+    def transmit(self, msg):
+        self.outgoing_msg = msg
+        self.retransmit()
 
 
     def retransmit(self):
-        self.manager.send(self.outgoing_msg)
+        self.manager.transmit(self.outgoing_msg)
 
         if self.retransmit_interval:
             self.retransmit_deadline = datetime.datetime.now() + self.retransmit_interval
 
         if self.state == self.TRANSMITTING:
             self.retransmit_interval = min(self.retransmit_interval * 2, self.T2)
-
-
-    def prepare(self, msg):
-        return msg
 
 
     def send(self, msg):
@@ -145,13 +150,14 @@ class Transaction(object):
 
 
 class PlainClientTransaction(Transaction):
-    def prepare(self, msg):
+    def transmit(self, msg):
         msg["via"] = [ Via(self.manager.get_addr(), self.branch) ]
-        return msg
+        super(PlainClientTransaction, self).transmit(msg)
 
 
     def send(self, request):
-        self.change_state(self.TRANSMITTING, request)
+        self.change_state(self.TRANSMITTING)
+        self.transmit(request)
 
 
     def recved(self, response):
@@ -176,11 +182,10 @@ class PlainServerTransaction(Transaction):
         self.incoming_via = None
         
         
-    def prepare(self, msg):
+    def transmit(self, msg):
         if msg["via"] != self.incoming_via:  # FIXME: what kind of equality is this?
             raise Error("Don't mess with the Via headers!")
-
-        return msg
+        super(PlainServerTransaction, self).transmit(msg)
 
 
     def recved(self, request):
@@ -195,12 +200,14 @@ class PlainServerTransaction(Transaction):
 
 
     def send(self, response):
-        self.change_state(self.LINGERING, response)
+        self.change_state(self.LINGERING)
+        self.transmit(response)
 
 
 class AckClientTransaction(PlainClientTransaction):
     def send(self, request):
-        self.change_state(self.LINGERING, request)
+        self.change_state(self.LINGERING)
+        self.transmit(request)
 
 
     def recved(self, response):
@@ -296,12 +303,13 @@ class InviteServerTransaction(PlainServerTransaction):
 
 
     def send(self, response):
-        if response["method"] == "ACK":
-            # A virtual ACK response means we got ACKed
+        if is_virtual_response(response):
+            # A virtual response means we got ACKed
             self.recved_ack()
         else:
             new_state = self.PROVISIONING if response["status"].code < 200 else self.TRANSMITTING
-            self.change_state(new_state, response)
+            self.change_state(new_state)
+            self.transmit(response)
 
 
     def expired(self):
@@ -324,11 +332,8 @@ class InviteServerTransaction(PlainServerTransaction):
 
 class AckServerTransaction(PlainServerTransaction):
     def retransmit(self):
-        pass
-        
-        
-    def prepare(self, msg):
-        return None
+        if not is_virtual_response(self.outgoing_msg):
+            raise Error("Nonvirtual response to AckServerTransaction!")
 
 
 class TransactionManager(object):
@@ -339,7 +344,7 @@ class TransactionManager(object):
         self.server_transactions = {}  # by (branch, method)
 
 
-    def send(self, msg):
+    def transmit(self, msg):
         self.transmission(msg)
         
         
@@ -420,7 +425,7 @@ class TransactionManager(object):
                 # Send a virtual ACK response to notify the transaction.
                 # But don't create an AckServerTransaction here.
                 print("ACKing non-200 response")
-                invite_tr.send(dict(is_response=True, method="ACK"))
+                invite_tr.send(make_virtual_response())
                 return True
                 
         return False

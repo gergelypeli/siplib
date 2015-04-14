@@ -9,7 +9,7 @@ import logging
 from async import Metapoll, WeakMethod
 
 from format import Addr, Uri, Nameaddr, Status, Via, print_structured_message, parse_structured_message
-from transactions import TransactionManager
+from transactions import TransactionManager, make_virtual_response
 from dialog import Dialog, DialogManager
 
 local_addr = Addr("localhost", 5060)
@@ -30,39 +30,31 @@ class DummyCallee(Dialog):
         #pprint(msg)
         
         if method == "INVITE":
-            self.msg = msg
+            self.invite_msg = msg
             self.take_request(msg)
             self.trying()
         elif method == "ACK":
-            self.send_message(dict(is_response=True, method="ACK"), msg)
-            self.send_message(dict(is_response=True, method="ACK"), self.msg)
+            virtual_response = make_virtual_response()
+            self.send_response(virtual_response, msg)
+            self.send_response(virtual_response, self.invite_msg)
         
         
     def sleep(self, secs, method):
         metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
         
         
-    def send_message(self, msg, related_msg=None, report=None):
-        print("DummyCallee sending:")
-        #pprint(response)
-        super(DummyCallee, self).send_message(msg, related_msg, report)
-        
-
     def trying(self):
-        response = self.make_response(dict(status=Status(100, "Trying")), self.msg)
-        self.send_message(response, self.msg)
+        self.send_response(dict(status=Status(100, "Trying")), self.invite_msg)
         self.sleep(1, self.ringing)
         
         
     def ringing(self):
-        response = self.make_response(dict(status=Status(180, "Ringing")), self.msg)
-        self.send_message(response, self.msg)
+        self.send_response(dict(status=Status(180, "Ringing")), self.invite_msg)
         self.sleep(1, self.answering)
 
 
     def answering(self):
-        response = self.make_response(dict(status=Status(200, "OK")), self.msg)
-        self.send_message(response, self.msg)
+        self.send_response(dict(status=Status(200, "OK")), self.invite_msg)
 
 
 class TestDialogManager(DialogManager):
@@ -71,13 +63,10 @@ class TestDialogManager(DialogManager):
         wself = weakref.proxy(self)
         self.caller = DummyCallee(wself, caller_uri, caller_nameaddr.name, callee_uri)
         self.add_dialog(self.caller)
-        # TODO: Hah! We don't have a to tag here yet!
         
         req_params = dict(method="INVITE")
         report = WeakMethod(self.invite_responded)
-        self.caller.send_message(self.caller.make_request(req_params), report=report)
-        #req_text = print_structured_message(caller.make_request(req_params))
-        #transport.recved(req_text)
+        self.caller.send_request(req_params, None, report=report)
         
         
     def invite_responded(self, response):
@@ -86,8 +75,8 @@ class TestDialogManager(DialogManager):
         
         if code >= 200:
             req_params = dict(method="ACK")
-            report = WeakMethod(self.invite_responded)  # FIXME: report not needed!
-            self.caller.send_message(self.caller.make_request(req_params), response, report=report)
+            report = WeakMethod(self.invite_responded)
+            self.caller.send_request(req_params, response, report=report)
         
 
     def auth_invite(self, uri):
@@ -132,12 +121,12 @@ def reception(params):
             raise Exception("Couldn't create dialog!")
 
 
-def transmission(msg):
+def to_transport(msg):
     print("Sending message by transport.")
     transport.send(msg)
 
 
-def transmission2(msg, related_msg, report):
+def to_transaction(msg, related_msg, report):
     print("Sending message by transaction.")
     transaction_manager.send_message(msg, related_msg, report)
 
@@ -145,8 +134,8 @@ def transmission2(msg, related_msg, report):
 logging.basicConfig(level=logging.DEBUG)
 metapoll = Metapoll()
 transport = Transport(reception)
-transaction_manager = TransactionManager(transmission, local_addr)
-dialog_manager = TestDialogManager(transmission2)
+transaction_manager = TransactionManager(to_transport, local_addr)
+dialog_manager = TestDialogManager(to_transaction)
 
 metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(transaction_manager.maintenance), repeat=True)
 metapoll.register_timeout(timedelta(seconds=1), WeakMethod(dialog_manager.testing))

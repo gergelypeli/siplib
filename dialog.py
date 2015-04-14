@@ -68,7 +68,6 @@ class Dialog(object):
 
     def make_request(self, user_params):
         self.last_sent_cseq += 1
-        #branch = "xxx"
 
         if not self.call_id:
             self.dialog_manager.remove_dialog(self)
@@ -91,16 +90,6 @@ class Dialog(object):
         safe_update(params, user_params)
 
         return params
-
-
-    #def print_request(self, user_params):
-    #    params = self.make_request(user_params)
-    #    return format.print_structured_message(params)
-
-
-    #def parse_request(self, msg):
-    #    params = format.parse_structured_message(msg)
-    #    return self.take_request(params)
 
 
     def take_request(self, params):
@@ -168,16 +157,6 @@ class Dialog(object):
         return params
 
 
-    #def print_response(self, user_params, request_params):
-    #    params = self.make_response(user_params, request_params)
-    #    return format.print_structured_message(params)
-
-
-    #def parse_response(self, msg):
-    #    params = format.parse_structured_message(msg)
-    #    return self.take_response(params)
-
-
     def take_reponse(self, params):
         if "status" not in params:
             raise Error("Not a response!")
@@ -215,8 +194,14 @@ class Dialog(object):
         return params
 
 
-    def send_message(self, params, related_params=None, report=None):
-        self.dialog_manager.send_message(params, related_params, report)
+    def send_request(self, user_params, related_params=None, report=None):
+        params = self.make_request(user_params)
+        self.dialog_manager.transmit(params, related_params, report)
+
+
+    def send_response(self, user_params, related_params=None):
+        params = self.make_response(user_params, related_params)
+        self.dialog_manager.transmit(params, related_params)
         
 
     def handle_message(self, params):
@@ -278,7 +263,7 @@ class DialogManager(object):
         return None
 
 
-    def send_message(self, params, related_params=None, report=None):
+    def transmit(self, params, related_params=None, report=None):
         self.transmission(params, related_params, report)
 
 
