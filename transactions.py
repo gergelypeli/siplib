@@ -296,8 +296,12 @@ class InviteServerTransaction(PlainServerTransaction):
 
 
     def send(self, response):
-        new_state = self.PROVISIONING if response["status"].code < 200 else self.TRANSMITTING
-        self.change_state(new_state, response)
+        if response["method"] == "ACK":
+            # A virtual ACK response means we got ACKed
+            self.recved_ack()
+        else:
+            new_state = self.PROVISIONING if response["status"].code < 200 else self.TRANSMITTING
+            self.change_state(new_state, response)
 
 
     def expired(self):
@@ -308,6 +312,8 @@ class InviteServerTransaction(PlainServerTransaction):
 
 
     def recved_ack(self):
+        print("InviteServer ACKed!")
+        
         if self.state == self.TRANSMITTING:
             self.change_state(self.LINGERING)
         elif self.state == self.LINGERING:
@@ -317,12 +323,12 @@ class InviteServerTransaction(PlainServerTransaction):
 
 
 class AckServerTransaction(PlainServerTransaction):
-    def recved(self, request):
+    def retransmit(self):
         pass
-
-
-    def send(self, response):
-        raise Error("Responding to an ACK?")
+        
+        
+    def prepare(self, msg):
+        return None
 
 
 class TransactionManager(object):
@@ -410,8 +416,11 @@ class TransactionManager(object):
         if method == "ACK":
             invite_tr = self.server_transactions.get((branch, "INVITE"))
             if invite_tr:
-                # We must have sent a non-200 response to this, so no dialog was created
-                invite_tr.recved_ack()
+                # We must have sent a non-200 response to this, so no dialog was created.
+                # Send a virtual ACK response to notify the transaction.
+                # But don't create an AckServerTransaction here.
+                print("ACKing non-200 response")
+                invite_tr.send(dict(is_response=True, method="ACK"))
                 return True
                 
         return False
@@ -423,8 +432,8 @@ class TransactionManager(object):
         if method == "INVITE":
             tr = InviteServerTransaction(weakref.proxy(self), report, branch)
         elif method == "ACK":
-            # TODO: notify the INVITE!
-            # TODO: but only the dialog can do that, so make an interface for it!
+            # Must create a server transaction to swallow duplicates,
+            # we don't want to bother the dialogs unnecessarily.
             tr = AckServerTransaction(weakref.proxy(self), report, branch)
         else:
             tr = PlainServerTransaction(weakref.proxy(self), report, branch)
@@ -462,6 +471,7 @@ class TransactionManager(object):
             
             branch = generate_branch()  # 2xx-ACK
             remote_tag = response_params["to"].params["tag"]
+            sdp = msg.get("sdp")
             invite_tr.create_and_send_ack(branch, remote_tag, sdp)
         elif method == "CANCEL":
             if not related_msg:

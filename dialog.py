@@ -30,6 +30,15 @@ def generate_call_id():
     return uuid.uuid4().hex
 
 
+def identify_dialog(dialog):
+    call_id = dialog.call_id
+    local_tag = dialog.local_nameaddr.params.get("tag")
+    remote_tag = dialog.remote_nameaddr.params.get("tag")
+        
+    did = (call_id, local_tag, remote_tag)
+    return did
+
+
 def identify_incoming_request(params):
     call_id = params["call_id"]
     remote_tag = params["from"].params.get("tag")
@@ -62,7 +71,9 @@ class Dialog(object):
         #branch = "xxx"
 
         if not self.call_id:
+            self.dialog_manager.remove_dialog(self)
             self.call_id = generate_call_id()
+            self.dialog_manager.add_dialog(self)
 
         params = {
             "is_response": False,
@@ -122,8 +133,10 @@ class Dialog(object):
             if to_tag:
                 raise Error("Unexpected to tag!")
 
+            self.dialog_manager.remove_dialog(self)
             self.remote_nameaddr = from_nameaddr
             self.call_id = call_id
+            self.dialog_manager.add_dialog(self)
 
         if peer_contact:
             self.peer_contact = peer_contact
@@ -217,13 +230,16 @@ class DialogManager(object):
 
 
     def add_dialog(self, dialog):
-        call_id = dialog.call_id
-        local_tag = dialog.local_nameaddr.params.get("tag")
-        remote_tag = dialog.remote_nameaddr.params.get("tag")
-        
-        did = (call_id, local_tag, remote_tag)
+        did = identify_dialog(dialog)
         self.dialogs_by_id[did] = dialog
+        print("Added dialog %s" % (did,))
 
+
+    def remove_dialog(self, dialog):
+        did = identify_dialog(dialog)
+        del self.dialogs_by_id[did]
+        print("Removed dialog %s" % (did,))
+        
 
     def auth_invite(self, uri):
         # Accept everything for now
@@ -241,7 +257,10 @@ class DialogManager(object):
         dialog = self.dialogs_by_id.get(did)
         
         if dialog:
+            print("Found dialog: %s" % (did,))
             return WeakMethod(dialog.handle_request)
+
+        print("No dialog %s" % (did,))
 
         if local_tag:
             print("In-dialog request has no dialog.")

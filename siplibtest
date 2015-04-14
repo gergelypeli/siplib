@@ -12,22 +12,30 @@ from format import Addr, Uri, Nameaddr, Status, Via, print_structured_message, p
 from transactions import TransactionManager
 from dialog import Dialog, DialogManager
 
-caller_addr = Addr("CALLER", 5060)
-caller_uri = Uri(caller_addr, "caller")
+local_addr = Addr("localhost", 5060)
+
+#caller_addr = Addr("CALLER", 5060)
+caller_uri = Uri(local_addr, "caller")
 caller_nameaddr = Nameaddr(caller_uri, "Caller")
 
-callee_addr = Addr("CALLEE", 5060)
-callee_uri = Uri(callee_addr, "callee")
+#callee_addr = Addr("CALLEE", 5060)
+callee_uri = Uri(local_addr, "callee")
 callee_nameaddr = Nameaddr(callee_uri, "Callee")
 
 
 class DummyCallee(Dialog):
     def handle_request(self, msg):
-        print("DummyCallee received:")
+        method = msg["method"]
+        print("DummyCallee received: %s" % method)
         #pprint(msg)
-        self.msg = msg
-        self.take_request(msg)
-        self.trying()
+        
+        if method == "INVITE":
+            self.msg = msg
+            self.take_request(msg)
+            self.trying()
+        elif method == "ACK":
+            self.send_message(dict(is_response=True, method="ACK"), msg)
+            self.send_message(dict(is_response=True, method="ACK"), self.msg)
         
         
     def sleep(self, secs, method):
@@ -61,19 +69,25 @@ class TestDialogManager(DialogManager):
     def testing(self):
         print("Testing begins.")
         wself = weakref.proxy(self)
-        caller = DummyCallee(wself, caller_uri, caller_nameaddr.name, callee_uri)
-        self.add_dialog(caller)
+        self.caller = DummyCallee(wself, caller_uri, caller_nameaddr.name, callee_uri)
+        self.add_dialog(self.caller)
         # TODO: Hah! We don't have a to tag here yet!
         
         req_params = dict(method="INVITE")
         report = WeakMethod(self.invite_responded)
-        caller.send_message(caller.make_request(req_params), report=report)
+        self.caller.send_message(self.caller.make_request(req_params), report=report)
         #req_text = print_structured_message(caller.make_request(req_params))
         #transport.recved(req_text)
         
         
     def invite_responded(self, response):
-        print("Invite responded!")
+        code = response["status"].code
+        print("Invite responded with %d" % code)
+        
+        if code >= 200:
+            req_params = dict(method="ACK")
+            report = WeakMethod(self.invite_responded)  # FIXME: report not needed!
+            self.caller.send_message(self.caller.make_request(req_params), response, report=report)
         
 
     def auth_invite(self, uri):
@@ -88,7 +102,7 @@ class Transport(object):
         self.reception = reception
         
     def get_addr(self):
-        return callee_addr
+        return local_addr
 
     def send(self, msg):
         sip = print_structured_message(msg)
@@ -131,7 +145,7 @@ def transmission2(msg, related_msg, report):
 logging.basicConfig(level=logging.DEBUG)
 metapoll = Metapoll()
 transport = Transport(reception)
-transaction_manager = TransactionManager(transmission, callee_addr)
+transaction_manager = TransactionManager(transmission, local_addr)
 dialog_manager = TestDialogManager(transmission2)
 
 metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(transaction_manager.maintenance), repeat=True)

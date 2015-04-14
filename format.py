@@ -157,7 +157,9 @@ def print_structured_message(params):
     other_fields = [f for f in params if f not in mandatory_fields]
 
     for field in mandatory_fields + other_fields:
-        if field in ("from", "to", "contact"):
+        if params[field] is None:
+            pass
+        elif field in ("from", "to", "contact"):
             p[field] = params[field].print()
         elif field == "cseq":
             p[field] = "%d %s" % (params[field], params["method"])  # ACK? CANCEL?
@@ -166,7 +168,7 @@ def print_structured_message(params):
         elif field not in META_HEADER_FIELDS:
             p[field] = params[field]
 
-    body = params.get("sdp", "")
+    body = params.get("sdp") or ""
 
     return print_message(initial_line, p, body)
 
