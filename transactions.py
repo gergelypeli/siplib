@@ -107,6 +107,9 @@ class Transaction(object):
         elif self.state == self.LINGERING:
             self.retransmit_interval = None
             self.expiration_deadline = datetime.datetime.now() + self.TP
+        elif self.state == self.WAITING:
+            self.retransmit_interval = None
+            self.expiration_deadline = None
         else:
             raise Error("Change to what state?")
 
@@ -236,18 +239,25 @@ class InviteClientTransaction(PlainClientTransaction):
 
 
     def recved(self, response):
-        remote_tag = response["to"].params["tag"]
+        remote_tag = response["to"].params.get("tag")
         ack = self.acks_by_remote_tag.get(remote_tag)
         
         if ack:
             ack.retransmit()  # so we don't extend the lingering time as well
         else:
             code = response["status"].code
-            statuses = self.statuses_by_remote_tag.setdefault(remote_tag, set())
             
-            if code not in statuses:
-                statuses.add(code)
-                self.report(response)
+            # Don't remember and report 100 responses, as thay may have no remote tag.
+            # And they are h2h anyway, so the dialog shouldn't care.
+            if code > 100:
+                if not remote_tag:
+                    print("Invite response without to tag!")
+                    
+                statuses = self.statuses_by_remote_tag.setdefault(remote_tag, set())
+            
+                if code not in statuses:
+                    statuses.add(code)
+                    self.report(response)
 
             if code >= 300:
                 # final non-2xx responses are ACK-ed here in the same transaction
@@ -359,6 +369,8 @@ class TransactionManager(object):
 
 
     def match_incoming_message(self, msg):
+        #print("Match incoming:")
+        #pprint(msg)
         branch, method = identify(msg)
         
         if msg["is_response"]:
@@ -436,6 +448,8 @@ class TransactionManager(object):
 
         if not report:
             raise Error("No report handler for a request!")
+
+        method = msg["method"]
 
         if method == "ACK":
             if not related_msg:

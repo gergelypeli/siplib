@@ -22,12 +22,29 @@ def safe_update(target, source):
     return target
 
 
+def generate_tag():
+    return uuid.uuid4().hex
+
+
+def generate_call_id():
+    return uuid.uuid4().hex
+
+
+def identify_incoming_request(params):
+    call_id = params["call_id"]
+    remote_tag = params["from"].params.get("tag")
+    local_tag = params["to"].params.get("tag")
+    
+    did = (call_id, local_tag, remote_tag)
+    return did
+    
+
 class Dialog(object):
     def __init__(self, dialog_manager, local_uri, local_name, remote_uri=None, proxy_addr=None):
         self.dialog_manager = dialog_manager
     
         # Things in the From/To fields
-        self.local_nameaddr = Nameaddr(local_uri, local_name, dict(tag=uuid.uuid4().hex))
+        self.local_nameaddr = Nameaddr(local_uri, local_name, dict(tag=generate_tag()))
         self.remote_nameaddr = Nameaddr(remote_uri)
 
         self.my_contact = Nameaddr(local_uri)
@@ -45,7 +62,7 @@ class Dialog(object):
         #branch = "xxx"
 
         if not self.call_id:
-            self.call_id = uuid.uuid4().hex
+            self.call_id = generate_call_id()
 
         params = {
             "is_response": False,
@@ -54,7 +71,6 @@ class Dialog(object):
             "to": self.remote_nameaddr,
             "call_id": self.call_id,
             "cseq": self.last_sent_cseq,
-            #"via": [Via(self.local_nameaddr.uri.addr, branch)],
             "maxfwd": 50
         }
 
@@ -186,8 +202,8 @@ class Dialog(object):
         return params
 
 
-    def send_message(self, params, related_params=None):
-        self.dialog_manager.send_message(params, related_params)
+    def send_message(self, params, related_params=None, report=None):
+        self.dialog_manager.send_message(params, related_params, report)
         
 
     def handle_message(self, params):
@@ -198,6 +214,15 @@ class DialogManager(object):
     def __init__(self, transmission):
         self.dialogs_by_id = {}
         self.transmission = transmission
+
+
+    def add_dialog(self, dialog):
+        call_id = dialog.call_id
+        local_tag = dialog.local_nameaddr.params.get("tag")
+        remote_tag = dialog.remote_nameaddr.params.get("tag")
+        
+        did = (call_id, local_tag, remote_tag)
+        self.dialogs_by_id[did] = dialog
 
 
     def auth_invite(self, uri):
@@ -211,18 +236,14 @@ class DialogManager(object):
         if params["is_response"]:
             print("Response not handled in DialogManager.")
             return None  # Oops
-            
-        call_id = params["call_id"]
-        from_tag = params["from"].params.get("tag")
-        to_tag = params["to"].params.get("tag")
-
-        did = (call_id, to_tag, from_tag)
+        
+        call_id, local_tag, remote_tag = did = identify_incoming_request(params)
         dialog = self.dialogs_by_id.get(did)
         
         if dialog:
             return WeakMethod(dialog.handle_request)
 
-        if to_tag:
+        if local_tag:
             print("In-dialog request has no dialog.")
             return None
             
@@ -230,16 +251,19 @@ class DialogManager(object):
             uri = params["uri"]
             
             dialog = self.auth_invite(uri)
+            self.add_dialog(dialog)
             # TODO: send a proper message if rejected
-            
-            to_tag = dialog.local_nameaddr.params["tag"]
-            did = (call_id, to_tag, from_tag)
-            self.dialogs_by_id[did] = dialog
             
             return WeakMethod(dialog.handle_request)
             
         return None
 
 
-    def send_message(self, params, related_params=None):
-        self.transmission(params, related_params)
+    def send_message(self, params, related_params=None, report=None):
+        self.transmission(params, related_params, report)
+
+
+    def create_dialog(self, local_uri, local_name, remote_uri=None, proxy_addr=None):
+        wself = weakref.proxy(self)
+        dialog = Dialog(wself, local_uri, local_name, remote_uri, proxy_addr)
+        self.add_dialog(dialog)

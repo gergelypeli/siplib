@@ -194,7 +194,13 @@ def parse_structured_message(msg):
         if field in ("from", "to", "contact"):
             p[field] = Nameaddr.parse(params[field])
         elif field == "cseq":
-            p[field] = int(params[field].split()[0])
+            cseq_num, cseq_method = params[field].split()
+            p[field] = int(cseq_num)
+            if "method" in p:
+                if p["method"] != cseq_method:
+                    print("Mismatching method in cseq field!")
+            else:
+                p["method"] = cseq_method.upper()  # Necessary for CANCEL responses
         elif field == "via":
             def do_one(s):
                 m = re.search("SIP/2.0/UDP ([^:;]+)(:(\\d+))?;branch=z9hG4bK([^;]+)", s)

@@ -34,10 +34,10 @@ class DummyCallee(Dialog):
         metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
         
         
-    def send_message(self, msg, related_msg=None):
+    def send_message(self, msg, related_msg=None, report=None):
         print("DummyCallee sending:")
         #pprint(response)
-        super(DummyCallee, self).send_message(msg, related_msg)
+        super(DummyCallee, self).send_message(msg, related_msg, report)
         
 
     def trying(self):
@@ -58,6 +58,24 @@ class DummyCallee(Dialog):
 
 
 class TestDialogManager(DialogManager):
+    def testing(self):
+        print("Testing begins.")
+        wself = weakref.proxy(self)
+        caller = DummyCallee(wself, caller_uri, caller_nameaddr.name, callee_uri)
+        self.add_dialog(caller)
+        # TODO: Hah! We don't have a to tag here yet!
+        
+        req_params = dict(method="INVITE")
+        report = WeakMethod(self.invite_responded)
+        caller.send_message(caller.make_request(req_params), report=report)
+        #req_text = print_structured_message(caller.make_request(req_params))
+        #transport.recved(req_text)
+        
+        
+    def invite_responded(self, response):
+        print("Invite responded!")
+        
+
     def auth_invite(self, uri):
         print("Authing callee: %s" % str(uri))
         wself = weakref.proxy(self)
@@ -73,13 +91,17 @@ class Transport(object):
         return callee_addr
 
     def send(self, msg):
+        sip = print_structured_message(msg)
         print("Transport sending:")
-        print(print_structured_message(msg))
+        print(sip)
+        
+        metapoll.register_timeout(timedelta(), WeakMethod(self.recved, sip))
+        #self.recved(sip)
 
-    def recved(self, s):
+    def recved(self, sip):
         print("Transport receiving:")
         #print(s)
-        self.reception(parse_structured_message(s))
+        self.reception(parse_structured_message(sip))
 
 
 def reception(params):
@@ -101,17 +123,9 @@ def transmission(msg):
     transport.send(msg)
 
 
-def transmission2(msg, related_msg):
+def transmission2(msg, related_msg, report):
     print("Sending message by transaction.")
-    transaction_manager.send_message(msg, related_msg)
-
-
-def testing():
-    print("Testing begins.")
-    caller = DummyCallee(None, caller_uri, caller_nameaddr.name, callee_uri)
-    req_params = dict(method="INVITE", via=[Via(caller_addr, "bbbb")])
-    req_text = print_structured_message(caller.make_request(req_params))
-    transport.recved(req_text)
+    transaction_manager.send_message(msg, related_msg, report)
 
 
 logging.basicConfig(level=logging.DEBUG)
@@ -121,7 +135,7 @@ transaction_manager = TransactionManager(transmission, callee_addr)
 dialog_manager = TestDialogManager(transmission2)
 
 metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(transaction_manager.maintenance), repeat=True)
-metapoll.register_timeout(timedelta(seconds=1), testing)
+metapoll.register_timeout(timedelta(seconds=1), WeakMethod(dialog_manager.testing))
 
 while True:
     #print("Polling.")
