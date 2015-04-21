@@ -23,11 +23,11 @@ def safe_update(target, source):
 
 
 def generate_tag():
-    return uuid.uuid4().hex
+    return uuid.uuid4().hex[:8]
 
 
 def generate_call_id():
-    return uuid.uuid4().hex
+    return uuid.uuid4().hex[:8]
 
 
 def identify_dialog(dialog):
@@ -49,8 +49,9 @@ def identify_incoming_request(params):
     
 
 class Dialog(object):
-    def __init__(self, dialog_manager, local_uri, local_name, remote_uri=None, proxy_addr=None):
+    def __init__(self, dialog_manager, report_request, local_uri, local_name, remote_uri=None, proxy_addr=None):
         self.dialog_manager = dialog_manager
+        self.report_request = report_request
     
         # Things in the From/To fields
         self.local_nameaddr = Nameaddr(local_uri, local_name, dict(tag=generate_tag()))
@@ -157,7 +158,7 @@ class Dialog(object):
         return params
 
 
-    def take_reponse(self, params):
+    def take_response(self, params):
         if "status" not in params:
             raise Error("Not a response!")
 
@@ -195,18 +196,29 @@ class Dialog(object):
 
 
     def send_request(self, user_params, related_params=None, report=None):
-        params = self.make_request(user_params)
-        self.dialog_manager.transmit(params, related_params, report)
+        if user_params["method"] in ("ACK", "CANCEL"):
+            # These requests are cloned from the INVITE in the transaction layer
+            params = dict(user_params, is_response=False)
+        else:
+            params = self.make_request(user_params)
+            
+        self.dialog_manager.transmit(params, related_params, WeakMethod(self.recv_response, report))
 
 
     def send_response(self, user_params, related_params=None):
         params = self.make_response(user_params, related_params)
         self.dialog_manager.transmit(params, related_params)
         
-
-    def handle_message(self, params):
-        pass  # TODO: call take_{request,response}
-
+        
+    def recv_request(self, msg):
+        request = self.take_request(msg)
+        self.report_request(request)
+    
+    
+    def recv_response(self, msg, report):
+        response = self.take_response(msg)
+        report(response)
+        
 
 class DialogManager(object):
     def __init__(self, transmission):
@@ -243,7 +255,7 @@ class DialogManager(object):
         
         if dialog:
             print("Found dialog: %s" % (did,))
-            return WeakMethod(dialog.handle_request)
+            return WeakMethod(dialog.recv_request)
 
         print("No dialog %s" % (did,))
 
@@ -258,7 +270,7 @@ class DialogManager(object):
             self.add_dialog(dialog)
             # TODO: send a proper message if rejected
             
-            return WeakMethod(dialog.handle_request)
+            return WeakMethod(dialog.recv_request)
             
         return None
 

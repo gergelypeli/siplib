@@ -11,6 +11,7 @@ from async import Metapoll, WeakMethod
 from format import Addr, Uri, Nameaddr, Status, Via, print_structured_message, parse_structured_message
 from transactions import TransactionManager, make_virtual_response
 from dialog import Dialog, DialogManager
+from leg import Leg
 
 local_addr = Addr("localhost", 5060)
 
@@ -23,67 +24,49 @@ callee_uri = Uri(local_addr, "callee")
 callee_nameaddr = Nameaddr(callee_uri, "Callee")
 
 
-class DummyCallee(Dialog):
-    def handle_request(self, msg):
-        method = msg["method"]
-        print("DummyCallee received: %s" % method)
-        #pprint(msg)
-        
-        if method == "INVITE":
-            self.invite_msg = msg
-            self.take_request(msg)
-            self.trying()
-        elif method == "ACK":
-            virtual_response = make_virtual_response()
-            self.send_response(virtual_response, msg)
-            self.send_response(virtual_response, self.invite_msg)
+class Callee(object):
+    def __init__(self, local_uri, local_name):
+        self.leg = Leg(WeakMethod(self.recved), weakref.proxy(dialog_manager), local_uri, local_name, None)
         
         
     def sleep(self, secs, method):
         metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
-        
-        
-    def trying(self):
-        self.send_response(dict(status=Status(100, "Trying")), self.invite_msg)
-        self.sleep(1, self.ringing)
-        
+
+
+    def recved(self, action):
+        if action["type"] == "dial":
+            self.sleep(1, self.ringing)
+
         
     def ringing(self):
-        self.send_response(dict(status=Status(180, "Ringing")), self.invite_msg)
+        self.leg.do(dict(type="ring"))
         self.sleep(1, self.answering)
 
 
     def answering(self):
-        self.send_response(dict(status=Status(200, "OK")), self.invite_msg)
+        self.leg.do(dict(type="answer"))
+
+
+class Caller(object):
+    def __init__(self, local_uri, local_name, remote_uri):
+        self.leg = Leg(WeakMethod(self.recved), weakref.proxy(dialog_manager), local_uri, local_name, remote_uri)
+
+
+    def dial(self):
+        self.leg.do(dict(type="dial"))
+
+
+    def recved(self, action):
+        if action["type"] == "answer":
+            print("Answered.")
 
 
 class TestDialogManager(DialogManager):
-    def testing(self):
-        print("Testing begins.")
-        wself = weakref.proxy(self)
-        self.caller = DummyCallee(wself, caller_uri, caller_nameaddr.name, callee_uri)
-        self.add_dialog(self.caller)
-        
-        req_params = dict(method="INVITE")
-        report = WeakMethod(self.invite_responded)
-        self.caller.send_request(req_params, None, report=report)
-        
-        
-    def invite_responded(self, response):
-        code = response["status"].code
-        print("Invite responded with %d" % code)
-        
-        if code >= 200:
-            req_params = dict(method="ACK")
-            report = WeakMethod(self.invite_responded)
-            self.caller.send_request(req_params, response, report=report)
-        
-
     def auth_invite(self, uri):
+        global callee
         print("Authing callee: %s" % str(uri))
-        wself = weakref.proxy(self)
-        callee = DummyCallee(wself, callee_uri, callee_nameaddr.name)
-        return callee
+        callee = Callee(callee_uri, callee_nameaddr.name)
+        return callee.leg.dialog  # Adds it to manager
         
 
 class Transport(object):
@@ -131,6 +114,15 @@ def to_transaction(msg, related_msg, report):
     transaction_manager.send_message(msg, related_msg, report)
 
 
+def testing():
+    global caller
+    print("Testing begins.")
+    
+    caller = Caller(caller_uri, caller_nameaddr.name, callee_uri)
+    dialog_manager.add_dialog(caller.leg.dialog)  # Must do
+    caller.dial()
+
+
 logging.basicConfig(level=logging.DEBUG)
 metapoll = Metapoll()
 transport = Transport(reception)
@@ -138,7 +130,7 @@ transaction_manager = TransactionManager(to_transport, local_addr)
 dialog_manager = TestDialogManager(to_transaction)
 
 metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(transaction_manager.maintenance), repeat=True)
-metapoll.register_timeout(timedelta(seconds=1), WeakMethod(dialog_manager.testing))
+metapoll.register_timeout(timedelta(seconds=1), testing)
 
 while True:
     #print("Polling.")

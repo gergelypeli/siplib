@@ -65,7 +65,7 @@ def identify(params):
 
 
 def generate_branch():
-    return uuid.uuid4().hex
+    return uuid.uuid4().hex[:8]
 
 
 def make_virtual_response():
@@ -293,6 +293,7 @@ class InviteServerTransaction(PlainServerTransaction):
         if self.state == self.WAITING:
             if not self.incoming_via:
                 self.incoming_via = request["via"]
+                self.send_trying(request)
                 self.report(request)
         elif self.state == self.PROVISIONING:
             self.retransmit()
@@ -311,6 +312,16 @@ class InviteServerTransaction(PlainServerTransaction):
             self.change_state(new_state)
             self.transmit(response)
 
+
+    def send_trying(self, request):
+        response = request.copy()
+        
+        response["is_response"] = True
+        response["status"] = Status(100, "Trying")
+        response["sdp"] = None  # TODO: clear some more
+        
+        self.send(response)
+        
 
     def expired(self):
         if self.state == self.TRANSMITTING:
