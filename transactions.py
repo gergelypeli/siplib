@@ -77,10 +77,10 @@ def is_virtual_response(msg):
     
 
 class Transaction(object):
-    WAITING = 1
-    PROVISIONING = 2
-    TRANSMITTING = 3
-    LINGERING = 4
+    WAITING = "WAITING"
+    PROVISIONING = "PROVISIONING"
+    TRANSMITTING = "TRANSMITTING"
+    LINGERING = "LINGERING"
 
     T1 = datetime.timedelta(milliseconds=500)
     T2 = datetime.timedelta(milliseconds=4000)
@@ -285,7 +285,7 @@ class InviteClientTransaction(PlainClientTransaction):
             if not self.acks_by_remote_tag:
                 self.report(None)
         else:
-            raise Error("Hm?")
+            raise Error("Invite client expired while %s!" % self.state)
 
 
 class InviteServerTransaction(PlainServerTransaction):
@@ -326,8 +326,10 @@ class InviteServerTransaction(PlainServerTransaction):
     def expired(self):
         if self.state == self.TRANSMITTING:
             self.report(None)
+        elif self.state == self.LINGERING:
+            pass
         else:
-            raise Error("Hm?")
+            raise Error("Invite server expired while %s!" % self.state)
 
 
     def recved_ack(self):

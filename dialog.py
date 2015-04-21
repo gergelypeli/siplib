@@ -137,16 +137,16 @@ class Dialog(object):
     def make_response(self, user_params, request_params):
         status = user_params["status"]
         to = request_params["to"]
-        if status.code != 100:
+        if status.code != 100:  # TODO: unnecessary, 100-s done by the transport layer
             to = Nameaddr(to.uri, to.name, dict(to.params, tag=self.local_nameaddr.params["tag"]))
 
         params = {
             "is_response": True,
-            "from": request_params["from"],
-            "to": to,
-            "call_id": request_params["call_id"],
+            "from": self.remote_nameaddr,
+            "to": self.local_nameaddr,
+            "call_id": self.call_id,
             "cseq": request_params["cseq"],
-            "via": request_params["via"],
+            "via": request_params["via"],  # TODO: should the transport do this?
             "method": request_params["method"]  # only for internal use
         }
 
@@ -187,7 +187,9 @@ class Dialog(object):
             if not to_tag:
                 raise Error("Missing to tag!")
 
-            self.remote_tag = from_tag
+            self.dialog_manager.remove_dialog(self)
+            self.remote_nameaddr = to_nameaddr
+            self.dialog_manager.add_dialog(self)
 
         if peer_contact:
             self.peer_contact = peer_contact

@@ -53,6 +53,11 @@ class Leg(object):
                 self.state = self.DIALING_IN_ANSWERED
                 # Must wait for the ACK
                 return
+        elif self.state == self.UP:
+            if type == "hangup":
+                self.send_request(dict(method="BYE"))
+                self.state = self.DISCONNECTING_OUT
+                return
                 
         raise Error("Weirdness!")
 
@@ -69,14 +74,14 @@ class Leg(object):
                 self.state = self.DIALING_IN
                 return
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
-            if is_response:
+            if is_response and method == "INVITE":
                 if status.code == 180:
                     if self.state == self.DIALING_OUT:
                         self.report(dict(type="ring"))
                         self.state = self.DIALING_OUT_RINGING
                     return
                 elif status.code >= 300:
-                    self.report(dict(type="rejected", status=status))
+                    self.report(dict(type="reject", status=status))
                     self.state = self.DOWN
                     # ACKed by tr
                     return
@@ -94,5 +99,16 @@ class Leg(object):
                 self.pending_received_message = None
                 self.state = self.UP
                 return
-        
+        elif self.state == self.UP:
+            if not is_response and method == "BYE":
+                self.pending_received_message = msg
+                self.report(dict(type="hangup"))
+                self.send_response(dict(status=Status(200, "OK")))
+                self.state = self.DOWN
+                return
+        elif self.state == self.DISCONNECTING_OUT:
+            if is_response and method == "BYE":
+                self.state = self.DOWN
+                return
+                
         raise Error("Weirdness!")

@@ -45,11 +45,20 @@ class Callee(object):
 
     def answering(self):
         self.leg.do(dict(type="answer"))
+        self.sleep(1, self.hanging)
+        
+        
+    def hanging(self):
+        self.leg.do(dict(type="hangup"))
 
 
 class Caller(object):
     def __init__(self, local_uri, local_name, remote_uri):
         self.leg = Leg(WeakMethod(self.recved), weakref.proxy(dialog_manager), local_uri, local_name, remote_uri)
+
+
+    def sleep(self, secs, method):
+        metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
 
 
     def dial(self):
@@ -59,6 +68,11 @@ class Caller(object):
     def recved(self, action):
         if action["type"] == "answer":
             print("Answered.")
+            #self.sleep(1, self.hanging)
+
+            
+    def hanging(self):
+        self.leg.do(dict(type="hangup"))
 
 
 class TestDialogManager(DialogManager):
