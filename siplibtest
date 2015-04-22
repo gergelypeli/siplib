@@ -36,11 +36,13 @@ class Callee(object):
     def recved(self, action):
         if action["type"] == "dial":
             self.sleep(1, self.ringing)
+        elif action["type"] == "hangup":
+            print("The caller hung up.")
 
         
     def ringing(self):
         self.leg.do(dict(type="ring"))
-        self.sleep(1, self.answering)
+        #self.sleep(1, self.answering)
 
 
     def answering(self):
@@ -63,6 +65,7 @@ class Caller(object):
 
     def dial(self):
         self.leg.do(dict(type="dial"))
+        self.sleep(3, self.hanging)
 
 
     def recved(self, action):

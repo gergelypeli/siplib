@@ -20,7 +20,8 @@ class Leg(object):
         self.report = report
         self.state = self.DOWN
         self.dialog = Dialog(dialog_manager, WeakMethod(self.recved), local_uri, local_name, remote_uri)
-        self.pending_received_message = None
+        self.pending_received_message = None  # TODO: rethink these!
+        self.pending_sent_message = None
         
         
     def send_request(self, request, related=None):
@@ -39,8 +40,14 @@ class Leg(object):
         
         if self.state == self.DOWN:
             if type == "dial":
-                self.send_request(dict(method="INVITE", sdp=action.get("sdp")))
+                self.pending_sent_message = dict(method="INVITE", sdp=action.get("sdp"))
+                self.send_request(self.pending_sent_message)  # Will be extended!
                 self.state = self.DIALING_OUT
+                return
+        elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
+            if type == "hangup":
+                self.send_request(dict(method="CANCEL"), self.pending_sent_message)
+                self.state = self.DISCONNECTING_OUT
                 return
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
             if type == "ring":
@@ -72,6 +79,14 @@ class Leg(object):
                 self.pending_received_message = msg
                 self.report(dict(type="dial"))
                 self.state = self.DIALING_IN
+                return
+        elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
+            if not is_response and method == "CANCEL":
+                self.report(dict(type="hangup"))
+                self.send_response(dict(status=Status(487, "Request Terminated")))  # for the INVITE
+                self.pending_received_message = msg
+                self.send_response(dict(status=Status(200, "OK")))  # for the CANCEL
+                self.state = self.DOWN
                 return
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
             if is_response and method == "INVITE":
@@ -110,5 +125,14 @@ class Leg(object):
             if is_response and method == "BYE":
                 self.state = self.DOWN
                 return
+            elif is_response and method == "INVITE":
+                print("Got cancelled invite response: %s" % (status,))
+                # This was ACKed by the transaction layer
+                return
+            elif is_response and method == "CANCEL":
+                print("Got cancel response: %s" % (status,))
+                self.state = self.DOWN
+                return
+                
                 
         raise Error("Weirdness!")

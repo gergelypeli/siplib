@@ -75,7 +75,7 @@ class Dialog(object):
             self.call_id = generate_call_id()
             self.dialog_manager.add_dialog(self)
 
-        params = {
+        dialog_params = {
             "is_response": False,
             "uri": self.peer_contact.uri,
             "from": self.local_nameaddr,
@@ -86,11 +86,11 @@ class Dialog(object):
         }
 
         if user_params["method"] == "INVITE":
-            params["contact"] = self.my_contact
+            dialog_params["contact"] = self.my_contact
 
-        safe_update(params, user_params)
+        safe_update(user_params, dialog_params)
 
-        return params
+        return user_params  # Modified!
 
 
     def take_request(self, params):
@@ -117,7 +117,9 @@ class Dialog(object):
             if from_tag != remote_tag:
                 raise Error("Mismatching remote tag!")
 
-            if to_tag != local_tag:
+            if params["method"] == "CANCEL" and not to_tag:
+                pass
+            elif to_tag != local_tag:
                 raise Error("Mismatching local tag!")
         else:
             if to_tag:
@@ -140,7 +142,7 @@ class Dialog(object):
         if status.code != 100:  # TODO: unnecessary, 100-s done by the transport layer
             to = Nameaddr(to.uri, to.name, dict(to.params, tag=self.local_nameaddr.params["tag"]))
 
-        params = {
+        dialog_params = {
             "is_response": True,
             "from": self.remote_nameaddr,
             "to": self.local_nameaddr,
@@ -150,12 +152,12 @@ class Dialog(object):
             "method": request_params["method"]  # only for internal use
         }
 
-        if params["method"] == "INVITE":
-            params["contact"] = self.my_contact
+        if dialog_params["method"] == "INVITE":
+            dialog_params["contact"] = self.my_contact
 
-        safe_update(params, user_params)
+        safe_update(user_params, dialog_params)
 
-        return params
+        return user_params  # Modified!
 
 
     def take_response(self, params):
@@ -200,7 +202,8 @@ class Dialog(object):
     def send_request(self, user_params, related_params=None, report=None):
         if user_params["method"] in ("ACK", "CANCEL"):
             # These requests are cloned from the INVITE in the transaction layer
-            params = dict(user_params, is_response=False)
+            params = user_params
+            params["is_response"] = False
         else:
             params = self.make_request(user_params)
             
