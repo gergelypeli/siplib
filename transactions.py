@@ -183,8 +183,10 @@ class PlainServerTransaction(Transaction):
         
         
     def transmit(self, msg):
-        if msg["via"] != self.incoming_via:  # FIXME: what kind of equality is this?
-            raise Error("Don't mess with the Via headers!")
+        if "via" in msg:
+            raise Error("Don't mess with the response Via headers!")
+            
+        msg["via"] = self.incoming_via
         super(PlainServerTransaction, self).transmit(msg)
 
 
@@ -238,11 +240,6 @@ class InviteClientTransaction(PlainClientTransaction):
         # These won't be public
         self.acks_by_remote_tag[remote_tag] = ack
         ack.send(ack_params)
-
-
-    #def create_cancel(self):
-    #    self.change_state(self.LINGERING)  # may extend lingering time (for 487)
-    #    return PlainClientTransaction(self.manager, self.report, self.branch)
 
 
     def recved(self, response):
@@ -319,6 +316,7 @@ class InviteServerTransaction(PlainServerTransaction):
         response["is_response"] = True
         response["status"] = Status(100, "Trying")
         response["sdp"] = None  # TODO: clear some more
+        del response["via"]
         
         self.send(response)
         
@@ -480,6 +478,7 @@ class TransactionManager(object):
         method = msg["method"]
 
         if method == "ACK":
+            # 2xx-ACK from Dialog
             if not related_msg:
                 raise Error("Related response is not given for ACK!")
                 
@@ -488,7 +487,7 @@ class TransactionManager(object):
             if not invite_tr:
                 raise Error("No transaction to ACK!")
             
-            branch = generate_branch()  # 2xx-ACK
+            branch = generate_branch()
             remote_tag = response_params["to"].params["tag"]
             sdp = msg.get("sdp")
             invite_tr.create_and_send_ack(branch, remote_tag, sdp)

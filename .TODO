@@ -1,2 +1,3 @@
-A branch_id nem eleg a transaction_id-hez, mert az is kell, hogy ki kuldte,
-tehat a via-beli cim is!
+A branch meg ne legyen a Transaction-ban, adjuk meg explicite az
+add_transaction-nek. Helyette legyen csak via, amit a Server automatica
+kitolt, a Client meg kapja a konstruktorban, akar generalva, akar klonozva.
