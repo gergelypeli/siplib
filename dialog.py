@@ -70,6 +70,14 @@ class Dialog(object):
         self.last_sent_cseq = 0
 
 
+    def uninvite(self, invite_params):
+        self.local_nameaddr = invite_params["from"]
+        self.remote_nameaddr = invite_params["to"]
+        self.peer_contact = Nameaddr(invite_params["uri"])
+        self.call_id = invite_params["call_id"]
+        self.last_sent_cseq = invite_params["cseq"]
+
+
     def make_request(self, user_params, related_params=None):
         method = user_params["method"]
         if method == "CANCEL":
@@ -212,7 +220,9 @@ class Dialog(object):
 
 
     def send_request(self, user_params, related_params=None, report=None):
-        if user_params["method"] == "CANCEL":
+        if user_params["method"] == "UNINVITE":
+            self.uninvite(related_params)
+        elif user_params["method"] == "CANCEL":
             # CANCELs are cloned from the INVITE in the transaction layer
             params = user_params
             params["is_response"] = False

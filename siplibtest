@@ -11,7 +11,7 @@ from async import Metapoll, WeakMethod
 from format import Addr, Uri, Nameaddr, Status, Via, print_structured_message, parse_structured_message
 from transactions import TransactionManager, make_virtual_response
 from dialog import Dialog, DialogManager
-from leg import Leg
+from leg import Leg, create_uninvited_leg
 
 local_addr = Addr("localhost", 5060)
 
@@ -110,6 +110,10 @@ class Transport(object):
 def reception(params):
     print("Got message from transport.")
     #print("Req params: %s" % req_params)
+    invite_params = transaction_manager.match_uninvited_response(params)
+    if invite_params:
+        create_uninvited_leg(invite_params)
+    
     matched = transaction_manager.match_incoming_message(params)
     
     if not matched:

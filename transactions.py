@@ -222,7 +222,17 @@ class InviteClientTransaction(PlainClientTransaction):
 
         self.acks_by_remote_tag = {}
         self.statuses_by_remote_tag = {}
+        self.reports_by_remote_tag = {}
 
+
+    def match_uninvited_response(self, response):
+        remote_tag = response["to"].params.get("tag")
+        
+        if self.statuses_by_remote_tag and remote_tag not in self.statuses_by_remote_tag:
+            return self.outgoing_msg.copy()
+        
+        return None
+        
 
     def create_and_send_ack(self, ack_branch, msg):
         if self.state != self.LINGERING:
@@ -250,13 +260,20 @@ class InviteClientTransaction(PlainClientTransaction):
             # And they are h2h anyway, so the dialog shouldn't care.
             if code > 100:
                 if not remote_tag:
-                    print("Invite response without to tag!")
+                    print("Invite response without remote tag!")
+                    
+                if remote_tag not in self.reports_by_remote_tag:
+                    if not self.report:
+                        raise Error("No report when receiving INVITE response with new remote tag!")
+                        
+                    self.reports_by_remote_tag[remote_tag] = self.report
+                    self.report = None
                     
                 statuses = self.statuses_by_remote_tag.setdefault(remote_tag, set())
             
                 if code not in statuses:
                     statuses.add(code)
-                    self.report(response)
+                    self.reports_by_remote_tag[remote_tag](response)
 
             if code >= 300:
                 # final non-2xx responses are ACK-ed here in the same transaction (17.1.1.3)
@@ -396,6 +413,15 @@ class TransactionManager(object):
             raise Error("WAT?")
 
 
+    def match_uninvited_response(self, msg):
+        if msg["is_response"] and msg["method"] == "INVITE":
+            tr = self.client_transactions.get(identify(msg))
+            if tr:
+                return tr.match_uninvited_response(msg)
+                
+        return None
+        
+
     def match_incoming_message(self, msg):
         #print("Match incoming:")
         #pprint(msg)
@@ -484,7 +510,21 @@ class TransactionManager(object):
 
         method = msg["method"]
 
-        if method == "ACK":
+        if method == "UNINVITE":
+            if not related_msg:
+                raise Error("Related INVITE is not given for UNINVITE!")
+                
+            invite_params = related_msg
+            invite_tr = self.client_transactions.get(identify(invite_params))
+            if not invite_tr:
+                raise Error("No transaction to UNINVITE!")
+            
+            if invite_tr.report:
+                raise Error("InviteClient must not have report while UNINVITE!")
+                
+            invite_tr.report = report
+            # Nothing to send here
+        elif method == "ACK":
             # 2xx-ACK from Dialog
             if not related_msg:
                 raise Error("Related response is not given for ACK!")

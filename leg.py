@@ -135,3 +135,10 @@ class Leg(object):
                 
                 
         raise Error("Weirdness!")
+
+
+def create_uninvited_leg(dialog_manager, invite_params):
+    # TODO: real UninvitedLeg class
+    leg = Leg(None, dialog_manager, None, None, None)
+    leg.dialog.send_request(dict(method="UNINVITE"), invite_params, leg.recved)  # strong ref!
+    leg.state = leg.DIALING_OUT
