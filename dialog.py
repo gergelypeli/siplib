@@ -9,6 +9,9 @@ from format import Addr, Uri, Nameaddr, Via, Status
 from async import WeakMethod
 
 
+MAXFWD = 50
+
+
 class Error(Exception):
     pass
 
@@ -67,8 +70,15 @@ class Dialog(object):
         self.last_sent_cseq = 0
 
 
-    def make_request(self, user_params):
-        self.last_sent_cseq += 1
+    def make_request(self, user_params, related_params=None):
+        method = user_params["method"]
+        if method == "CANCEL":
+            raise Error("CANCEL should be out of dialog!")
+        elif method == "ACK":
+            cseq = related_params["cseq"]
+        else:
+            self.last_sent_cseq += 1
+            cseq = self.last_sent_cseq
 
         if not self.call_id:
             self.dialog_manager.remove_dialog(self)
@@ -81,11 +91,11 @@ class Dialog(object):
             "from": self.local_nameaddr,
             "to": self.remote_nameaddr,
             "call_id": self.call_id,
-            "cseq": self.last_sent_cseq,
-            "maxfwd": 50
+            "cseq": cseq,
+            "maxfwd": MAXFWD
         }
 
-        if user_params["method"] == "INVITE":
+        if method == "INVITE":
             dialog_params["contact"] = self.my_contact
 
         safe_update(user_params, dialog_params)
@@ -202,17 +212,19 @@ class Dialog(object):
 
 
     def send_request(self, user_params, related_params=None, report=None):
-        if user_params["method"] in ("ACK", "CANCEL"):
-            # These requests are cloned from the INVITE in the transaction layer
+        if user_params["method"] == "CANCEL":
+            # CANCELs are cloned from the INVITE in the transaction layer
             params = user_params
             params["is_response"] = False
         else:
-            params = self.make_request(user_params)
+            # Even 2xx ACKs are in-dialog
+            params = self.make_request(user_params, related_params)
             
         self.dialog_manager.transmit(params, related_params, WeakMethod(self.recv_response, report))
 
 
     def send_response(self, user_params, related_params=None):
+        print("Will send response: %s" % str(user_params))
         params = self.make_response(user_params, related_params)
         self.dialog_manager.transmit(params, related_params)
         

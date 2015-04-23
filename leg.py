@@ -107,10 +107,9 @@ class Leg(object):
                     return
         elif self.state == self.DIALING_IN_ANSWERED:
             if not is_response and method == "ACK":
-                virtual_response = make_virtual_response()
-                self.send_response(virtual_response)  # for the INVITE
+                self.send_response(make_virtual_response())  # for the INVITE
                 self.pending_received_message = msg
-                self.send_response(virtual_response)  # for the ACK
+                self.send_response(make_virtual_response())  # for the ACK
                 self.pending_received_message = None
                 self.state = self.UP
                 return
