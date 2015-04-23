@@ -216,22 +216,37 @@ class AckClientTransaction(PlainClientTransaction):
         raise Error("WAT?")
 
 
+class Bastard(object):
+    def __init__(self, report):
+        self.report = report
+        self.statuses = set()
+        self.ack = None
+        
+
 class InviteClientTransaction(PlainClientTransaction):
     def __init__(self, *args, **kwargs):
         super(InviteClientTransaction, self).__init__(*args, **kwargs)
 
-        self.acks_by_remote_tag = {}
-        self.statuses_by_remote_tag = {}
-        self.reports_by_remote_tag = {}
+        # Oh my god! They let an INVITE create multiple dialogs! You bastards!
+        self.bastards = {}
 
+
+    def rt(self, msg):
+        return msg["to"].params.get("tag")
+    
+    
+    def set_report(self, report):
+        if self.report:
+            raise Error("Report already set!")
+            
+        self.report = report
+        
 
     def match_uninvited_response(self, response):
-        remote_tag = response["to"].params.get("tag")
-        
-        if self.statuses_by_remote_tag and remote_tag not in self.statuses_by_remote_tag:
+        if self.bastards and self.rt(response) not in self.bastards:
             return self.outgoing_msg.copy()
-        
-        return None
+        else:
+            return None
         
 
     def create_and_send_ack(self, ack_branch, msg):
@@ -239,20 +254,18 @@ class InviteClientTransaction(PlainClientTransaction):
             self.change_state(self.LINGERING)  # now we can expire
         
         ack = AckClientTransaction(self.manager, None, ack_branch)
-        
 
         # These won't be public
-        remote_tag = msg["to"].params["tag"]
-        self.acks_by_remote_tag[remote_tag] = ack
+        self.bastards[self.rt(msg)].ack = ack
         ack.send(msg)
 
 
     def recved(self, response):
-        remote_tag = response["to"].params.get("tag")
-        ack = self.acks_by_remote_tag.get(remote_tag)
+        remote_tag = self.rt(response)
+        him = self.bastards.get(remote_tag)
         
-        if ack:
-            ack.retransmit()  # so we don't extend the lingering time as well
+        if him and him.ack:
+            him.ack.retransmit()  # don't extend the lingering time
         else:
             code = response["status"].code
             
@@ -261,19 +274,18 @@ class InviteClientTransaction(PlainClientTransaction):
             if code > 100:
                 if not remote_tag:
                     print("Invite response without remote tag!")
-                    
-                if remote_tag not in self.reports_by_remote_tag:
+                    return
+            
+                if not him:
                     if not self.report:
                         raise Error("No report when receiving INVITE response with new remote tag!")
-                        
-                    self.reports_by_remote_tag[remote_tag] = self.report
+                
+                    self.bastards[remote_tag] = him = Bastard(self.report)
                     self.report = None
-                    
-                statuses = self.statuses_by_remote_tag.setdefault(remote_tag, set())
             
-                if code not in statuses:
-                    statuses.add(code)
-                    self.reports_by_remote_tag[remote_tag](response)
+                if code not in him.statuses:
+                    him.statuses.add(code)
+                    him.report(response)
 
             if code >= 300:
                 # final non-2xx responses are ACK-ed here in the same transaction (17.1.1.3)
@@ -302,7 +314,9 @@ class InviteClientTransaction(PlainClientTransaction):
             self.report(None)  # nothing at all
         elif self.state == self.LINGERING:
             # expired only after a provisional response, or after sending an ACK
-            if not self.acks_by_remote_tag:
+            got_final = max([ max(him.statuses) for him in self.bastards.values() ]) >= 200
+
+            if not got_final:
                 self.report(None)
         else:
             raise Error("Invite client expired while %s!" % self.state)
@@ -519,10 +533,7 @@ class TransactionManager(object):
             if not invite_tr:
                 raise Error("No transaction to UNINVITE!")
             
-            if invite_tr.report:
-                raise Error("InviteClient must not have report while UNINVITE!")
-                
-            invite_tr.report = report
+            invite_tr.set_report(report)
             # Nothing to send here
         elif method == "ACK":
             # 2xx-ACK from Dialog
