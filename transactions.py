@@ -3,7 +3,7 @@ from __future__ import print_function, unicode_literals, absolute_import
 from pprint import pprint, pformat
 import uuid
 import datetime
-import weakref
+from weakref import proxy as Weak
 
 import format
 from format import Addr, Uri, Nameaddr, Via, Status
@@ -339,7 +339,7 @@ class InviteServerTransaction(PlainServerTransaction):
 
     def send(self, response):
         if is_virtual_response(response):
-            # A virtual response means we got ACKed
+            # A virtual response means we got ACKed, stop retransmissions
             self.recved_ack()
         else:
             new_state = self.PROVISIONING if response["status"].code < 200 else self.TRANSMITTING
@@ -360,6 +360,7 @@ class InviteServerTransaction(PlainServerTransaction):
 
     def expired(self):
         if self.state == self.TRANSMITTING:
+            # Got no ACK, complain
             self.report(None)
         elif self.state == self.LINGERING:
             pass
@@ -379,6 +380,9 @@ class InviteServerTransaction(PlainServerTransaction):
 
 
 class AckServerTransaction(PlainServerTransaction):
+    # Created only for 2xx responses to drop duplicates for the Dialog.
+    # For the sake of consistentcy, we excpect a virtual response to go lingering.
+    
     def retransmit(self):
         if not is_virtual_response(self.outgoing_msg):
             raise Error("Nonvirtual response to AckServerTransaction!")
@@ -443,10 +447,12 @@ class TransactionManager(object):
         
         if msg["is_response"]:
             tr = self.client_transactions.get((branch, method))
+            
             if tr:
                 tr.recved(msg)
             else:
                 print("Incoming response to unknown request, ignoring!")
+                
             return True
 
         tr = self.server_transactions.get((branch, method))
@@ -456,7 +462,7 @@ class TransactionManager(object):
             
         if method == "CANCEL":
             # CANCEL-s may happen outside of any dialogs, so process them here
-            tr = PlainServerTransaction(weakref.proxy(self), lambda msg: None, branch)
+            tr = PlainServerTransaction(Weak(self), lambda msg: None, branch)
             self.add_transaction(tr, "CANCEL")
             tr.recved(msg)
             
@@ -470,9 +476,9 @@ class TransactionManager(object):
             else:
                 cancel_response = dict(msg,
                     is_response=True,
-                    status=Status(481, "Transaction Does Not Exist")
+                    status=Status(481, "Transaction Does Not Exist"),
+                    to=msg["to"].tagged("ROTFLMAO")  # Fakking required
                 )
-                cancel_response["to"].params["tag"] = "ROTFLMAO"  # Fakking required
                 
                 tr.send(cancel_response)
                 
@@ -483,7 +489,7 @@ class TransactionManager(object):
             if invite_tr:
                 # We must have sent a non-200 response to this, so no dialog was created.
                 # Send a virtual ACK response to notify the transaction.
-                # But don't create an AckServerTransaction here.
+                # But don't create an AckServerTransaction here, we have no one to notify.
                 invite_tr.send(make_virtual_response())
                 return True
                 
@@ -494,13 +500,13 @@ class TransactionManager(object):
         branch, method = identify(msg)
 
         if method == "INVITE":
-            tr = InviteServerTransaction(weakref.proxy(self), report, branch)
+            tr = InviteServerTransaction(Weak(self), report, branch)
         elif method == "ACK":
             # Must create a server transaction to swallow duplicates,
             # we don't want to bother the dialogs unnecessarily.
-            tr = AckServerTransaction(weakref.proxy(self), report, branch)
+            tr = AckServerTransaction(Weak(self), report, branch)
         else:
-            tr = PlainServerTransaction(weakref.proxy(self), report, branch)
+            tr = PlainServerTransaction(Weak(self), report, branch)
 
         self.add_transaction(tr, method)
         tr.recved(msg)
@@ -556,7 +562,7 @@ class TransactionManager(object):
             request_params = related_msg
             branch, method = identify(request_params)
 
-            tr = PlainClientTransaction(weakref.proxy(self), report, branch)
+            tr = PlainClientTransaction(Weak(self), report, branch)
             self.add_transaction(tr, "CANCEL")
 
             # TODO: more sophisticated CANCEL generation
@@ -565,10 +571,10 @@ class TransactionManager(object):
         
             tr.send(cancel_params)
         elif method == "INVITE":
-            tr = InviteClientTransaction(weakref.proxy(self), report, generate_branch())
+            tr = InviteClientTransaction(Weak(self), report, generate_branch())
             self.add_transaction(tr, method)
             tr.send(msg)
         else:
-            tr = PlainClientTransaction(weakref.proxy(self), report, generate_branch())
+            tr = PlainClientTransaction(Weak(self), report, generate_branch())
             self.add_transaction(tr, method)
             tr.send(msg)

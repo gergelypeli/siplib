@@ -78,14 +78,6 @@ class Caller(object):
         self.leg.do(dict(type="hangup"))
 
 
-class TestDialogManager(DialogManager):
-    def auth_invite(self, uri):
-        global callee
-        print("Authing callee: %s" % str(uri))
-        callee = Callee(callee_uri, callee_nameaddr.name)
-        return callee.leg.dialog  # Adds it to manager
-        
-
 class Transport(object):
     def __init__(self, reception):
         self.reception = reception
@@ -107,6 +99,30 @@ class Transport(object):
         self.reception(parse_structured_message(sip))
 
 
+def welcome(msg):
+    global callee
+    
+    if msg["method"] == "INVITE" and "tag" not in msg["to"].params:
+        uri = msg["uri"]
+        print("Authing callee: %s" % str(uri))
+        callee = Callee(callee_uri, callee_nameaddr.name)
+        return WeakMethod(callee.leg.dialog.recv_request)
+
+    def reject(msg):
+        response = {
+            "is_response": True,
+            "status": Status(400, "WTF"),
+            "from": msg["from"],
+            "to": msg["to"].tagged("ROTFLMAO"),
+            "call_id": msg["call_id"],
+            "cseq": msg["cseq"]
+        }
+        
+        transaction_manager.send_message(response, msg)
+    
+    return reject
+
+
 def reception(params):
     print("Got message from transport.")
     #print("Req params: %s" % req_params)
@@ -117,12 +133,16 @@ def reception(params):
     matched = transaction_manager.match_incoming_message(params)
     
     if not matched:
-        report = dialog_manager.handle_incoming_message(params)
+        report = dialog_manager.handle_incoming_request(params)
         
-        if report:
-            transaction_manager.create_incoming_request(params, report)
-        else:
-            raise Exception("Couldn't create dialog!")
+        if not report:
+            report = welcome(params)
+        
+        if not report:
+            print("Ignoring evil message!")
+            return
+            
+        transaction_manager.create_incoming_request(params, report)
 
 
 def to_transport(msg):
@@ -140,7 +160,6 @@ def testing():
     print("Testing begins.")
     
     caller = Caller(caller_uri, caller_nameaddr.name, callee_uri)
-    dialog_manager.add_dialog(caller.leg.dialog)  # Must do
     caller.dial()
 
 
@@ -148,7 +167,7 @@ logging.basicConfig(level=logging.DEBUG)
 metapoll = Metapoll()
 transport = Transport(reception)
 transaction_manager = TransactionManager(to_transport, local_addr)
-dialog_manager = TestDialogManager(to_transaction)
+dialog_manager = DialogManager(to_transaction)
 
 metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(transaction_manager.maintenance), repeat=True)
 metapoll.register_timeout(timedelta(seconds=1), testing)

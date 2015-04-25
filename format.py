@@ -94,6 +94,13 @@ class Nameaddr(collections.namedtuple("Nameaddr", "uri name params")):
             uri = parts[0]
 
         return cls(uri=Uri.parse(uri), name=name, params=parse_parts(parts[1:]))
+        
+        
+    def tagged(self, tag):
+        if "tag" in self.params:
+            return self
+        else:            
+            return Nameaddr(self.uri, self.name, dict(self.params, tag=tag))
 
 
 def print_message(initial_line, params, body):

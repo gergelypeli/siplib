@@ -127,10 +127,10 @@ class Leg(object):
             elif is_response and method == "INVITE":
                 print("Got cancelled invite response: %s" % (status,))
                 # This was ACKed by the transaction layer
+                self.state = self.DOWN
                 return
             elif is_response and method == "CANCEL":
                 print("Got cancel response: %s" % (status,))
-                self.state = self.DOWN
                 return
                 
                 
