@@ -9,19 +9,19 @@ import logging
 from async import Metapoll, WeakMethod
 
 from format import Addr, Uri, Nameaddr, Status, Via, print_structured_message, parse_structured_message
-from transactions import TransactionManager, make_virtual_response
+from transactions import TransactionManager, make_virtual_response, make_simple_response
 from dialog import Dialog, DialogManager
 from leg import Leg, create_uninvited_leg
 
 local_addr = Addr("localhost", 5060)
 
-#caller_addr = Addr("CALLER", 5060)
 caller_uri = Uri(local_addr, "caller")
 caller_nameaddr = Nameaddr(caller_uri, "Caller")
 
-#callee_addr = Addr("CALLEE", 5060)
 callee_uri = Uri(local_addr, "callee")
 callee_nameaddr = Nameaddr(callee_uri, "Callee")
+
+wrong_uri = Uri(local_addr, "wrong")
 
 
 class Callee(object):
@@ -87,14 +87,14 @@ class Transport(object):
 
     def send(self, msg):
         sip = print_structured_message(msg)
-        print("Transport sending:")
-        print(sip)
+        #print("Transport sending:")
+        print("\n" + "\n".join("  %s" % line for line in sip.split("\n")))
         
         metapoll.register_timeout(timedelta(), WeakMethod(self.recved, sip))
         #self.recved(sip)
 
     def recved(self, sip):
-        print("Transport receiving:")
+        #print("Transport receiving:")
         #print(s)
         self.reception(parse_structured_message(sip))
 
@@ -102,29 +102,20 @@ class Transport(object):
 def welcome(msg):
     global callee
     
-    if msg["method"] == "INVITE" and "tag" not in msg["to"].params:
-        uri = msg["uri"]
-        print("Authing callee: %s" % str(uri))
+    if msg["method"] == "INVITE" and "tag" not in msg["to"].params and msg["to"].uri.user == "callee":
         callee = Callee(callee_uri, callee_nameaddr.name)
         return WeakMethod(callee.leg.dialog.recv_request)
 
     def reject(msg):
-        response = {
-            "is_response": True,
-            "status": Status(400, "WTF"),
-            "from": msg["from"],
-            "to": msg["to"].tagged("ROTFLMAO"),
-            "call_id": msg["call_id"],
-            "cseq": msg["cseq"]
-        }
-        
-        transaction_manager.send_message(response, msg)
+        if msg:
+            response = make_simple_response(msg, Status(400, "WTF"), "ROTFLMAO")
+            transaction_manager.send_message(response, msg)
     
     return reject
 
 
 def reception(params):
-    print("Got message from transport.")
+    #print("Got message from transport.")
     #print("Req params: %s" % req_params)
     invite_params = transaction_manager.match_uninvited_response(params)
     if invite_params:
@@ -146,7 +137,7 @@ def reception(params):
 
 
 def to_transport(msg):
-    print("Sending message by transport.")
+    #print("Sending message by transport.")
     transport.send(msg)
 
 
@@ -158,8 +149,8 @@ def to_transaction(msg, related_msg, report):
 def testing():
     global caller
     print("Testing begins.")
-    
-    caller = Caller(caller_uri, caller_nameaddr.name, callee_uri)
+
+    caller = Caller(caller_uri, caller_nameaddr.name, wrong_uri)
     caller.dial()
 
 

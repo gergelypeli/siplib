@@ -97,9 +97,9 @@ class Nameaddr(collections.namedtuple("Nameaddr", "uri name params")):
         
         
     def tagged(self, tag):
-        if "tag" in self.params:
+        if self.params.get("tag") or not tag:
             return self
-        else:            
+        else:
             return Nameaddr(self.uri, self.name, dict(self.params, tag=tag))
 
 

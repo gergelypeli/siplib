@@ -113,6 +113,10 @@ class Leg(object):
                 self.pending_received_message = None
                 self.state = self.UP
                 return
+            elif not is_response and method == "NAK":  # virtual request
+                self.send_request(dict(method="BYE"))  # required behavior
+                self.state = self.DISCONNECTING_OUT
+                return
         elif self.state == self.UP:
             if not is_response and method == "BYE":
                 self.pending_received_message = msg

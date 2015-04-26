@@ -75,6 +75,33 @@ def make_virtual_response():
 def is_virtual_response(msg):
     return msg["status"].code == 0
     
+    
+def make_simple_response(request, status, tag=None):
+    return {
+        "is_response": True,
+        "method": request["method"],
+        "status": status,
+        "from": request["from"],
+        "to": request["to"].tagged(tag),
+        "call_id": request["call_id"],
+        "cseq": request["cseq"]
+    }
+
+
+def make_timeout_response(request):
+    return make_simple_response(request, Status(408, "Request Timeout"), "ROTFLMAO")
+
+
+def make_timeout_nak(response):
+    return {
+        "is_response": False,
+        "method": "NAK",
+        "from": response["from"],
+        "to": response["to"],
+        "call_id": response["call_id"],
+        "cseq": response["cseq"]
+    }
+    
 
 class Transaction(object):
     WAITING = "WAITING"
@@ -151,6 +178,9 @@ class Transaction(object):
 
 class PlainClientTransaction(Transaction):
     def transmit(self, msg):
+        if msg.get("via"):
+            raise Error("Don't mess with the request Via headers!")
+            
         msg["via"] = [ Via(self.manager.get_addr(), self.branch) ]
         super(PlainClientTransaction, self).transmit(msg)
 
@@ -172,7 +202,7 @@ class PlainClientTransaction(Transaction):
 
     def expired(self):
         if self.state == self.TRANSMITTING:
-            self.report(None)
+            self.report(make_timeout_response(self.outgoing_msg))
 
 
 class PlainServerTransaction(Transaction):
@@ -183,7 +213,7 @@ class PlainServerTransaction(Transaction):
         
         
     def transmit(self, msg):
-        if "via" in msg:
+        if msg.get("via"):
             raise Error("Don't mess with the response Via headers!")
             
         msg["via"] = self.incoming_via
@@ -311,13 +341,13 @@ class InviteClientTransaction(PlainClientTransaction):
 
     def expired(self):
         if self.state == self.TRANSMITTING:
-            self.report(None)  # nothing at all
+            self.report(make_timeout_response(self.outgoing_msg))  # nothing at all
         elif self.state == self.LINGERING:
             # expired only after a provisional response, or after sending an ACK
             got_final = max([ max(him.statuses) for him in self.bastards.values() ]) >= 200
 
             if not got_final:
-                self.report(None)
+                self.report(make_timeout_response(self.outgoing_msg))
         else:
             raise Error("Invite client expired while %s!" % self.state)
 
@@ -348,20 +378,14 @@ class InviteServerTransaction(PlainServerTransaction):
 
 
     def send_trying(self, request):
-        response = request.copy()
-        
-        response["is_response"] = True
-        response["status"] = Status(100, "Trying")
-        response["sdp"] = None  # TODO: clear some more
-        del response["via"]
-        
+        response = make_simple_response(request, Status(100, "Trying"))
         self.send(response)
         
 
     def expired(self):
         if self.state == self.TRANSMITTING:
             # Got no ACK, complain
-            self.report(None)
+            self.report(make_timeout_nak(self.outgoing_msg))
         elif self.state == self.LINGERING:
             pass
         else:
@@ -474,12 +498,8 @@ class TransactionManager(object):
                 # And it has to accept that the CANCEL request may have no to tag!
                 invite_tr.report(msg)
             else:
-                cancel_response = dict(msg,
-                    is_response=True,
-                    status=Status(481, "Transaction Does Not Exist"),
-                    to=msg["to"].tagged("ROTFLMAO")  # Fakking required
-                )
-                
+                status = Status(481, "Transaction Does Not Exist")
+                cancel_response = make_simple_response(msg, status, "ROTFLMAO")
                 tr.send(cancel_response)
                 
             return True
