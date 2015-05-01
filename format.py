@@ -2,7 +2,7 @@ from __future__ import print_function, unicode_literals, absolute_import
 
 import re
 import collections
-
+from sdp import Sdp
 
 META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "sdp" ]
 
@@ -175,7 +175,10 @@ def print_structured_message(params):
         elif field not in META_HEADER_FIELDS:
             p[field] = params[field]
 
-    body = params.get("sdp") or ""
+    body = ""
+    sdp = params.get("sdp")
+    if sdp:
+        body = sdp.print()
 
     return print_message(initial_line, p, body)
 
@@ -224,7 +227,11 @@ def parse_structured_message(msg):
         else:
             print("Warning, header field ignored: '%s'!" % field)
 
-    p["sdp"] = body
+    sdp = None
+    if body:
+        sdp = Sdp.parse(body)
+        
+    p["sdp"] = sdp
 
     return p
 

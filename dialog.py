@@ -69,6 +69,10 @@ class Dialog(object):
         self.call_id = None
         self.routes = []
         self.last_sent_cseq = 0
+
+        self.sdp_session_id = Origin.generate_session_id()
+        self.sdp_session_version = 0
+        self.sdp_session_address = self.dialog_manager.get_local_addr()[0]
         
         self.dialog_manager.add_dialog(self)
 
@@ -80,6 +84,22 @@ class Dialog(object):
         self.call_id = invite_params["call_id"]
         self.last_sent_cseq = invite_params["cseq"]
 
+
+    def make_sdp(self, params):
+        sdp = params.get("sdp")
+        if sdp:
+            #sdp.attributes["v"] = 0
+            #sdp.attributes["s"] = " "
+            #self.sdp_session_version += 1
+            #sdp.origin = Origin("-", self.sdp_session_id, self.sdp_session_version, "IN", "IP4", self.sdp_session_address)
+            params["sdp"] = sdp.fold()
+
+
+    def take_sdp(self, params):
+        sdp = params.get("sdp")
+        if sdp:
+            params["sdp"] = sdp.unfold()
+    
 
     def make_request(self, user_params, related_params=None):
         method = user_params["method"]
@@ -110,6 +130,7 @@ class Dialog(object):
             dialog_params["contact"] = self.my_contact
 
         safe_update(user_params, dialog_params)
+        self.make_sdp(user_params)
 
         return user_params  # Modified!
 
@@ -154,6 +175,8 @@ class Dialog(object):
         if peer_contact:
             self.peer_contact = peer_contact
 
+        self.take_sdp(params)
+
         return params
 
 
@@ -175,6 +198,7 @@ class Dialog(object):
             dialog_params["contact"] = self.my_contact
 
         safe_update(user_params, dialog_params)
+        self.make_sdp(user_params)
 
         return user_params  # Modified!
 
@@ -215,6 +239,8 @@ class Dialog(object):
         if peer_contact:
             self.peer_contact = peer_contact
 
+        self.take_sdp(params)
+
         return params
 
 
@@ -249,9 +275,14 @@ class Dialog(object):
         
 
 class DialogManager(object):
-    def __init__(self, transmission):
-        self.dialogs_by_id = WeakValueDictionary()
+    def __init__(self, local_addr, transmission):
+        self.local_addr = local_addr
         self.transmission = transmission
+        self.dialogs_by_id = WeakValueDictionary()
+        
+        
+    def get_local_addr(self):
+        return self.local_addr
 
 
     def add_dialog(self, dialog):

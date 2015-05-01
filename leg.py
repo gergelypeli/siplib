@@ -56,7 +56,7 @@ class Leg(object):
                     self.state = self.DIALING_IN_RINGING
                 return
             elif type == "answer":
-                self.send_response(dict(status=Status(200, "OK")))
+                self.send_response(dict(status=Status(200, "OK"), sdp=action.get("sdp")))
                 self.state = self.DIALING_IN_ANSWERED
                 # Must wait for the ACK
                 return
@@ -77,7 +77,7 @@ class Leg(object):
         if self.state == self.DOWN:
             if not is_response and method == "INVITE":
                 self.pending_received_message = msg
-                self.report(dict(type="dial"))
+                self.report(dict(type="dial", sdp=msg.get("sdp")))
                 self.state = self.DIALING_IN
                 return
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
@@ -101,7 +101,7 @@ class Leg(object):
                     # ACKed by tr
                     return
                 elif status.code >= 200:
-                    self.report(dict(type="answer"))
+                    self.report(dict(type="answer", sdp=msg.get("sdp")))
                     self.state = self.UP
                     self.send_request(dict(method="ACK"), msg)
                     return

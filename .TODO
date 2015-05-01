@@ -1,3 +1,1 @@
-A branch meg ne legyen a Transaction-ban, adjuk meg explicite az
-add_transaction-nek. Helyette legyen csak via, amit a Server automatica
-kitolt, a Client meg kapja a konstruktorban, akar generalva, akar klonozva.
+Az SDP sorok sorrendje fix! Az Sdp-ben legyen minden ilyen kulon kiemelve.

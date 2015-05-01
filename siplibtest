@@ -3,7 +3,7 @@
 from __future__ import print_function, unicode_literals
 from pprint import pprint
 import weakref
-from datetime import timedelta
+from datetime import timedelta, datetime
 import logging
 
 from async import Metapoll, WeakMethod
@@ -12,6 +12,7 @@ from format import Addr, Uri, Nameaddr, Status, Via, print_structured_message, p
 from transactions import TransactionManager, make_virtual_response, make_simple_response
 from dialog import Dialog, DialogManager
 from leg import Leg, create_uninvited_leg
+from sdp import Sdp, Origin, Connection, Timing, Channel, RtpFormat
 
 local_addr = Addr("localhost", 5060)
 
@@ -22,6 +23,21 @@ callee_uri = Uri(local_addr, "callee")
 callee_nameaddr = Nameaddr(callee_uri, "Callee")
 
 wrong_uri = Uri(local_addr, "wrong")
+
+caller_sdp = Sdp.parse("""
+v=0
+o=jdoe 2890844526 2890842807 IN IP4 10.47.16.5
+s=SDP Seminar
+i=A Seminar on the session description protocol
+u=http://www.example.com/seminars/sdp.pdf
+e=j.doe@example.com (Jane Doe)
+c=IN IP4 224.2.17.12
+t=2873397496 2873404696
+a=recvonly
+m=audio 49170 RTP/AVP 0
+m=video 51372 RTP/AVP 99
+a=rtpmap:99 h263-1998/90000
+""")
 
 
 class Callee(object):
@@ -35,6 +51,8 @@ class Callee(object):
 
     def recved(self, action):
         if action["type"] == "dial":
+            self.offer = action.get("sdp")
+            print("Got offer:\n%s" % repr(self.offer))
             self.sleep(1, self.ringing)
         elif action["type"] == "hangup":
             print("The caller hung up.")
@@ -46,12 +64,17 @@ class Callee(object):
 
 
     def answering(self):
-        self.leg.do(dict(type="answer"))
+        answer = self.make_answer(self.offer)
+        self.leg.do(dict(type="answer", sdp=answer))  # TODO: rename to accept?
         self.sleep(1, self.hanging)
         
         
     def hanging(self):
         self.leg.do(dict(type="hangup"))
+
+
+    def make_answer(self, offer):
+        return offer
 
 
 class Caller(object):
@@ -64,13 +87,13 @@ class Caller(object):
 
 
     def dial(self):
-        self.leg.do(dict(type="dial"))
+        self.leg.do(dict(type="dial", sdp=caller_sdp))
         #self.sleep(3, self.hanging)
 
 
     def recved(self, action):
         if action["type"] == "answer":
-            print("Answered.")
+            print("Answered with SDP:\n%s" % repr(action.get("sdp")))
             #self.sleep(1, self.hanging)
 
             
@@ -150,19 +173,21 @@ def testing():
     global caller
     print("Testing begins.")
 
-    caller = Caller(caller_uri, caller_nameaddr.name, wrong_uri)
+    caller = Caller(caller_uri, caller_nameaddr.name, callee_uri)
     caller.dial()
 
 
 logging.basicConfig(level=logging.DEBUG)
 metapoll = Metapoll()
 transport = Transport(reception)
-transaction_manager = TransactionManager(to_transport, local_addr)
-dialog_manager = DialogManager(to_transaction)
+transaction_manager = TransactionManager(local_addr, to_transport)
+dialog_manager = DialogManager(local_addr, to_transaction)
 
 metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(transaction_manager.maintenance), repeat=True)
 metapoll.register_timeout(timedelta(seconds=1), testing)
 
 while True:
-    #print("Polling.")
-    metapoll.do_poll()
+    try:
+        metapoll.do_poll()
+    except KeyboardInterrupt:
+        break

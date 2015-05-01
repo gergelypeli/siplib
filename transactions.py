@@ -181,7 +181,7 @@ class PlainClientTransaction(Transaction):
         if msg.get("via"):
             raise Error("Don't mess with the request Via headers!")
             
-        msg["via"] = [ Via(self.manager.get_addr(), self.branch) ]
+        msg["via"] = [ Via(self.manager.get_local_addr(), self.branch) ]
         super(PlainClientTransaction, self).transmit(msg)
 
 
@@ -413,9 +413,9 @@ class AckServerTransaction(PlainServerTransaction):
 
 
 class TransactionManager(object):
-    def __init__(self, transmission, addr):
+    def __init__(self, local_addr, transmission):
+        self.local_addr = local_addr
         self.transmission = transmission
-        self.addr = addr
         self.client_transactions = {}  # by (branch, method)
         self.server_transactions = {}  # by (branch, method)
 
@@ -424,8 +424,8 @@ class TransactionManager(object):
         self.transmission(msg)
         
         
-    def get_addr(self):
-        return self.addr
+    def get_local_addr(self):
+        return self.local_addr
 
 
     def maintain_transactions(self, now, transactions):
