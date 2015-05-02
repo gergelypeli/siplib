@@ -7,6 +7,7 @@ from weakref import proxy as Weak, WeakValueDictionary
 
 import format
 from format import Addr, Uri, Nameaddr, Via, Status
+from sdp import generate_session_id, Origin
 from async import WeakMethod
 
 
@@ -92,13 +93,13 @@ class Dialog(object):
             #sdp.attributes["s"] = " "
             #self.sdp_session_version += 1
             #sdp.origin = Origin("-", self.sdp_session_id, self.sdp_session_version, "IN", "IP4", self.sdp_session_address)
-            params["sdp"] = sdp.fold()
+            sdp.fold()
 
 
     def take_sdp(self, params):
         sdp = params.get("sdp")
         if sdp:
-            params["sdp"] = sdp.unfold()
+            sdp.unfold()
     
 
     def make_request(self, user_params, related_params=None):
