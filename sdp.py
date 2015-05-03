@@ -50,11 +50,11 @@ class Direction(collections.namedtuple("Direction", "send recv")):
 
 class Timing(collections.namedtuple("Timing", "start stop")):
     NTP_EPOCH = datetime.datetime(1900, 1, 1)
-    
+
     def print(self):
         return "%d %d" % ((self.start - self.NTP_EPOCH).total_seconds(), (self.stop - self.NTP_EPOCH).total_seconds())
-        
-        
+
+
     @classmethod
     def parse(cls, s):
         start, stop = s.split()
@@ -74,21 +74,21 @@ class Bandwidth(collections.namedtuple("Bandwidth", "type value")):
         return cls(type, int(value))
     
 
-class Connection(collections.namedtuple("Connection", "net_type addr_type addr")):
+class Connection(collections.namedtuple("Connection", "net_type addr_type host")):
     def print(self):
-        return "%s %s %s" % (self.net_type, self.addr_type, self.addr)
+        return "%s %s %s" % (self.net_type, self.addr_type, self.host)
         
         
     @classmethod
     def parse(cls, s):
-        net_type, addr_type, addr = s.split()
-        if net_type != "IN" or addr_type != "IP4" or not re.search("^[0-9.]+$", addr):
+        net_type, addr_type, host = s.split()
+        if net_type != "IN" or addr_type != "IP4" or not re.search("^[0-9.]+$", host):
             raise Error("Invalid SDP Connection: %r" % s)
             
-        return cls(net_type, addr_type, addr)
+        return cls(net_type, addr_type, host)
 
 
-class Origin(collections.namedtuple("Origin", "username session_id session_version net_type addr_type addr")):
+class Origin(collections.namedtuple("Origin", "username session_id session_version net_type addr_type host")):
     last_session_id = 0
     
     @classmethod
@@ -103,11 +103,11 @@ class Origin(collections.namedtuple("Origin", "username session_id session_versi
         
     @classmethod
     def parse(cls, s):
-        username, session_id, session_version, net_type, addr_type, addr = s.split()
-        if net_type != "IN" or addr_type != "IP4" or not re.search("^[0-9.]+$", addr):
+        username, session_id, session_version, net_type, addr_type, host = s.split()
+        if net_type != "IN" or addr_type != "IP4" or not re.search(r"^[\w.]+$", host):
             raise Error("Invalid SDP Origin: %r" % s)
             
-        return cls(username, int(session_id), int(session_version), net_type, addr_type, addr)
+        return cls(username, int(session_id), int(session_version), net_type, addr_type, host)
 
 
 class RtpFormat(object):
@@ -153,31 +153,30 @@ class RtpFormat(object):
 
 
 class Channel(object):
-    def __init__(self):
+    def __init__(self, session_host, session_direction):
         self.type = None
-        self.port = None
+        self.addr = (session_host, None)
         self.proto = None
         self.formats = []
-        self.connection = None
-        self.direction = None
+        self.direction = session_direction
         self.attributes = []
         
         
     def __repr__(self):
-        return "Channel(type=%r, port=%r, proto=%r, formats=%r, direction=%r, attributes=%r)" % (
-            self.type, self.port, self.proto, self.formats, self.direction, self.attributes
+        return "Channel(type=%r, addr=%r, proto=%r, formats=%r, direction=%r, attributes=%r)" % (
+            self.type, self.addr, self.proto, self.formats, self.direction, self.attributes
         )
         
         
-    def print(self):
+    def print(self, session_host, session_direction):
         payload_types = [ str(f.payload_type) for f in self.formats ]
-        media = "%s %d %s %s" % (self.type, self.port, self.proto, " ".join(payload_types))
+        media = "%s %d %s %s" % (self.type, self.addr[1], self.proto, " ".join(payload_types))
         result = [ ("m", media) ]
 
-        if self.connection:
-            result.append(("c", self.connection.print()))
+        if self.addr[0] != session_host:
+            result.append(("c", Connection("IN", "IP4", self.addr[0]).print()))
         
-        if self.direction:
+        if self.direction != session_direction:
             result.append(("a", self.direction.print()))
         
         for f in self.formats:
@@ -202,11 +201,11 @@ class Channel(object):
                 raise Error("Media with not RTP protocol: %r" % s)
             
             self.type = type
-            self.port = int(port)
+            self.addr = (self.addr[0], int(port))
             self.proto = proto
             self.formats = [ RtpFormat(int(pt)) for pt in formats.split() ]
         elif key == "c":
-            self.connection = Connection.parse(value)
+            self.addr = (Connection.parse(value).host, self.addr[1])
         elif key == "a":
             x = value.split(":", 1) if ":" in value else (value, None)
 
@@ -233,77 +232,53 @@ class Channel(object):
 
 
 class Sdp(object):
-    def __init__(self, origin, connection, bandwidth, timing, direction, attributes, channels):
+    def __init__(self, origin, bandwidth, attributes, channels):
         # v ignored
         self.origin = origin
         # s, i, u, e, p ignored
-        self.connection = connection
+        #self.connection = connection
         self.bandwidth = bandwidth
-        self.timing = timing
-        # r, z, k ignored
-        self.direction = direction
+        # t, r, z, k ignored
+        #self.direction = direction
         self.attributes = attributes
         self.channels = channels
 
 
     def __repr__(self):
-        return "Sdp(origin=%r, connection=%r, bandwidth=%r, timing=%r, direction=%r, attributes=%r, channels=%r)" % (
-            self.origin, self.connection, self.bandwidth, self.timing, self.direction, self.attributes, self.channels
+        return "Sdp(origin=%r, bandwidth=%r, attributes=%r, channels=%r)" % (
+            self.origin, self.bandwidth, self.attributes, self.channels
         )
 
 
-    def unfold(self):
-        for c in self.channels:
-            if not c.direction:
-                c.direction = self.direction
-            if not c.connection:
-                c.connection = self.connection
-                
-        self.direction = None
-        self.connection = None
-        
-        
-    def fold(self):
-        if not self.direction:
-            directions = set(c.direction for c in self.channels)
-            if len(directions) == 1:
-                self.direction = directions.pop()
-                
-                for c in self.channels:
-                    c.direction = None
-
-        if not self.connection:
-            connections = set(c.connection for c in self.channels)
-            if len(connections) == 1:
-                self.connection = connections.pop()
-                
-                for c in self.channels:
-                    c.connection = None
-        
-    
     def print(self):
+        directions = set(c.direction for c in self.channels)
+        session_direction = directions.pop() if len(directions) == 1 else None
+
+        hosts = set(c.addr[0] for c in self.channels)
+        session_host = hosts.pop() if len(hosts) == 1 else None
+
         lines = [
             "v=%s" % 0,
             "o=%s" % self.origin.print(),
             "s=%s" % " "
         ]
 
-        if self.connection:
-            lines.append("c=%s" % self.connection.print())
+        if session_host:
+            lines.append("c=%s" % Connection("IN", "IP4", session_host).print())
             
         if self.bandwidth:
             lines.append("b=%s" % self.bandwidth.print())
             
-        lines.append("t=%s" % self.timing.print())
+        lines.append("t=%s" % Timing(Timing.NTP_EPOCH, Timing.NTP_EPOCH).print())
             
-        if self.direction:
-            lines.append("a=%s" % self.direction.print())
+        if session_direction:
+            lines.append("a=%s" % session_direction.print())
 
         for k, v in self.attributes:
             lines.append("a=%s" % ("%s:%s" % (k, v) if v is not None else k))
             
         for c in self.channels:
-            for k, v in c.print():
+            for k, v in c.print(session_host, session_direction):
                 lines.append("%s=%s" % (k, v))
                 
         return "\n".join(lines) + "\n"
@@ -311,7 +286,7 @@ class Sdp(object):
 
     @classmethod
     def parse(cls, s):
-        origin, connection, bandwidth, timing, direction = [ None ] * 5
+        origin, session_host, bandwidth, session_direction = [ None ] * 4
         channels = []
         attributes = []  # one key may appear multiple times, also keep order just in case
         current_channel = None
@@ -326,7 +301,7 @@ class Sdp(object):
                 raise Error("Invalid SDP line: %r" % line)
         
             if key == "m":
-                current_channel = Channel()
+                current_channel = Channel(session_host, session_direction)
                 channels.append(current_channel)
         
             if current_channel:
@@ -336,19 +311,17 @@ class Sdp(object):
             if key == "o":
                 origin = Origin.parse(value)
             elif key == "c":
-                connection = Connection.parse(value)
+                session_host = Connection.parse(value).host
             elif key == "b":
                 bandwidth = Bandwidth.parse(value)
-            elif key == "t":
-                timing = Timing.parse(value)
             elif key == "a":
                 x = value.split(":", 1) if ":" in value else (value, None)
 
                 if Direction.is_valid(x[0]):
-                    direction = Direction.parse(x[0])
+                    session_direction = Direction.parse(x[0])
                 else:
                     attributes.append(x)
             else:
                 pass
     
-        return cls(origin, connection, bandwidth, timing, direction, attributes, channels)
+        return cls(origin, bandwidth, attributes, channels)

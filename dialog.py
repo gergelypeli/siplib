@@ -71,9 +71,10 @@ class Dialog(object):
         self.routes = []
         self.last_sent_cseq = 0
 
-        self.sdp_session_id = Origin.generate_session_id()
-        self.sdp_session_version = 0
-        self.sdp_session_address = self.dialog_manager.get_local_addr()[0]
+        self.local_sdp_session_id = Origin.generate_session_id()
+        self.local_sdp_session_version = 0
+        self.local_sdp_session_host = self.dialog_manager.get_local_addr()[0]
+        self.remote_sdp_session_version = None
         
         self.dialog_manager.add_dialog(self)
 
@@ -89,17 +90,25 @@ class Dialog(object):
     def make_sdp(self, params):
         sdp = params.get("sdp")
         if sdp:
-            #sdp.attributes["v"] = 0
-            #sdp.attributes["s"] = " "
-            #self.sdp_session_version += 1
-            #sdp.origin = Origin("-", self.sdp_session_id, self.sdp_session_version, "IN", "IP4", self.sdp_session_address)
-            sdp.fold()
+            self.local_sdp_session_version += 1
+            sdp.origin = Origin(
+                "-",
+                self.local_sdp_session_id,
+                self.local_sdp_session_version,
+                "IN",
+                "IP4",
+                self.local_sdp_session_host
+            )
 
 
     def take_sdp(self, params):
         sdp = params.get("sdp")
         if sdp:
-            sdp.unfold()
+            if sdp.origin.session_version == self.remote_sdp_session_version:
+                params["sdp"] = None
+                return
+                
+            self.remote_sdp_session_version = sdp.origin.session_version
     
 
     def make_request(self, user_params, related_params=None):

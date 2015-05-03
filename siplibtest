@@ -12,7 +12,7 @@ from format import Addr, Uri, Nameaddr, Status, Via, print_structured_message, p
 from transactions import TransactionManager, make_virtual_response, make_simple_response
 from dialog import Dialog, DialogManager
 from leg import Leg, create_uninvited_leg
-from sdp import Sdp, Origin, Connection, Timing, Channel, RtpFormat
+from sdp import Sdp
 
 local_addr = Addr("localhost", 5060)
 
@@ -23,6 +23,9 @@ callee_uri = Uri(local_addr, "callee")
 callee_nameaddr = Nameaddr(callee_uri, "Callee")
 
 wrong_uri = Uri(local_addr, "wrong")
+
+caller_audio_addr = ("localhost", 10000)
+caller_video_addr = ("localhost", 10001)
 
 caller_sdp = Sdp.parse("""
 v=0
