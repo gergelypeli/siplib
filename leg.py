@@ -7,6 +7,20 @@ from dialog import Dialog
 class Error(Exception): pass
 
 class Leg(object):
+    def __init__(self):
+        self.report = None
+        self.ctx = {}
+    
+    
+    def set_report(self, report):
+        self.report = report
+        
+    
+    def do(self, action):
+        raise NotImplementedError()
+
+
+class SipLeg(Leg):
     DOWN = "DOWN"
     DIALING_IN = "DIALING_IN"
     DIALING_OUT = "DIALING_OUT"
@@ -15,17 +29,19 @@ class Leg(object):
     DIALING_IN_ANSWERED = "DIALING_IN_ANSWERED"
     UP = "UP"
     DISCONNECTING_OUT = "DISCONNECTING_OUT"
-
-    def __init__(self, report, dialog_manager, local_uri, local_name, remote_uri):
-        self.report = report
+    
+    def __init__(self, dialog):
+        super(SipLeg, self).__init__()
         self.state = self.DOWN
-        self.dialog = Dialog(dialog_manager, WeakMethod(self.recved), local_uri, local_name, remote_uri)
+        self.dialog = dialog
         self.pending_received_message = None  # TODO: rethink these!
         self.pending_sent_message = None
         
-        
+        self.dialog.set_report(WeakMethod(self.process))
+
+
     def send_request(self, request, related=None):
-        self.dialog.send_request(request, related, WeakMethod(self.recved))
+        self.dialog.send_request(request, related, WeakMethod(self.process))
 
 
     def send_response(self, response):
@@ -33,6 +49,13 @@ class Leg(object):
             self.dialog.send_response(response, self.pending_received_message)
         else:
             raise Error("Respond to what?")
+
+
+    def make_ctx(self, msg):
+        return {
+            "from": msg["from"],
+            "to": msg["to"]
+        }
 
         
     def do(self, action):
@@ -69,15 +92,17 @@ class Leg(object):
         raise Error("Weirdness!")
 
 
-    def recved(self, msg):
+    def process(self, msg):
         is_response = msg["is_response"]
         method = msg["method"]
         status = msg.get("status")
         
         if self.state == self.DOWN:
             if not is_response and method == "INVITE":
+                self.ctx.update(self.make_ctx(msg))
+                # TODO: create leg context!
                 self.pending_received_message = msg
-                self.report(dict(type="dial", sdp=msg.get("sdp")))
+                self.report(dict(type="dial", ctx=self.ctx, sdp=msg.get("sdp")))
                 self.state = self.DIALING_IN
                 return
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
@@ -143,6 +168,6 @@ class Leg(object):
 
 def create_uninvited_leg(dialog_manager, invite_params):
     # TODO: real UninvitedLeg class
-    leg = Leg(None, dialog_manager, None, None, None)
-    leg.dialog.send_request(dict(method="UNINVITE"), invite_params, leg.recved)  # strong ref!
+    leg = Leg(dialog_manager, None, None, None)
+    leg.dialog.send_request(dict(method="UNINVITE"), invite_params, leg.process)  # strong ref!
     leg.state = leg.DIALING_OUT

@@ -54,9 +54,9 @@ def identify_incoming_request(params):
     
 
 class Dialog(object):
-    def __init__(self, dialog_manager, report_request, local_uri, local_name, remote_uri=None, proxy_addr=None):
+    def __init__(self, dialog_manager, local_uri, local_name, remote_uri=None, proxy_addr=None):
         self.dialog_manager = dialog_manager
-        self.report_request = report_request
+        self.report_request = None
     
         # Things in the From/To fields
         self.local_nameaddr = Nameaddr(local_uri, local_name, dict(tag=generate_tag()))
@@ -78,6 +78,10 @@ class Dialog(object):
         
         self.dialog_manager.add_dialog(self)
 
+
+    def set_report(self, report):
+        self.report_request = report
+        
 
     def uninvite(self, invite_params):
         self.local_nameaddr = invite_params["from"]
@@ -307,7 +311,7 @@ class DialogManager(object):
         print("Removed dialog %s" % (did,))
         
 
-    def handle_incoming_request(self, params):
+    def match_incoming_request(self, params):
         call_id, local_tag, remote_tag = did = identify_incoming_request(params)
         dialog = self.dialogs_by_id.get(did)
         
@@ -315,19 +319,14 @@ class DialogManager(object):
             print("Found dialog: %s" % (did,))
             return WeakMethod(dialog.recv_request)
 
-        print("No dialog %s" % (did,))
+        #print("No dialog %s" % (did,))
 
         if local_tag:
             print("In-dialog request has no dialog!")
             return None
             
         return None
-
-
+        
+        
     def transmit(self, params, related_params=None, report=None):
         self.transmission(params, related_params, report)
-
-
-    def create_dialog(self, local_uri, local_name, remote_uri=None, proxy_addr=None):
-        dialog = Dialog(Weak(self), local_uri, local_name, remote_uri, proxy_addr)
-        self.add_dialog(dialog)

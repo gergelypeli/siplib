@@ -11,16 +11,19 @@ from async import Metapoll, WeakMethod
 from format import Addr, Uri, Nameaddr, Status, Via, print_structured_message, parse_structured_message
 from transactions import TransactionManager, make_virtual_response, make_simple_response
 from dialog import Dialog, DialogManager
-from leg import Leg, create_uninvited_leg
+from leg import Leg, SipLeg, create_uninvited_leg
+from call import Call
 from sdp import Sdp
 
 local_addr = Addr("localhost", 5060)
 
 caller_uri = Uri(local_addr, "caller")
-caller_nameaddr = Nameaddr(caller_uri, "Caller")
+caller_name = "Caller"
+caller_nameaddr = Nameaddr(caller_uri, caller_name)
 
 callee_uri = Uri(local_addr, "callee")
-callee_nameaddr = Nameaddr(callee_uri, "Callee")
+callee_name = "Callee"
+callee_nameaddr = Nameaddr(callee_uri, callee_name)
 
 wrong_uri = Uri(local_addr, "wrong")
 
@@ -43,16 +46,12 @@ a=rtpmap:99 h263-1998/90000
 """)
 
 
-class Callee(object):
-    def __init__(self, local_uri, local_name):
-        self.leg = Leg(WeakMethod(self.recved), weakref.proxy(dialog_manager), local_uri, local_name, None)
-        
-        
+class CalleeLeg(Leg):
     def sleep(self, secs, method):
         metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
 
 
-    def recved(self, action):
+    def do(self, action):
         if action["type"] == "dial":
             self.offer = action.get("sdp")
             print("Got offer:\n%s" % repr(self.offer))
@@ -62,39 +61,37 @@ class Callee(object):
 
         
     def ringing(self):
-        self.leg.do(dict(type="ring"))
+        self.report(dict(type="ring"))
         self.sleep(1, self.answering)
 
 
     def answering(self):
         answer = self.make_answer(self.offer)
-        self.leg.do(dict(type="answer", sdp=answer))  # TODO: rename to accept?
+        self.report(dict(type="answer", sdp=answer))  # TODO: rename to accept?
         self.sleep(1, self.hanging)
         
         
     def hanging(self):
-        self.leg.do(dict(type="hangup"))
+        self.report(dict(type="hangup"))
 
 
     def make_answer(self, offer):
         return offer
 
 
-class Caller(object):
-    def __init__(self, local_uri, local_name, remote_uri):
-        self.leg = Leg(WeakMethod(self.recved), weakref.proxy(dialog_manager), local_uri, local_name, remote_uri)
-
-
+class CallerLeg(Leg):
     def sleep(self, secs, method):
         metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
 
 
     def dial(self):
-        self.leg.do(dict(type="dial", sdp=caller_sdp))
+        self.ctx["from"] = Nameaddr(caller_uri, caller_name)
+        self.ctx["to"] = Nameaddr(callee_uri)
+        self.report(dict(type="dial", ctx=self.ctx, sdp=caller_sdp))
         #self.sleep(3, self.hanging)
 
 
-    def recved(self, action):
+    def do(self, action):
         if action["type"] == "answer":
             print("Answered with SDP:\n%s" % repr(action.get("sdp")))
             #self.sleep(1, self.hanging)
@@ -116,50 +113,70 @@ class Transport(object):
         #print("Transport sending:")
         print("\n" + "\n".join("  %s" % line for line in sip.split("\n")))
         
-        metapoll.register_timeout(timedelta(), WeakMethod(self.recved, sip))
-        #self.recved(sip)
+        metapoll.register_timeout(timedelta(), WeakMethod(self.process, sip))
+        #self.process(sip)
 
-    def recved(self, sip):
+    def process(self, sip):
         #print("Transport receiving:")
         #print(s)
         self.reception(parse_structured_message(sip))
 
 
-def welcome(msg):
-    global callee
+class FirstCall(Call):
+    def route(self, ctx):
+        if ctx["to"].uri.user == "callee":
+            outgoing_dialog = Dialog(dialog_manager, ctx["from"].uri, ctx["from"].name, ctx["to"].uri)
+            outgoing_leg = SipLeg(outgoing_dialog)
+            return outgoing_leg
     
-    if msg["method"] == "INVITE" and "tag" not in msg["to"].params and msg["to"].uri.user == "callee":
-        callee = Callee(callee_uri, callee_nameaddr.name)
-        return WeakMethod(callee.leg.dialog.recv_request)
+        return None
+    
 
-    def reject(msg):
-        if msg:
-            response = make_simple_response(msg, Status(400, "WTF"), "ROTFLMAO")
-            transaction_manager.send_message(response, msg)
+class SecondCall(Call):
+    def route(self, ctx):
+        if ctx["to"].uri.user == "callee":
+            return CalleeLeg()  # Callee display name going back?
     
-    return reject
+        return None
+    
+
+def reject_request(msg):
+    if msg:
+        response = make_simple_response(msg, Status(400, "WTF"), "ROTFLMAO")
+        transaction_manager.send_message(response, msg)
+
+
+def accept_invite(local_uri):
+    global call2
+    incoming_dialog = Dialog(dialog_manager, local_uri, None, None)
+    incoming_leg = SipLeg(incoming_dialog)
+    call2 = SecondCall()
+    call2.add_leg(0, incoming_leg)
+    return WeakMethod(incoming_dialog.recv_request)
 
 
 def reception(params):
     #print("Got message from transport.")
     #print("Req params: %s" % req_params)
-    invite_params = transaction_manager.match_uninvited_response(params)
-    if invite_params:
-        create_uninvited_leg(invite_params)
+    uninvite_params = transaction_manager.match_uninvited_response(params)
+    if uninvite_params:
+        create_uninvited_leg(uninvite_params)
     
     matched = transaction_manager.match_incoming_message(params)
+    if matched:
+        return
     
-    if not matched:
-        report = dialog_manager.handle_incoming_request(params)
+    report = dialog_manager.match_incoming_request(params)
+    
+    if not report:
+        if params["method"] == "INVITE" and "tag" not in params["to"].params:
+            local_uri = params["to"].uri
+            report = accept_invite(local_uri)
+    
+    if not report:
+        report = reject_request
         
-        if not report:
-            report = welcome(params)
-        
-        if not report:
-            print("Ignoring evil message!")
-            return
-            
-        transaction_manager.create_incoming_request(params, report)
+    transaction_manager.create_incoming_request(params, report)
 
 
 def to_transport(msg):
@@ -173,11 +190,16 @@ def to_transaction(msg, related_msg, report):
 
 
 def testing():
-    global caller
+    global call1
     print("Testing begins.")
 
-    caller = Caller(caller_uri, caller_nameaddr.name, callee_uri)
-    caller.dial()
+    incoming_leg = CallerLeg()
+    outgoing_dialog = Dialog(dialog_manager, caller_uri, caller_name, callee_uri)
+    outgoing_leg = SipLeg(outgoing_dialog)
+    call1 = Call()
+    call1.add_leg(0, incoming_leg)
+    call1.add_leg(1, outgoing_leg)
+    incoming_leg.dial()
 
 
 logging.basicConfig(level=logging.DEBUG)

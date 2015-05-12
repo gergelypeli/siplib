@@ -168,7 +168,7 @@ class Transaction(object):
         pass
 
 
-    def recved(self, msg):
+    def process(self, msg):
         pass
 
 
@@ -190,7 +190,7 @@ class PlainClientTransaction(Transaction):
         self.transmit(request)
 
 
-    def recved(self, response):
+    def process(self, response):
         if self.state == self.TRANSMITTING:
             self.report(response)
             self.change_state(self.LINGERING)
@@ -220,7 +220,7 @@ class PlainServerTransaction(Transaction):
         super(PlainServerTransaction, self).transmit(msg)
 
 
-    def recved(self, request):
+    def process(self, request):
         if self.state == self.WAITING:
             if not self.incoming_via:
                 self.incoming_via = request["via"]
@@ -242,7 +242,7 @@ class AckClientTransaction(PlainClientTransaction):
         self.transmit(request)
 
 
-    def recved(self, response):
+    def process(self, response):
         raise Error("WAT?")
 
 
@@ -290,7 +290,7 @@ class InviteClientTransaction(PlainClientTransaction):
         ack.send(msg)
 
 
-    def recved(self, response):
+    def process(self, response):
         remote_tag = self.rt(response)
         him = self.bastards.get(remote_tag)
         
@@ -353,7 +353,7 @@ class InviteClientTransaction(PlainClientTransaction):
 
 
 class InviteServerTransaction(PlainServerTransaction):
-    def recved(self, request):
+    def process(self, request):
         if self.state == self.WAITING:
             if not self.incoming_via:
                 self.incoming_via = request["via"]
@@ -370,7 +370,7 @@ class InviteServerTransaction(PlainServerTransaction):
     def send(self, response):
         if is_virtual_response(response):
             # A virtual response means we got ACKed, stop retransmissions
-            self.recved_ack()
+            self.process_ack()
         else:
             new_state = self.PROVISIONING if response["status"].code < 200 else self.TRANSMITTING
             self.change_state(new_state)
@@ -392,7 +392,7 @@ class InviteServerTransaction(PlainServerTransaction):
             raise Error("Invite server expired while %s!" % self.state)
 
 
-    def recved_ack(self):
+    def process_ack(self):
         print("InviteServer ACKed!")
         
         if self.state == self.TRANSMITTING:
@@ -473,7 +473,7 @@ class TransactionManager(object):
             tr = self.client_transactions.get((branch, method))
             
             if tr:
-                tr.recved(msg)
+                tr.process(msg)
             else:
                 print("Incoming response to unknown request, ignoring!")
                 
@@ -481,14 +481,14 @@ class TransactionManager(object):
 
         tr = self.server_transactions.get((branch, method))
         if tr:
-            tr.recved(msg)
+            tr.process(msg)
             return True
             
         if method == "CANCEL":
             # CANCEL-s may happen outside of any dialogs, so process them here
             tr = PlainServerTransaction(Weak(self), lambda msg: None, branch)
             self.add_transaction(tr, "CANCEL")
-            tr.recved(msg)
+            tr.process(msg)
             
             # FIXME: not necessarily INVITE
             invite_tr = self.server_transactions.get((branch, "INVITE"))
@@ -529,7 +529,7 @@ class TransactionManager(object):
             tr = PlainServerTransaction(Weak(self), report, branch)
 
         self.add_transaction(tr, method)
-        tr.recved(msg)
+        tr.process(msg)
         
 
     def send_message(self, msg, related_msg=None, report=None):
