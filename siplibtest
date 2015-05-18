@@ -109,23 +109,31 @@ class Transport(object):
         return local_addr
 
     def send(self, msg):
+        hop_addr = msg["hop_addr"]
         sip = print_structured_message(msg)
-        #print("Transport sending:")
+        print("Transport sending to %s:" % (hop_addr,))
         print("\n" + "\n".join("  %s" % line for line in sip.split("\n")))
         
-        metapoll.register_timeout(timedelta(), WeakMethod(self.process, sip))
+        metapoll.register_timeout(timedelta(), WeakMethod(self.process, sip, hop_addr))
         #self.process(sip)
 
-    def process(self, sip):
+    def process(self, sip, hop_addr):
         #print("Transport receiving:")
         #print(s)
-        self.reception(parse_structured_message(sip))
+        msg = parse_structured_message(sip)
+        msg["hop_addr"] = hop_addr  # TODO: 2 transports!
+        self.reception(msg)
 
 
 class FirstCall(Call):
     def route(self, ctx):
+        print("Routing: %s" % ctx)
+        
         if ctx["to"].uri.user == "callee":
-            outgoing_dialog = Dialog(dialog_manager, ctx["from"].uri, ctx["from"].name, ctx["to"].uri)
+            outgoing_dialog = Dialog(dialog_manager)
+            outgoing_dialog.setup_outgoing(
+                ctx["from"].uri, ctx["from"].name, ctx["to"].uri, ctx.get("route"), ctx.get("hop_addr")
+            )
             outgoing_leg = SipLeg(outgoing_dialog)
             return outgoing_leg
     
@@ -146,9 +154,10 @@ def reject_request(msg):
         transaction_manager.send_message(response, msg)
 
 
-def accept_invite(local_uri):
+def accept_invite(params):
     global call2
-    incoming_dialog = Dialog(dialog_manager, local_uri, None, None)
+    incoming_dialog = Dialog(dialog_manager)
+    incoming_dialog.setup_incoming(params)  # TODO: set display name from context
     incoming_leg = SipLeg(incoming_dialog)
     call2 = SecondCall()
     call2.add_leg(0, incoming_leg)
@@ -170,8 +179,7 @@ def reception(params):
     
     if not report:
         if params["method"] == "INVITE" and "tag" not in params["to"].params:
-            local_uri = params["to"].uri
-            report = accept_invite(local_uri)
+            report = accept_invite(params)
     
     if not report:
         report = reject_request
@@ -194,11 +202,12 @@ def testing():
     print("Testing begins.")
 
     incoming_leg = CallerLeg()
-    outgoing_dialog = Dialog(dialog_manager, caller_uri, caller_name, callee_uri)
-    outgoing_leg = SipLeg(outgoing_dialog)
-    call1 = Call()
+    #outgoing_dialog = Dialog(dialog_manager)
+    #outgoing_dialog.setup_outgoing(caller_uri, caller_name, callee_uri)
+    #outgoing_leg = SipLeg(outgoing_dialog)
+    call1 = FirstCall()
     call1.add_leg(0, incoming_leg)
-    call1.add_leg(1, outgoing_leg)
+    #call1.add_leg(1, outgoing_leg)
     incoming_leg.dial()
 
 

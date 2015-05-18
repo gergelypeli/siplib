@@ -4,7 +4,7 @@ import re
 import collections
 from sdp import Sdp
 
-META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "sdp" ]
+META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "sdp", "hop_addr" ]
 
 Addr = collections.namedtuple("Addr", ["host", "port"])
 Status = collections.namedtuple("Status", ["code", "reason"])

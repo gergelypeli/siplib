@@ -54,33 +54,71 @@ def identify_incoming_request(params):
     
 
 class Dialog(object):
-    def __init__(self, dialog_manager, local_uri, local_name, remote_uri=None, proxy_addr=None):
+    def __init__(self, dialog_manager):
         self.dialog_manager = dialog_manager
         self.report_request = None
     
         # Things in the From/To fields
-        self.local_nameaddr = Nameaddr(local_uri, local_name, dict(tag=generate_tag()))
-        self.remote_nameaddr = Nameaddr(remote_uri)
+        self.local_nameaddr = None
+        self.remote_nameaddr = None
 
-        self.my_contact = Nameaddr(local_uri)
+        self.my_contact = None  # may depend on stuff
         # The peer's contact address, received in Contact, sent in RURI
-        self.peer_contact = Nameaddr(remote_uri)
-        self.proxy_addr = proxy_addr
+        self.peer_contact = None
+
+        self.route = []
+        self.hop_addr = None
 
         self.call_id = None
-        self.routes = []
         self.last_sent_cseq = 0
 
         self.local_sdp_session_id = Origin.generate_session_id()
         self.local_sdp_session_version = 0
         self.local_sdp_session_host = self.dialog_manager.get_local_addr()[0]
         self.remote_sdp_session_version = None
-        
-        self.dialog_manager.add_dialog(self)
 
 
     def set_report(self, report):
         self.report_request = report
+
+
+    def fetch_credentials(self):
+        self.local_cred, self.remote_cred = self.dialog_manager.get_credentials(self.hop_addr, self.remote_nameaddr.uri)
+        
+
+    def setup_incoming(self, params):
+        self.local_nameaddr = params["to"].tagged(generate_tag())
+        self.remote_nameaddr = params["from"]
+        self.my_contact = self.dialog_manager.get_my_contact()  # TODO: improve
+        self.peer_contact = params["contact"]
+        
+        self.route = params["record_route"]
+        self.hop_addr = params["hop_addr"]
+        self.call_id = params["call_id"]
+
+        self.fetch_credentials()
+        self.dialog_manager.dialog_established(self)
+        
+        
+    def setup_outgoing(self, from_uri, from_name, to_uri, route=None, hop_addr=None):
+        self.local_nameaddr = Nameaddr(from_uri, from_name).tagged(generate_tag())
+        self.remote_nameaddr = Nameaddr(to_uri)
+        self.my_contact = self.dialog_manager.get_my_contact()  # TODO: improve
+        self.peer_contact = Nameaddr(to_uri)
+        
+        self.route = route or []
+        self.hop_addr = hop_addr if hop_addr else route[0].uri.addr if route else to_uri.addr
+        self.call_id = generate_call_id()
+
+        self.fetch_credentials()
+
+
+    def setup_outgoing2(self, params):
+        self.remote_nameaddr = params["to"]
+        self.peer_contact = params["contact"]
+        self.route = reversed(params["record_route"])
+        
+        self.dialog_manager.dialog_established(self)
         
 
     def uninvite(self, invite_params):
@@ -125,11 +163,6 @@ class Dialog(object):
             self.last_sent_cseq += 1
             cseq = self.last_sent_cseq
 
-        if not self.call_id:
-            self.dialog_manager.remove_dialog(self)
-            self.call_id = generate_call_id()
-            self.dialog_manager.add_dialog(self)
-
         dialog_params = {
             "is_response": False,
             "uri": self.peer_contact.uri,
@@ -137,7 +170,8 @@ class Dialog(object):
             "to": self.remote_nameaddr,
             "call_id": self.call_id,
             "cseq": cseq,
-            "maxfwd": MAXFWD
+            "maxfwd": MAXFWD,
+            "hop_addr": self.hop_addr
         }
 
         if method == "INVITE":
@@ -161,10 +195,6 @@ class Dialog(object):
         local_tag = self.local_nameaddr.params["tag"]
         remote_tag = self.remote_nameaddr.params.get("tag")
         peer_contact = params.get("contact", None)
-        #cseq = params["cseq"]  # TODO: use?
-
-        if to_nameaddr.uri != self.local_nameaddr.uri:
-            raise Error("Mismatching recipient: %s %s" % (to_nameaddr.uri, self.local_nameaddr.uri))
 
         if remote_tag:
             if call_id != self.call_id:
@@ -173,18 +203,13 @@ class Dialog(object):
             if from_tag != remote_tag:
                 raise Error("Mismatching remote tag!")
 
-            if params["method"] == "CANCEL" and not to_tag:
-                pass
-            elif to_tag != local_tag:
+            if to_tag and to_tag != local_tag:
                 raise Error("Mismatching local tag!")
         else:
             if to_tag:
                 raise Error("Unexpected to tag!")
 
-            self.dialog_manager.remove_dialog(self)
-            self.remote_nameaddr = from_nameaddr
-            self.call_id = call_id
-            self.dialog_manager.add_dialog(self)
+            self.setup_incoming(params)
 
         if peer_contact:
             self.peer_contact = peer_contact
@@ -205,7 +230,8 @@ class Dialog(object):
             "to": self.local_nameaddr,
             "call_id": self.call_id,
             "cseq": request_params["cseq"],
-            "method": request_params["method"]  # only for internal use
+            "method": request_params["method"],  # only for internal use
+            "hop_addr": self.hop_addr
         }
 
         if dialog_params["method"] == "INVITE":
@@ -246,9 +272,7 @@ class Dialog(object):
             if not to_tag:
                 raise Error("Missing to tag!")
 
-            self.dialog_manager.remove_dialog(self)
-            self.remote_nameaddr = to_nameaddr
-            self.dialog_manager.add_dialog(self)
+            self.setup_outgoing2(params)
 
         if peer_contact:
             self.peer_contact = peer_contact
@@ -299,16 +323,31 @@ class DialogManager(object):
         return self.local_addr
 
 
-    def add_dialog(self, dialog):
+    def get_my_contact(self):
+        return Nameaddr(Uri(self.local_addr))  # TODO: more flexible?
+        
+
+    def get_credentials(self, remote_addr, remote_uri):
+        return None, None
+        
+
+    #def add_dialog(self, dialog):
+    #    self.dialogs.add(dialog)
+    #    #did = identify_dialog(dialog)
+    #    #self.dialogs_by_id[did] = dialog
+    #    print("Added dialog")
+
+
+    #def remove_dialog(self, dialog):
+    #    did = identify_dialog(dialog)
+    #    del self.dialogs_by_id[did]
+    #    print("Removed dialog %s" % (did,))
+        
+        
+    def dialog_established(self, dialog):
         did = identify_dialog(dialog)
         self.dialogs_by_id[did] = dialog
-        print("Added dialog %s" % (did,))
-
-
-    def remove_dialog(self, dialog):
-        did = identify_dialog(dialog)
-        del self.dialogs_by_id[did]
-        print("Removed dialog %s" % (did,))
+        print("Established dialog %s" % (did,))
         
 
     def match_incoming_request(self, params):

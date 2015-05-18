@@ -94,7 +94,7 @@ class Call(object):
             if (outgoing_leg):
                 self.add_leg(1, outgoing_leg)
             else:
-                pass  # TODO: reject!
+                print("Routing failed!")  # TODO: reject!
         
         sdp = action.get("sdp")
         if sdp:

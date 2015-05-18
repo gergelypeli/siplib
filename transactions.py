@@ -84,7 +84,8 @@ def make_simple_response(request, status, tag=None):
         "from": request["from"],
         "to": request["to"].tagged(tag),
         "call_id": request["call_id"],
-        "cseq": request["cseq"]
+        "cseq": request["cseq"],
+        "hop_addr": request["hop_addr"]
     }
 
 
@@ -99,7 +100,8 @@ def make_timeout_nak(response):
         "from": response["from"],
         "to": response["to"],
         "call_id": response["call_id"],
-        "cseq": response["cseq"]
+        "cseq": response["cseq"],
+        "hop_addr": None
     }
     
 
