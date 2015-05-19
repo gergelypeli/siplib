@@ -85,6 +85,7 @@ class CallerLeg(Leg):
 
 
     def dial(self):
+        self.ctx["src_proto"] = "TEST"
         self.ctx["from"] = Nameaddr(caller_uri, caller_name)
         self.ctx["to"] = Nameaddr(callee_uri)
         self.report(dict(type="dial", ctx=self.ctx, sdp=caller_sdp))
@@ -105,11 +106,8 @@ class Transport(object):
     def __init__(self, reception):
         self.reception = reception
         
-    def get_addr(self):
-        return local_addr
-
     def send(self, msg):
-        hop_addr = msg["hop_addr"]
+        hop_addr = msg["hop_addr"]  # TODO: maybe local_addr and remote_addr?
         sip = print_structured_message(msg)
         print("Transport sending to %s:" % (hop_addr,))
         print("\n" + "\n".join("  %s" % line for line in sip.split("\n")))
@@ -125,100 +123,89 @@ class Transport(object):
         self.reception(msg)
 
 
-class FirstCall(Call):
+class Switch(object):
+    def __init__(self, local_addr):
+        self.transport = Transport(WeakMethod(self.reception))
+        self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
+        self.dialog_manager = DialogManager(local_addr, WeakMethod(self.transaction_manager.send_message))
+
+    
+    def reject_request(self, msg):
+        if msg:
+            response = make_simple_response(msg, Status(400, "WTF"), "ROTFLMAO")
+            self.transaction_manager.send_message(response, msg)
+
+
+    def make_sip_leg(self, ctx):
+        outgoing_dialog = Dialog(self.dialog_manager)
+        outgoing_dialog.setup_outgoing(
+            ctx["from"].uri, ctx["from"].name, ctx["to"].uri, ctx.get("route"), ctx.get("hop_addr")
+        )
+        outgoing_leg = SipLeg(outgoing_dialog)
+        return outgoing_leg
+        
+        
     def route(self, ctx):
         print("Routing: %s" % ctx)
-        
+
         if ctx["to"].uri.user == "callee":
-            outgoing_dialog = Dialog(dialog_manager)
-            outgoing_dialog.setup_outgoing(
-                ctx["from"].uri, ctx["from"].name, ctx["to"].uri, ctx.get("route"), ctx.get("hop_addr")
-            )
-            outgoing_leg = SipLeg(outgoing_dialog)
-            return outgoing_leg
-    
+            if ctx.get("src_proto") == "TEST":
+                return self.make_sip_leg(ctx)
+            else:
+                return CalleeLeg()  # Callee display name going back?
+                
         return None
-    
-
-class SecondCall(Call):
-    def route(self, ctx):
-        if ctx["to"].uri.user == "callee":
-            return CalleeLeg()  # Callee display name going back?
-    
-        return None
-    
-
-def reject_request(msg):
-    if msg:
-        response = make_simple_response(msg, Status(400, "WTF"), "ROTFLMAO")
-        transaction_manager.send_message(response, msg)
-
-
-def accept_invite(params):
-    global call2
-    incoming_dialog = Dialog(dialog_manager)
-    incoming_dialog.setup_incoming(params)  # TODO: set display name from context
-    incoming_leg = SipLeg(incoming_dialog)
-    call2 = SecondCall()
-    call2.add_leg(0, incoming_leg)
-    return WeakMethod(incoming_dialog.recv_request)
-
-
-def reception(params):
-    #print("Got message from transport.")
-    #print("Req params: %s" % req_params)
-    uninvite_params = transaction_manager.match_uninvited_response(params)
-    if uninvite_params:
-        create_uninvited_leg(uninvite_params)
-    
-    matched = transaction_manager.match_incoming_message(params)
-    if matched:
-        return
-    
-    report = dialog_manager.match_incoming_request(params)
-    
-    if not report:
-        if params["method"] == "INVITE" and "tag" not in params["to"].params:
-            report = accept_invite(params)
-    
-    if not report:
-        report = reject_request
         
-    transaction_manager.create_incoming_request(params, report)
+
+    def accept_invite(self, params):
+        global call2
+        incoming_dialog = Dialog(self.dialog_manager)  # Weak?
+        incoming_dialog.setup_incoming(params)  # TODO: set display name from context
+        incoming_leg = SipLeg(incoming_dialog)
+        call2 = Call(WeakMethod(self.route))
+        call2.add_leg(0, incoming_leg)
+        return WeakMethod(incoming_dialog.recv_request)
 
 
-def to_transport(msg):
-    #print("Sending message by transport.")
-    transport.send(msg)
+    def reception(self, params):
+        #print("Got message from transport.")
+        #print("Req params: %s" % req_params)
+        uninvite_params = self.transaction_manager.match_uninvited_response(params)
+        if uninvite_params:
+            create_uninvited_leg(uninvite_params)
+    
+        matched = self.transaction_manager.match_incoming_message(params)
+        if matched:
+            return
+    
+        report = self.dialog_manager.match_incoming_request(params)
+    
+        if not report:
+            if params["method"] == "INVITE" and "tag" not in params["to"].params:
+                report = self.accept_invite(params)
+    
+        if not report:
+            report = WeakMethod(self.reject_request)
+        
+        self.transaction_manager.create_incoming_request(params, report)
 
 
-def to_transaction(msg, related_msg, report):
-    print("Sending message by transaction.")
-    transaction_manager.send_message(msg, related_msg, report)
+    def testing(self):
+        global call1
+        print("Testing begins.")
+
+        incoming_leg = CallerLeg()
+        call1 = Call(WeakMethod(self.route))
+        call1.add_leg(0, incoming_leg)
+        incoming_leg.dial()
 
 
-def testing():
-    global call1
-    print("Testing begins.")
-
-    incoming_leg = CallerLeg()
-    #outgoing_dialog = Dialog(dialog_manager)
-    #outgoing_dialog.setup_outgoing(caller_uri, caller_name, callee_uri)
-    #outgoing_leg = SipLeg(outgoing_dialog)
-    call1 = FirstCall()
-    call1.add_leg(0, incoming_leg)
-    #call1.add_leg(1, outgoing_leg)
-    incoming_leg.dial()
-
+switch = Switch(local_addr)
 
 logging.basicConfig(level=logging.DEBUG)
 metapoll = Metapoll()
-transport = Transport(reception)
-transaction_manager = TransactionManager(local_addr, to_transport)
-dialog_manager = DialogManager(local_addr, to_transaction)
-
-metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(transaction_manager.maintenance), repeat=True)
-metapoll.register_timeout(timedelta(seconds=1), testing)
+metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(switch.transaction_manager.maintenance), repeat=True)
+metapoll.register_timeout(timedelta(seconds=1), WeakMethod(switch.testing))
 
 while True:
     try:

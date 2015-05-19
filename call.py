@@ -69,7 +69,8 @@ class DirectMedia(object):
         
         
 class Call(object):
-    def __init__(self):
+    def __init__(self, route):
+        self.route = route
         self.media = DirectMedia()
         self.legs = {}
         
@@ -77,10 +78,6 @@ class Call(object):
     def add_leg(self, i, leg):
         self.legs[i] = leg
         leg.set_report(WeakMethod(self.process, i))
-        
-        
-    def route(self, ctx):
-        return None
         
         
     def process(self, action, i):
