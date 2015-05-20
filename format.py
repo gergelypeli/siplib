@@ -4,11 +4,27 @@ import re
 import collections
 from sdp import Sdp
 
-META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "sdp", "hop_addr" ]
+META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "sdp", "hop" ]
+
+class FormatError(Exception):
+    pass
+
 
 Addr = collections.namedtuple("Addr", ["host", "port"])
 Status = collections.namedtuple("Status", ["code", "reason"])
 Via = collections.namedtuple("Via", ["addr", "branch"])  # TODO: improve!
+
+
+class Hop(object):
+    def __init__(self, local_addr=None, remote_addr=None, iface=None):
+        self.local_addr = local_addr
+        self.remote_addr = remote_addr
+        self.iface = iface
+        
+    def __repr__(self):
+        return "Hop(local_addr=%r, remote_addr=%r, iface=%r)" % (
+            self.local_addr, self.remote_addr, self.iface
+        )
 
 
 def parse_parts(parts):
@@ -26,10 +42,6 @@ def parse_parts(parts):
 
 def print_params(params):
     return [ "%s=%s" % (k, v) if v is not True else k for k, v in params.items() if v]
-
-
-class FormatError(Exception):
-    pass
 
 
 class Uri(collections.namedtuple("Uri", "addr user params")):

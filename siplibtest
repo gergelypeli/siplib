@@ -8,7 +8,7 @@ import logging
 
 from async import Metapoll, WeakMethod
 
-from format import Addr, Uri, Nameaddr, Status, Via, print_structured_message, parse_structured_message
+from format import Addr, Uri, Nameaddr, Status, Via, Hop, print_structured_message, parse_structured_message
 from transactions import TransactionManager, make_virtual_response, make_simple_response
 from dialog import Dialog, DialogManager
 from leg import Leg, SipLeg, create_uninvited_leg
@@ -106,20 +106,27 @@ class Transport(object):
     def __init__(self, reception):
         self.reception = reception
         
+    def get_hop(self, uri):
+        # FIXME: cheating!
+        return Hop(local_addr=("a", 10000), remote_addr=("b", 20000), iface="eth0")
+        
+        
     def send(self, msg):
-        hop_addr = msg["hop_addr"]  # TODO: maybe local_addr and remote_addr?
+        hop = msg["hop"]
         sip = print_structured_message(msg)
-        print("Transport sending to %s:" % (hop_addr,))
+        print("Transport sending by %s:" % (hop,))
         print("\n" + "\n".join("  %s" % line for line in sip.split("\n")))
         
-        metapoll.register_timeout(timedelta(), WeakMethod(self.process, sip, hop_addr))
+        poh = Hop(local_addr=hop.remote_addr, remote_addr=hop.local_addr, iface=hop.iface)
+        metapoll.register_timeout(timedelta(), WeakMethod(self.process, sip, poh))
         #self.process(sip)
 
-    def process(self, sip, hop_addr):
+
+    def process(self, sip, hop):
         #print("Transport receiving:")
         #print(s)
         msg = parse_structured_message(sip)
-        msg["hop_addr"] = hop_addr  # TODO: 2 transports!
+        msg["hop"] = hop  # TODO: 2 transports!
         self.reception(msg)
 
 
@@ -127,7 +134,11 @@ class Switch(object):
     def __init__(self, local_addr):
         self.transport = Transport(WeakMethod(self.reception))
         self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
-        self.dialog_manager = DialogManager(local_addr, WeakMethod(self.transaction_manager.send_message))
+        self.dialog_manager = DialogManager(
+            local_addr,
+            WeakMethod(self.transaction_manager.send_message),
+            WeakMethod(self.transport.get_hop)
+        )
 
     
     def reject_request(self, msg):
@@ -136,21 +147,12 @@ class Switch(object):
             self.transaction_manager.send_message(response, msg)
 
 
-    def make_sip_leg(self, ctx):
-        outgoing_dialog = Dialog(self.dialog_manager)
-        outgoing_dialog.setup_outgoing(
-            ctx["from"].uri, ctx["from"].name, ctx["to"].uri, ctx.get("route"), ctx.get("hop_addr")
-        )
-        outgoing_leg = SipLeg(outgoing_dialog)
-        return outgoing_leg
-        
-        
     def route(self, ctx):
         print("Routing: %s" % ctx)
 
         if ctx["to"].uri.user == "callee":
             if ctx.get("src_proto") == "TEST":
-                return self.make_sip_leg(ctx)
+                return SipLeg(Dialog(self.dialog_manager))
             else:
                 return CalleeLeg()  # Callee display name going back?
                 
@@ -160,7 +162,6 @@ class Switch(object):
     def accept_invite(self, params):
         global call2
         incoming_dialog = Dialog(self.dialog_manager)  # Weak?
-        incoming_dialog.setup_incoming(params)  # TODO: set display name from context
         incoming_leg = SipLeg(incoming_dialog)
         call2 = Call(WeakMethod(self.route))
         call2.add_leg(0, incoming_leg)

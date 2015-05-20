@@ -87,7 +87,11 @@ class Call(object):
         print("Got %s from leg %d." % (type, i))
         
         if type == "dial":
-            outgoing_leg = self.route(action["ctx"])
+            src_ctx = action["ctx"]
+            dst_ctx = src_ctx.copy()
+            action["ctx"] = dst_ctx
+            
+            outgoing_leg = self.route(dst_ctx)
             if (outgoing_leg):
                 self.add_leg(1, outgoing_leg)
             else:

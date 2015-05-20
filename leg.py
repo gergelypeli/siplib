@@ -51,18 +51,17 @@ class SipLeg(Leg):
             raise Error("Respond to what?")
 
 
-    def make_ctx(self, msg):
-        return {
-            "from": msg["from"],
-            "to": msg["to"]
-        }
-
-        
     def do(self, action):
         type = action["type"]
         
         if self.state == self.DOWN:
             if type == "dial":
+                self.ctx.update(action["ctx"])
+                self.dialog.setup_outgoing(
+                    self.ctx["from"].uri, self.ctx["from"].name, self.ctx["to"].uri,
+                    self.ctx.get("route"), self.ctx.get("hop")
+                )
+                
                 self.pending_sent_message = dict(method="INVITE", sdp=action.get("sdp"))
                 self.send_request(self.pending_sent_message)  # Will be extended!
                 self.state = self.DIALING_OUT
@@ -99,7 +98,11 @@ class SipLeg(Leg):
         
         if self.state == self.DOWN:
             if not is_response and method == "INVITE":
-                self.ctx.update(self.make_ctx(msg))
+                self.ctx.update({
+                    "from": msg["from"],
+                    "to": msg["to"]
+                })
+                
                 # TODO: create leg context!
                 self.pending_received_message = msg
                 self.report(dict(type="dial", ctx=self.ctx, sdp=msg.get("sdp")))

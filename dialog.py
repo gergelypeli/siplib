@@ -67,7 +67,7 @@ class Dialog(object):
         self.peer_contact = None
 
         self.route = []
-        self.hop_addr = None
+        self.hop = None
 
         self.call_id = None
         self.last_sent_cseq = 0
@@ -83,7 +83,7 @@ class Dialog(object):
 
 
     def fetch_credentials(self):
-        self.local_cred, self.remote_cred = self.dialog_manager.get_credentials(self.hop_addr, self.remote_nameaddr.uri)
+        self.local_cred, self.remote_cred = self.dialog_manager.get_credentials(self.hop, self.remote_nameaddr.uri)
         
 
     def setup_incoming(self, params):
@@ -93,21 +93,21 @@ class Dialog(object):
         self.peer_contact = params["contact"]
         
         self.route = params["record_route"]
-        self.hop_addr = params["hop_addr"]
+        self.hop = params["hop"]
         self.call_id = params["call_id"]
 
         self.fetch_credentials()
         self.dialog_manager.dialog_established(self)
         
         
-    def setup_outgoing(self, from_uri, from_name, to_uri, route=None, hop_addr=None):
+    def setup_outgoing(self, from_uri, from_name, to_uri, route=None, hop=None):
         self.local_nameaddr = Nameaddr(from_uri, from_name).tagged(generate_tag())
         self.remote_nameaddr = Nameaddr(to_uri)
         self.my_contact = self.dialog_manager.get_my_contact()  # TODO: improve
         self.peer_contact = Nameaddr(to_uri)
         
         self.route = route or []
-        self.hop_addr = hop_addr if hop_addr else route[0].uri.addr if route else to_uri.addr
+        self.hop = hop or self.dialog_manager.get_hop(route[0].uri if route else to_uri)
         self.call_id = generate_call_id()
 
         self.fetch_credentials()
@@ -171,7 +171,7 @@ class Dialog(object):
             "call_id": self.call_id,
             "cseq": cseq,
             "maxfwd": MAXFWD,
-            "hop_addr": self.hop_addr
+            "hop": self.hop
         }
 
         if method == "INVITE":
@@ -190,13 +190,14 @@ class Dialog(object):
         from_nameaddr = params["from"]
         from_tag = from_nameaddr.params["tag"]
         to_nameaddr = params["to"]
-        to_tag = to_nameaddr.params.get("tag", None)
+        to_tag = to_nameaddr.params.get("tag")
         call_id = params["call_id"]
-        local_tag = self.local_nameaddr.params["tag"]
-        remote_tag = self.remote_nameaddr.params.get("tag")
-        peer_contact = params.get("contact", None)
-
-        if remote_tag:
+        peer_contact = params.get("contact")
+        
+        if self.call_id:
+            local_tag = self.local_nameaddr.params["tag"]
+            remote_tag = self.remote_nameaddr.params.get("tag")
+            
             if call_id != self.call_id:
                 raise Error("Mismatching call id!")
 
@@ -231,7 +232,7 @@ class Dialog(object):
             "call_id": self.call_id,
             "cseq": request_params["cseq"],
             "method": request_params["method"],  # only for internal use
-            "hop_addr": self.hop_addr
+            "hop": self.hop
         }
 
         if dialog_params["method"] == "INVITE":
@@ -313,9 +314,10 @@ class Dialog(object):
         
 
 class DialogManager(object):
-    def __init__(self, local_addr, transmission):
+    def __init__(self, local_addr, transmission, hopping):
         self.local_addr = local_addr
         self.transmission = transmission
+        self.hopping = hopping
         self.dialogs_by_id = WeakValueDictionary()
         
         
@@ -329,6 +331,10 @@ class DialogManager(object):
 
     def get_credentials(self, remote_addr, remote_uri):
         return None, None
+        
+        
+    def get_hop(self, uri):
+        return self.hopping(uri)
         
 
     #def add_dialog(self, dialog):
