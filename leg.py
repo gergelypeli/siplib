@@ -41,7 +41,7 @@ class SipLeg(Leg):
 
 
     def send_request(self, request, related=None):
-        self.dialog.send_request(request, related, WeakMethod(self.process))
+        self.dialog.send_request(request, related)
 
 
     def send_response(self, response):

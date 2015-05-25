@@ -87,6 +87,10 @@ class Authority(object):
         if not cred:
             return None
             
+        # We already tried, sorry! TODO: check for staleness!
+        if "authorization" in request:
+            return None
+            
         www_auth = response["www_authenticate"]
         
         realm = www_auth.realm

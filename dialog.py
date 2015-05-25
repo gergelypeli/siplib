@@ -56,7 +56,7 @@ def identify_incoming_request(params):
 class Dialog(object):
     def __init__(self, dialog_manager):
         self.dialog_manager = dialog_manager
-        self.report_request = None
+        self.report = None
     
         # Things in the From/To fields
         self.local_nameaddr = None
@@ -80,11 +80,15 @@ class Dialog(object):
 
 
     def set_report(self, report):
-        self.report_request = report
+        self.report = report
 
 
     def set_local_credentials(self, cred):
         self.local_cred = cred
+
+
+    def is_established(self):
+        return self.remote_nameaddr and "tag" in self.remote_nameaddr.params;
         
 
     def setup_incoming(self, params):
@@ -97,7 +101,6 @@ class Dialog(object):
         self.hop = params["hop"]
         self.call_id = params["call_id"]
 
-        #self.get_my_credentials()
         self.dialog_manager.dialog_established(self)
         
         
@@ -110,8 +113,6 @@ class Dialog(object):
         self.route = route or []
         self.hop = hop or self.dialog_manager.get_hop(route[0].uri if route else to_uri)
         self.call_id = generate_call_id()
-
-        #self.get_my_credentials()
 
 
     def setup_outgoing2(self, params):
@@ -147,23 +148,11 @@ class Dialog(object):
     def take_sdp(self, params):
         sdp = params.get("sdp")
         if sdp:
-            if sdp.origin.session_version == self.remote_sdp_session_version:
+            if sdp.origin.session_version <= self.remote_sdp_session_version:
                 params["sdp"] = None
                 return
                 
             self.remote_sdp_session_version = sdp.origin.session_version
-
-
-    def wipe_message(self, params):
-        new_params = params.copy()
-        # TODO: not nice
-        for x in ("is_response", "uri", "from", "to", "call_id", "cseq", "maxfwd", "contact", "hop"):
-            del new_params[x]
-            
-        # TODO: at all
-        del new_params["via"]
-        
-        return new_params
 
 
     def make_request(self, user_params, related_params=None):
@@ -184,7 +173,8 @@ class Dialog(object):
             "call_id": self.call_id,
             "cseq": cseq,
             "maxfwd": MAXFWD,
-            "hop": self.hop
+            "hop": self.hop,
+            "user_params": user_params.copy()  # save original for auth retries
         }
 
         if method == "INVITE":
@@ -193,7 +183,7 @@ class Dialog(object):
         safe_update(user_params, dialog_params)
         self.make_sdp(user_params)
 
-        return user_params  # Modified!
+        return user_params
 
 
     def take_request(self, params):
@@ -213,17 +203,14 @@ class Dialog(object):
         else:
             self.last_recved_cseq = cseq
 
-        if self.call_id:
-            local_tag = self.local_nameaddr.params["tag"]
-            remote_tag = self.remote_nameaddr.params.get("tag")
-            
+        if self.is_established():
             if call_id != self.call_id:
                 raise Error("Mismatching call id!")
 
-            if from_tag != remote_tag:
+            if from_tag != self.remote_nameaddr.params["tag"]:
                 raise Error("Mismatching remote tag!")
 
-            if to_tag and to_tag != local_tag:
+            if to_tag != self.local_nameaddr.params["tag"]:
                 raise Error("Mismatching local tag!")
         else:
             if to_tag:
@@ -260,7 +247,7 @@ class Dialog(object):
         safe_update(user_params, dialog_params)
         self.make_sdp(user_params)
 
-        return user_params  # Modified!
+        return user_params
 
 
     def take_response(self, params, related_request):
@@ -271,38 +258,44 @@ class Dialog(object):
         to_nameaddr = params["to"]
         to_tag = to_nameaddr.params.get("tag", None)
         call_id = params["call_id"]
-        local_tag = self.local_nameaddr.params["tag"]
-        remote_tag = self.remote_nameaddr.params.get("tag")
         peer_contact = params.get("contact", None)
 
         if from_nameaddr != self.local_nameaddr:
             raise Error("Mismatching recipient!")
 
-        if remote_tag:
+        if self.is_established():
             if call_id != self.call_id:
                 raise Error("Mismatching call id!")
 
-            if to_tag != remote_tag:
-                raise Error("Mismatching remote tag!")
-
-            if from_tag != local_tag:
+            if from_tag != self.local_nameaddr.params["tag"]:
                 raise Error("Mismatching local tag!")
+
+            if to_tag != self.remote_nameaddr.params["tag"]:
+                raise Error("Mismatching remote tag!")
         elif status.code < 300 and to_tag:
             # Failure responses don't establish a dialog (including 401/407).
             # Also, provisional responses may not have a to tag.
             
             self.setup_outgoing2(params)
-        elif status.code == 401:
-            # Let's try authentication!
             
-            if self.local_cred:
-                auth = self.dialog_manager.provide_auth(self.local_cred, params, related_request)
+        if status.code == 401:
+            # Let's try authentication! TODO: 407, too!
+            auth = self.dialog_manager.provide_auth(self.local_cred, params, related_request)
                 
-                if auth:
-                    new_request = self.wipe_message(related_request)
-                    new_request["authorization"] = auth
-                    self.send_request(new_request)  # FIXME: no report_response!
-                    return None
+            if auth:
+                # Retrying this request is a bit tricky, because our owner must
+                # see the changes in case it wants to CANCEL it later. So we must modify
+                # the same dict instead of creating a new one.
+                user_params = related_request["user_params"]
+                related_request.clear()
+                related_request.update(user_params)
+                related_request["authorization"] = auth
+                
+                print("Trying authorization...")
+                self.send_request(related_request)
+                return None
+            else:
+                print("Couldn't authorize, being rejected!")
 
         if peer_contact:
             self.peer_contact = peer_contact
@@ -312,18 +305,21 @@ class Dialog(object):
         return params
 
 
-    def send_request(self, user_params, related_params=None, report_response=None):
-        if user_params["method"] == "UNINVITE":
+    def send_request(self, user_params, related_params=None):
+        method = user_params["method"]
+        
+        if method == "UNINVITE":
             self.uninvite(related_params)
-        elif user_params["method"] == "CANCEL":
+        elif method == "CANCEL":
             # CANCELs are cloned from the INVITE in the transaction layer
             params = user_params
             params["is_response"] = False
+            
         else:
             # Even 2xx ACKs are in-dialog
             params = self.make_request(user_params, related_params)
             
-        self.dialog_manager.transmit(params, related_params, WeakMethod(self.recv_response, report_response))
+        self.dialog_manager.transmit(params, related_params, WeakMethod(self.recv_response))
 
 
     def send_response(self, user_params, related_params=None):
@@ -335,13 +331,13 @@ class Dialog(object):
     def recv_request(self, msg):
         request = self.take_request(msg)
         if request:  # may have been denied
-            self.report_request(request)
+            self.report(request)
     
     
-    def recv_response(self, msg, related_request, bound_report):
+    def recv_response(self, msg, related_request):
         response = self.take_response(msg, related_request)
         if response:  # may have been retried
-            bound_report(response)
+            self.report(response)
         
 
 class DialogManager(object):

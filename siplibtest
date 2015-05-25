@@ -176,6 +176,7 @@ class Switch(object):
     def accept_invite(self, params):
         global call2
         incoming_dialog = Dialog(Weak(self.dialog_manager))
+        incoming_dialog.set_local_credentials(credentials)  # FIXME
         incoming_leg = SipLeg(incoming_dialog)
         call2 = Call(WeakMethod(self.route))
         call2.add_leg(0, incoming_leg)
@@ -189,8 +190,8 @@ class Switch(object):
         if uninvite_params:
             create_uninvited_leg(uninvite_params)
     
-        matched = self.transaction_manager.match_incoming_message(params)
-        if matched:
+        processed = self.transaction_manager.match_incoming_message(params)
+        if processed:
             return
 
         report = None

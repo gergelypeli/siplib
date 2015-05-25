@@ -4,7 +4,7 @@ import re
 import collections
 from sdp import Sdp
 
-META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "sdp", "hop" ]
+META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "sdp", "hop", "user_params" ]
 
 class FormatError(Exception):
     pass
