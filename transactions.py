@@ -76,7 +76,7 @@ def is_virtual_response(msg):
     return msg["status"].code == 0
     
     
-def make_simple_response(request, status, tag=None):
+def make_simple_response(request, status, tag=None, www_auth=None):
     return {
         "is_response": True,
         "method": request["method"],
@@ -85,7 +85,22 @@ def make_simple_response(request, status, tag=None):
         "to": request["to"].tagged(tag),
         "call_id": request["call_id"],
         "cseq": request["cseq"],
+        "www_authenticate": www_auth,
         "hop": request["hop"]
+    }
+
+
+def make_ack(request, tag):
+    return {
+        'is_response': False,
+        'method': "ACK",
+        'uri': request["uri"],
+        'from': request["from"],
+        'to': request["to"].tagged(tag),
+        'call_id': request["call_id"],
+        'cseq': request["cseq"],
+        'route': request.get("route"),
+        'hop': request["hop"]
     }
 
 
@@ -115,9 +130,8 @@ class Transaction(object):
     T2 = datetime.timedelta(milliseconds=4000)
     TP = datetime.timedelta(milliseconds=10000)
 
-    def __init__(self, manager, report, branch):
+    def __init__(self, manager, branch):
         self.manager = manager
-        self.report = report
         self.branch = branch
 
         self.outgoing_msg = None
@@ -179,6 +193,12 @@ class Transaction(object):
 
 
 class PlainClientTransaction(Transaction):
+    def __init__(self, manager, branch, report_response):
+        super(PlainClientTransaction, self).__init__(manager, branch)
+        
+        self.report_response = report_response
+        
+        
     def transmit(self, msg):
         if msg.get("via"):
             raise Error("Don't mess with the request Via headers!")
@@ -194,7 +214,7 @@ class PlainClientTransaction(Transaction):
 
     def process(self, response):
         if self.state == self.TRANSMITTING:
-            self.report(response)
+            self.report_response(response, self.outgoing_msg)
             self.change_state(self.LINGERING)
         elif self.state == self.LINGERING:
             pass
@@ -208,9 +228,10 @@ class PlainClientTransaction(Transaction):
 
 
 class PlainServerTransaction(Transaction):
-    def __init__(self, *args, **kwargs):
-        super(PlainServerTransaction, self).__init__(*args, **kwargs)
+    def __init__(self, manager, branch, report_request):
+        super(PlainServerTransaction, self).__init__(manager, branch)
         
+        self.report_request = report_request
         self.incoming_via = None
         
         
@@ -226,7 +247,7 @@ class PlainServerTransaction(Transaction):
         if self.state == self.WAITING:
             if not self.incoming_via:
                 self.incoming_via = request["via"]
-                self.report(request)
+                self.report_request(request)
         elif self.state == self.LINGERING:
             self.retransmit()
         else:
@@ -249,8 +270,8 @@ class AckClientTransaction(PlainClientTransaction):
 
 
 class Bastard(object):
-    def __init__(self, report):
-        self.report = report
+    def __init__(self, report_response):
+        self.report_response = report_response
         self.statuses = set()
         self.ack = None
         
@@ -267,11 +288,11 @@ class InviteClientTransaction(PlainClientTransaction):
         return msg["to"].params.get("tag")
     
     
-    def set_report(self, report):
-        if self.report:
-            raise Error("Report already set!")
+    def set_report_response(self, report_response):
+        if self.report_response:
+            raise Error("Report response already set!")
             
-        self.report = report
+        self.report_response = report_response
         
 
     def match_uninvited_response(self, response):
@@ -285,7 +306,7 @@ class InviteClientTransaction(PlainClientTransaction):
         if self.state != self.LINGERING:
             self.change_state(self.LINGERING)  # now we can expire
         
-        ack = AckClientTransaction(self.manager, None, ack_branch)
+        ack = AckClientTransaction(self.manager, ack_branch, None)
 
         # These won't be public
         self.bastards[self.rt(msg)].ack = ack
@@ -309,29 +330,19 @@ class InviteClientTransaction(PlainClientTransaction):
                     return
             
                 if not him:
-                    if not self.report:
-                        raise Error("No report when receiving INVITE response with new remote tag!")
+                    if not self.report_response:
+                        raise Error("No report_response when receiving INVITE response with new remote tag!")
                 
-                    self.bastards[remote_tag] = him = Bastard(self.report)
-                    self.report = None
+                    self.bastards[remote_tag] = him = Bastard(self.report_response)
+                    self.report_response = None
             
                 if code not in him.statuses:
                     him.statuses.add(code)
-                    him.report(response)
+                    him.report_response(response, self.outgoing_msg)
 
             if code >= 300:
                 # final non-2xx responses are ACK-ed here in the same transaction (17.1.1.3)
-                ack_params = {
-                    'is_response': False,
-                    'method': "ACK",
-                    'uri': self.outgoing_msg["uri"],
-                    'from': self.outgoing_msg["from"],
-                    'to': response["to"],
-                    'call_id': self.outgoing_msg["call_id"],
-                    'cseq': self.outgoing_msg["cseq"],
-                    'route': self.outgoing_msg.get("route")
-                }
-                    
+                ack_params = make_ack(self.outgoing_msg, remote_tag)
                 self.create_and_send_ack(self.branch, ack_params)
 
             if self.state != self.WAITING:
@@ -342,14 +353,14 @@ class InviteClientTransaction(PlainClientTransaction):
 
 
     def expired(self):
-        if self.state == self.TRANSMITTING:
-            self.report(make_timeout_response(self.outgoing_msg))  # nothing at all
+        if self.state == self.TRANSMITTING:  # TODO: do we still need explicit timeout response?
+            self.report_response(make_timeout_response(self.outgoing_msg), self.outgoing_msg)  # nothing at all
         elif self.state == self.LINGERING:
             # expired only after a provisional response, or after sending an ACK
             got_final = max([ max(him.statuses) for him in self.bastards.values() ]) >= 200
 
             if not got_final:
-                self.report(make_timeout_response(self.outgoing_msg))
+                self.report_response(make_timeout_response(self.outgoing_msg), self.outgoing_msg)
         else:
             raise Error("Invite client expired while %s!" % self.state)
 
@@ -360,7 +371,7 @@ class InviteServerTransaction(PlainServerTransaction):
             if not self.incoming_via:
                 self.incoming_via = request["via"]
                 self.send_trying(request)
-                self.report(request)
+                self.report_request(request)
         elif self.state == self.PROVISIONING:
             self.retransmit()
         elif self.state == self.TRANSMITTING:
@@ -387,7 +398,7 @@ class InviteServerTransaction(PlainServerTransaction):
     def expired(self):
         if self.state == self.TRANSMITTING:
             # Got no ACK, complain
-            self.report(make_timeout_nak(self.outgoing_msg))
+            self.report_request(make_timeout_nak(self.outgoing_msg))
         elif self.state == self.LINGERING:
             pass
         else:
@@ -488,17 +499,17 @@ class TransactionManager(object):
             
         if method == "CANCEL":
             # CANCEL-s may happen outside of any dialogs, so process them here
-            tr = PlainServerTransaction(Weak(self), lambda msg: None, branch)
+            tr = PlainServerTransaction(Weak(self), branch, lambda msg: None)
             self.add_transaction(tr, "CANCEL")
             tr.process(msg)
             
             # FIXME: not necessarily INVITE
-            invite_tr = self.server_transactions.get((branch, "INVITE"))
-            if invite_tr:
+            invite_str = self.server_transactions.get((branch, "INVITE"))
+            if invite_str:
                 # The responses to INVITE and CANCEL must have a To tag, so they must
                 # be generated by the Dialog.
                 # And it has to accept that the CANCEL request may have no to tag!
-                invite_tr.report(msg)
+                invite_str.report_request(msg)
             else:
                 status = Status(481, "Transaction Does Not Exist")
                 cancel_response = make_simple_response(msg, status, "ROTFLMAO")
@@ -518,23 +529,23 @@ class TransactionManager(object):
         return False
 
 
-    def create_incoming_request(self, msg, report):
+    def create_incoming_request(self, msg, report_request):
         branch, method = identify(msg)
 
         if method == "INVITE":
-            tr = InviteServerTransaction(Weak(self), report, branch)
+            tr = InviteServerTransaction(Weak(self), branch, report_request)
         elif method == "ACK":
             # Must create a server transaction to swallow duplicates,
             # we don't want to bother the dialogs unnecessarily.
-            tr = AckServerTransaction(Weak(self), report, branch)
+            tr = AckServerTransaction(Weak(self), branch, report_request)
         else:
-            tr = PlainServerTransaction(Weak(self), report, branch)
+            tr = PlainServerTransaction(Weak(self), branch, report_request)
 
         self.add_transaction(tr, method)
         tr.process(msg)
         
 
-    def send_message(self, msg, related_msg=None, report=None):
+    def send_message(self, msg, related_msg=None, report_response=None):
         if msg["is_response"]:
             if not related_msg:
                 raise Error("Related request is not given for response!")
@@ -545,10 +556,11 @@ class TransactionManager(object):
                 tr.send(msg)
             else:
                 print("Outgoing response to unknown request, ignoring!")
+                
             return
 
-        if not report:
-            raise Error("No report handler for a request!")
+        if not report_response:
+            raise Error("No report_response handler for a request!")
 
         method = msg["method"]
 
@@ -561,7 +573,7 @@ class TransactionManager(object):
             if not invite_tr:
                 raise Error("No transaction to UNINVITE!")
             
-            invite_tr.set_report(report)
+            invite_tr.set_report_response(report_response)
             # Nothing to send here
         elif method == "ACK":
             # 2xx-ACK from Dialog
@@ -584,19 +596,20 @@ class TransactionManager(object):
             request_params = related_msg
             branch, method = identify(request_params)
 
-            tr = PlainClientTransaction(Weak(self), report, branch)
+            tr = PlainClientTransaction(Weak(self), branch, report_response)
             self.add_transaction(tr, "CANCEL")
 
             # TODO: more sophisticated CANCEL generation
+            # TODO: shouldn't send CANCEL before provisional response
             cancel_params = request_params.copy()
             cancel_params["method"] = "CANCEL"
         
             tr.send(cancel_params)
         elif method == "INVITE":
-            tr = InviteClientTransaction(Weak(self), report, generate_branch())
+            tr = InviteClientTransaction(Weak(self), generate_branch(), report_response)
             self.add_transaction(tr, method)
             tr.send(msg)
         else:
-            tr = PlainClientTransaction(Weak(self), report, generate_branch())
+            tr = PlainClientTransaction(Weak(self), generate_branch(), report_response)
             self.add_transaction(tr, method)
             tr.send(msg)

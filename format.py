@@ -10,9 +10,9 @@ class FormatError(Exception):
     pass
 
 
-Addr = collections.namedtuple("Addr", ["host", "port"])
-Status = collections.namedtuple("Status", ["code", "reason"])
-Via = collections.namedtuple("Via", ["addr", "branch"])  # TODO: improve!
+Addr = collections.namedtuple("Addr", [ "host", "port" ])
+Status = collections.namedtuple("Status", [ "code", "reason" ])
+Via = collections.namedtuple("Via", [ "addr", "branch" ])  # TODO: improve!
 
 
 class Hop(object):
@@ -25,6 +25,42 @@ class Hop(object):
         return "Hop(local_addr=%r, remote_addr=%r, iface=%r)" % (
             self.local_addr, self.remote_addr, self.iface
         )
+
+
+def parse_digest_params(value):
+    m = re.search(r"^Digest\s+(.*)", value)
+    if not m:
+        return None
+        
+    items = {}
+    for x in m.group(1).split(","):
+        k, v = x.split("=", 1)
+        items[k] = v.strip('"')
+        
+    return items
+
+
+class WwwAuth(collections.namedtuple("WwwAuth", [ "realm", "nonce" ])):
+    def print(self):
+        return 'Digest realm="%s",nonce="%s"' % (self)
+        
+    @classmethod
+    def parse(cls, value):
+        items = parse_digest_params(value)
+        values = [ items[x] for x in cls._fields ]
+        return cls(*values)
+        
+    
+class Auth(collections.namedtuple("Auth", [ "realm", "nonce", "username", "uri", "response" ])):
+
+    def print(self):
+        return 'Digest realm="%s",nonce="%s",username="%s",uri="%s",response="%s"' % (self)
+        
+    @classmethod
+    def parse(cls, value):
+        items = parse_digest_params(value)
+        values = [ items[x] for x in cls._fields ]
+        return cls(*values)
 
 
 def parse_parts(parts):
@@ -178,7 +214,7 @@ def print_structured_message(params):
     for field in mandatory_fields + other_fields:
         if params[field] is None:
             pass
-        elif field in ("from", "to", "contact"):
+        elif field in ("from", "to", "contact", "www_authenticate", "authorization"):
             p[field] = params[field].print()
         elif field == "cseq":
             p[field] = "%d %s" % (params[field], params["method"])  # ACK? CANCEL?
@@ -217,6 +253,10 @@ def parse_structured_message(msg):
     for field in params:
         if field in ("from", "to", "contact"):
             p[field] = Nameaddr.parse(params[field])
+        elif field in ("www_authenticate"):
+            p[field] = WwwAuth.parse(params[field])
+        elif field in ("authorization"):
+            p[field] = Auth.parse(params[field])
         elif field == "cseq":
             cseq_num, cseq_method = params[field].split()
             p[field] = int(cseq_num)

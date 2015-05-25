@@ -71,6 +71,7 @@ class Dialog(object):
 
         self.call_id = None
         self.last_sent_cseq = 0
+        self.last_recved_cseq = None
 
         self.local_sdp_session_id = Origin.generate_session_id()
         self.local_sdp_session_version = 0
@@ -82,8 +83,8 @@ class Dialog(object):
         self.report_request = report
 
 
-    def fetch_credentials(self):
-        self.local_cred, self.remote_cred = self.dialog_manager.get_credentials(self.hop, self.remote_nameaddr.uri)
+    def set_local_credentials(self, cred):
+        self.local_cred = cred
         
 
     def setup_incoming(self, params):
@@ -96,7 +97,7 @@ class Dialog(object):
         self.hop = params["hop"]
         self.call_id = params["call_id"]
 
-        self.fetch_credentials()
+        #self.get_my_credentials()
         self.dialog_manager.dialog_established(self)
         
         
@@ -110,7 +111,7 @@ class Dialog(object):
         self.hop = hop or self.dialog_manager.get_hop(route[0].uri if route else to_uri)
         self.call_id = generate_call_id()
 
-        self.fetch_credentials()
+        #self.get_my_credentials()
 
 
     def setup_outgoing2(self, params):
@@ -151,7 +152,19 @@ class Dialog(object):
                 return
                 
             self.remote_sdp_session_version = sdp.origin.session_version
-    
+
+
+    def wipe_message(self, params):
+        new_params = params.copy()
+        # TODO: not nice
+        for x in ("is_response", "uri", "from", "to", "call_id", "cseq", "maxfwd", "contact", "hop"):
+            del new_params[x]
+            
+        # TODO: at all
+        del new_params["via"]
+        
+        return new_params
+
 
     def make_request(self, user_params, related_params=None):
         method = user_params["method"]
@@ -192,8 +205,14 @@ class Dialog(object):
         to_nameaddr = params["to"]
         to_tag = to_nameaddr.params.get("tag")
         call_id = params["call_id"]
+        cseq = params["cseq"]
         peer_contact = params.get("contact")
-        
+
+        if self.last_recved_cseq is not None and cseq < self.last_recved_cseq:
+            return None
+        else:
+            self.last_recved_cseq = cseq
+
         if self.call_id:
             local_tag = self.local_nameaddr.params["tag"]
             remote_tag = self.remote_nameaddr.params.get("tag")
@@ -244,10 +263,9 @@ class Dialog(object):
         return user_params  # Modified!
 
 
-    def take_response(self, params):
-        if "status" not in params:
-            raise Error("Not a response!")
-
+    def take_response(self, params, related_request):
+        status = params["status"]
+        
         from_nameaddr = params["from"]
         from_tag = from_nameaddr.params["tag"]
         to_nameaddr = params["to"]
@@ -269,11 +287,22 @@ class Dialog(object):
 
             if from_tag != local_tag:
                 raise Error("Mismatching local tag!")
-        else:
-            if not to_tag:
-                raise Error("Missing to tag!")
-
+        elif status.code < 300 and to_tag:
+            # Failure responses don't establish a dialog (including 401/407).
+            # Also, provisional responses may not have a to tag.
+            
             self.setup_outgoing2(params)
+        elif status.code == 401:
+            # Let's try authentication!
+            
+            if self.local_cred:
+                auth = self.dialog_manager.provide_auth(self.local_cred, params, related_request)
+                
+                if auth:
+                    new_request = self.wipe_message(related_request)
+                    new_request["authorization"] = auth
+                    self.send_request(new_request)  # FIXME: no report_response!
+                    return None
 
         if peer_contact:
             self.peer_contact = peer_contact
@@ -283,7 +312,7 @@ class Dialog(object):
         return params
 
 
-    def send_request(self, user_params, related_params=None, report=None):
+    def send_request(self, user_params, related_params=None, report_response=None):
         if user_params["method"] == "UNINVITE":
             self.uninvite(related_params)
         elif user_params["method"] == "CANCEL":
@@ -294,7 +323,7 @@ class Dialog(object):
             # Even 2xx ACKs are in-dialog
             params = self.make_request(user_params, related_params)
             
-        self.dialog_manager.transmit(params, related_params, WeakMethod(self.recv_response, report))
+        self.dialog_manager.transmit(params, related_params, WeakMethod(self.recv_response, report_response))
 
 
     def send_response(self, user_params, related_params=None):
@@ -305,19 +334,22 @@ class Dialog(object):
         
     def recv_request(self, msg):
         request = self.take_request(msg)
-        self.report_request(request)
+        if request:  # may have been denied
+            self.report_request(request)
     
     
-    def recv_response(self, msg, report):
-        response = self.take_response(msg)
-        report(response)
+    def recv_response(self, msg, related_request, bound_report):
+        response = self.take_response(msg, related_request)
+        if response:  # may have been retried
+            bound_report(response)
         
 
 class DialogManager(object):
-    def __init__(self, local_addr, transmission, hopping):
+    def __init__(self, local_addr, transmission, hopping, authing):
         self.local_addr = local_addr
         self.transmission = transmission
         self.hopping = hopping
+        self.authing = authing
         self.dialogs_by_id = WeakValueDictionary()
         
         
@@ -328,28 +360,15 @@ class DialogManager(object):
     def get_my_contact(self):
         return Nameaddr(Uri(self.local_addr))  # TODO: more flexible?
         
-
-    def get_credentials(self, remote_addr, remote_uri):
-        return None, None
-        
         
     def get_hop(self, uri):
         return self.hopping(uri)
-        
-
-    #def add_dialog(self, dialog):
-    #    self.dialogs.add(dialog)
-    #    #did = identify_dialog(dialog)
-    #    #self.dialogs_by_id[did] = dialog
-    #    print("Added dialog")
 
 
-    #def remove_dialog(self, dialog):
-    #    did = identify_dialog(dialog)
-    #    del self.dialogs_by_id[did]
-    #    print("Removed dialog %s" % (did,))
+    def provide_auth(self, cred, params, related_request):
+        return self.authing(cred, params, related_request)
         
-        
+
     def dialog_established(self, dialog):
         did = identify_dialog(dialog)
         self.dialogs_by_id[did] = dialog
@@ -373,5 +392,5 @@ class DialogManager(object):
         return None
         
         
-    def transmit(self, params, related_params=None, report=None):
-        self.transmission(params, related_params, report)
+    def transmit(self, params, related_params=None, report_response=None):
+        self.transmission(params, related_params, report_response)

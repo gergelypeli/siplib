@@ -2,7 +2,7 @@
 
 from __future__ import print_function, unicode_literals
 from pprint import pprint
-import weakref
+from weakref import proxy as Weak
 from datetime import timedelta, datetime
 import logging
 
@@ -14,6 +14,7 @@ from dialog import Dialog, DialogManager
 from leg import Leg, SipLeg, create_uninvited_leg
 from call import Call
 from sdp import Sdp
+from authority import Credentials, Authority
 
 local_addr = Addr("localhost", 5060)
 
@@ -44,6 +45,8 @@ m=audio 49170 RTP/AVP 0
 m=video 51372 RTP/AVP 99
 a=rtpmap:99 h263-1998/90000
 """)
+
+credentials = Credentials("REALM", "USERNAME", "HA1", None)
 
 
 class CalleeLeg(Leg):
@@ -132,12 +135,14 @@ class Transport(object):
 
 class Switch(object):
     def __init__(self, local_addr):
+        self.authority = Authority()
         self.transport = Transport(WeakMethod(self.reception))
         self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
         self.dialog_manager = DialogManager(
             local_addr,
             WeakMethod(self.transaction_manager.send_message),
-            WeakMethod(self.transport.get_hop)
+            WeakMethod(self.transport.get_hop),
+            WeakMethod(self.authority.provide_auth)
         )
 
     
@@ -147,12 +152,21 @@ class Switch(object):
             self.transaction_manager.send_message(response, msg)
 
 
+    def challenge_request(self, msg, www_auth):
+        if msg:
+            response = make_simple_response(msg, Status(401, "Hey"), "ROTFLMAO", www_auth)
+            self.transaction_manager.send_message(response, msg)
+
+
     def route(self, ctx):
         print("Routing: %s" % ctx)
 
         if ctx["to"].uri.user == "callee":
             if ctx.get("src_proto") == "TEST":
-                return SipLeg(Dialog(self.dialog_manager))
+                outgoing_dialog = Dialog(Weak(self.dialog_manager))
+                outgoing_dialog.set_local_credentials(credentials)  # FIXME
+                outgoing_leg = SipLeg(outgoing_dialog)
+                return outgoing_leg
             else:
                 return CalleeLeg()  # Callee display name going back?
                 
@@ -161,7 +175,7 @@ class Switch(object):
 
     def accept_invite(self, params):
         global call2
-        incoming_dialog = Dialog(self.dialog_manager)  # Weak?
+        incoming_dialog = Dialog(Weak(self.dialog_manager))
         incoming_leg = SipLeg(incoming_dialog)
         call2 = Call(WeakMethod(self.route))
         call2.add_leg(0, incoming_leg)
@@ -178,8 +192,15 @@ class Switch(object):
         matched = self.transaction_manager.match_incoming_message(params)
         if matched:
             return
-    
-        report = self.dialog_manager.match_incoming_request(params)
+
+        report = None
+        
+        www_auth = self.authority.need_auth(credentials, params)  # FIXME
+        if www_auth:
+            report = WeakMethod(self.challenge_request, www_auth)
+
+        if not report:
+            report = self.dialog_manager.match_incoming_request(params)
     
         if not report:
             if params["method"] == "INVITE" and "tag" not in params["to"].params:
