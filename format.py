@@ -158,6 +158,9 @@ def print_message(initial_line, params, body):
         field = k.replace("_", "-").title()
 
         if isinstance(v, list):
+            # Some header types cannot be joined into a comma separated list,
+            # such as the authorization ones, since they contain a comma themselves.
+            # So output separate headers always.
             header_lines.extend(["%s: %s" % (field, i) for i in v])
         else:
             header_lines.append("%s: %s" % (field, v))
@@ -174,7 +177,8 @@ def parse_message(msg):
     params = {
         "via": [],
         "route": [],
-        "record_route": []
+        "record_route": [],
+        "contact": []
     }
 
     while lines:
@@ -214,8 +218,10 @@ def print_structured_message(params):
     for field in mandatory_fields + other_fields:
         if params[field] is None:
             pass
-        elif field in ("from", "to", "contact", "www_authenticate", "authorization"):
+        elif field in ("from", "to", "www_authenticate", "authorization"):
             p[field] = params[field].print()
+        elif field in ("contact",):
+            p[field] = [ f.print() for f in params[field] ]
         elif field == "cseq":
             p[field] = "%d %s" % (params[field], params["method"])  # ACK? CANCEL?
         elif field == "via":
@@ -251,8 +257,10 @@ def parse_structured_message(msg):
         raise FormatError("Invalid message!")
 
     for field in params:
-        if field in ("from", "to", "contact"):
+        if field in ("from", "to"):
             p[field] = Nameaddr.parse(params[field])
+        elif field in ("contact",):
+            p[field] = [ Nameaddr.parse(s) for s in params[field] ]
         elif field in ("www_authenticate"):
             p[field] = WwwAuth.parse(params[field])
         elif field in ("authorization"):
@@ -273,7 +281,7 @@ def parse_structured_message(msg):
                 host, port, branch = m.group(1), int(m.group(3)) if m.group(3) else None, m.group(4)
                 return Via(Addr(host, port), branch)
 
-            p[field] = [do_one(s) for s in params[field]]
+            p[field] = [ do_one(s) for s in params[field] ]
         elif field not in META_HEADER_FIELDS:
             p[field] = params[field]
         else:
