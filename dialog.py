@@ -35,6 +35,10 @@ def generate_call_id():
     return uuid.uuid4().hex[:8]
 
 
+def first(x):
+    return x[0] if x else None
+    
+
 def identify_dialog(dialog):
     call_id = dialog.call_id
     local_tag = dialog.local_nameaddr.params.get("tag")
@@ -62,9 +66,9 @@ class Dialog(object):
         self.local_nameaddr = None
         self.remote_nameaddr = None
 
-        self.my_contact = []  # may depend on stuff
+        self.my_contact = None  # may depend on stuff
         # The peer's contact address, received in Contact, sent in RURI
-        self.peer_contact = []
+        self.peer_contact = None
 
         self.route = []
         self.hop = None
@@ -95,7 +99,7 @@ class Dialog(object):
         self.local_nameaddr = params["to"].tagged(generate_tag())
         self.remote_nameaddr = params["from"]
         self.my_contact = self.dialog_manager.get_my_contact()  # TODO: improve
-        self.peer_contact = params["contact"]
+        self.peer_contact = first(params["contact"])
         
         self.route = params["record_route"]
         self.hop = params["hop"]
@@ -108,7 +112,7 @@ class Dialog(object):
         self.local_nameaddr = Nameaddr(from_uri, from_name).tagged(generate_tag())
         self.remote_nameaddr = Nameaddr(to_uri)
         self.my_contact = self.dialog_manager.get_my_contact()  # TODO: improve
-        self.peer_contact = [ Nameaddr(to_uri) ]
+        self.peer_contact = Nameaddr(to_uri)
         
         self.route = route or []
         self.hop = hop or self.dialog_manager.get_hop(route[0].uri if route else to_uri)
@@ -117,7 +121,7 @@ class Dialog(object):
 
     def setup_outgoing2(self, params):
         self.remote_nameaddr = params["to"]
-        self.peer_contact = params["contact"]
+        self.peer_contact = first(params["contact"])
         self.route = reversed(params["record_route"])
         
         self.dialog_manager.dialog_established(self)
@@ -126,7 +130,7 @@ class Dialog(object):
     def uninvite(self, invite_params):
         self.local_nameaddr = invite_params["from"]
         self.remote_nameaddr = invite_params["to"]
-        self.peer_contact = [ Nameaddr(invite_params["uri"]) ]
+        self.peer_contact = Nameaddr(invite_params["uri"])
         self.call_id = invite_params["call_id"]
         self.last_sent_cseq = invite_params["cseq"]
 
@@ -167,7 +171,7 @@ class Dialog(object):
 
         dialog_params = {
             "is_response": False,
-            "uri": self.peer_contact[0].uri,
+            "uri": self.peer_contact.uri,
             "from": self.local_nameaddr,
             "to": self.remote_nameaddr,
             "call_id": self.call_id,
@@ -178,7 +182,7 @@ class Dialog(object):
         }
 
         if method == "INVITE":
-            dialog_params["contact"] = self.my_contact
+            dialog_params["contact"] = [ self.my_contact ]
 
         safe_update(user_params, dialog_params)
         self.make_sdp(user_params)
@@ -187,7 +191,7 @@ class Dialog(object):
 
 
     def take_request(self, params):
-        if "uri" not in params:
+        if params["is_response"]:
             raise Error("Not a request!")
 
         from_nameaddr = params["from"]
@@ -196,7 +200,7 @@ class Dialog(object):
         to_tag = to_nameaddr.params.get("tag")
         call_id = params["call_id"]
         cseq = params["cseq"]
-        peer_contact = params.get("contact")
+        peer_contact = first(params["contact"])
 
         if self.last_recved_cseq is not None and cseq < self.last_recved_cseq:
             return None
@@ -242,7 +246,7 @@ class Dialog(object):
         }
 
         if dialog_params["method"] == "INVITE":
-            dialog_params["contact"] = self.my_contact
+            dialog_params["contact"] = [ self.my_contact ]
 
         safe_update(user_params, dialog_params)
         self.make_sdp(user_params)
@@ -258,7 +262,7 @@ class Dialog(object):
         to_nameaddr = params["to"]
         to_tag = to_nameaddr.params.get("tag")
         call_id = params["call_id"]
-        peer_contact = params.get("contact")
+        peer_contact = first(params["contact"])
 
         if from_nameaddr != self.local_nameaddr:
             raise Error("Mismatching recipient!")
@@ -354,7 +358,7 @@ class DialogManager(object):
 
 
     def get_my_contact(self):
-        return [ Nameaddr(Uri(self.local_addr)) ]  # TODO: more flexible?
+        return Nameaddr(Uri(self.local_addr))  # TODO: more flexible?
         
         
     def get_hop(self, uri):
