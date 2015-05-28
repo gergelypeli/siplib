@@ -293,7 +293,7 @@ class Dialog(object):
                 user_params = related_request["user_params"]
                 related_request.clear()
                 related_request.update(user_params)
-                related_request["authorization"] = auth
+                related_request.update(auth)
                 
                 print("Trying authorization...")
                 self.send_request(related_request)

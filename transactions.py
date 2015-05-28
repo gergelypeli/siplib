@@ -76,8 +76,10 @@ def is_virtual_response(msg):
     return msg["status"].code == 0
     
     
-def make_simple_response(request, status, tag=None, www_auth=None):
-    return {
+def make_simple_response(request, status, others=None):
+    tag = "ROTFLMAO" if status.code > 100 else None
+    
+    params = {
         "is_response": True,
         "method": request["method"],
         "status": status,
@@ -85,9 +87,13 @@ def make_simple_response(request, status, tag=None, www_auth=None):
         "to": request["to"].tagged(tag),
         "call_id": request["call_id"],
         "cseq": request["cseq"],
-        "www_authenticate": www_auth,
         "hop": request["hop"]
     }
+    
+    if others:
+        params.update(others)
+        
+    return params
 
 
 def make_ack(request, tag):
@@ -105,7 +111,7 @@ def make_ack(request, tag):
 
 
 def make_timeout_response(request):
-    return make_simple_response(request, Status(408, "Request Timeout"), "ROTFLMAO")
+    return make_simple_response(request, Status(408, "Request Timeout"))
 
 
 def make_timeout_nak(response):
@@ -512,7 +518,7 @@ class TransactionManager(object):
                 invite_str.report_request(msg)
             else:
                 status = Status(481, "Transaction Does Not Exist")
-                cancel_response = make_simple_response(msg, status, "ROTFLMAO")
+                cancel_response = make_simple_response(msg, status)
                 tr.send(cancel_response)
                 
             return True

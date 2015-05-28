@@ -43,7 +43,7 @@ class Authority(object):
         def challenge():
             nonce = generate_nonce()
             self.nonces.add(nonce)
-            return WwwAuth(cred.realm, nonce)
+            return { 'www_authenticate': WwwAuth(cred.realm, nonce) }
             
         auth = params.get("authorization")
         if not auth:
@@ -99,4 +99,4 @@ class Authority(object):
         uri = request["uri"].print()
         response = digest(request["method"], uri, cred.ha1, nonce)
 
-        return Auth(realm, nonce, username, uri, response)
+        return { 'authorization': Auth(realm, nonce, username, uri, response) }

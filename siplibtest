@@ -148,13 +148,13 @@ class Switch(object):
     
     def reject_request(self, msg):
         if msg:
-            response = make_simple_response(msg, Status(400, "WTF"), "ROTFLMAO")
+            response = make_simple_response(msg, Status(400, "WTF"))
             self.transaction_manager.send_message(response, msg)
 
 
-    def challenge_request(self, msg, www_auth):
+    def challenge_request(self, msg, challenge):
         if msg:
-            response = make_simple_response(msg, Status(401, "Hey"), "ROTFLMAO", www_auth)
+            response = make_simple_response(msg, Status(401, "Hey"), challenge)
             self.transaction_manager.send_message(response, msg)
 
 
@@ -196,9 +196,9 @@ class Switch(object):
 
         report = None
         
-        www_auth = self.authority.need_auth(credentials, params)  # FIXME
-        if www_auth:
-            report = WeakMethod(self.challenge_request, www_auth)
+        challenge = self.authority.need_auth(credentials, params)  # FIXME
+        if challenge:
+            report = WeakMethod(self.challenge_request, challenge)
 
         if not report:
             report = self.dialog_manager.match_incoming_request(params)
