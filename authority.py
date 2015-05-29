@@ -22,10 +22,18 @@ def md5(x):
     return hashlib.md5(x).hexdigest()
     
 
-def digest(method, uri, ha1, nonce):
-    ha2 = md5("%s:%s" % (method, uri))
-    response = md5("%s:%s:%s" % (ha1, nonce, ha2))
-    return response
+def digest(method, uri, ha1, nonce, qop=None, cnonce=None, nc=None):
+    if not qop:
+        ha2 = md5("%s:%s" % (method, uri))
+        response = md5("%s:%s:%s" % (ha1, nonce, ha2))
+        return response
+    elif qop == "auth":
+        ha2 = md5("%s:%s" % (method, uri))
+        response = md5("%s:%s:%08x:%s:%s:%s" % (ha1, nonce, nc, cnonce, qop, ha2))
+        return response
+    else:
+        raise Exception("Don't know QOP %s!" % qop)
+        
 
 
 class Authority(object):
@@ -40,18 +48,16 @@ class Authority(object):
         if not cred:
             return None
 
-        def challenge():
+        def challenge(stale=False):
             nonce = generate_nonce()
-            self.nonces.add(nonce)
-            return { 'www_authenticate': WwwAuth(cred.realm, nonce) }
+            self.nonces.add(nonce)  # TODO: must clean these up
+            www = WwwAuth(cred.realm, nonce, stale=stale, qop=[ "auth" ])
+            return { 'www_authenticate': www }
             
         auth = params.get("authorization")
         if not auth:
             print("Authority: no Authorization header")
             return challenge()
-            
-        # auth: username, realm, nonce, uri, response
-        # cred: username, realm, nonce, ha1, hop
             
         if auth.username != cred.username:
             print("Authority: wrong username")
@@ -63,7 +69,7 @@ class Authority(object):
             
         if auth.nonce not in self.nonces:
             print("Authority: wrong nonce")
-            return challenge()
+            return challenge(True)
             
         if cred.hop and params["hop"] != cred.hop:
             print("Authority: wrong hop")
@@ -72,8 +78,24 @@ class Authority(object):
         if auth.uri != params["uri"].print():  # TODO: this can be more complex than this
             print("Authority: wrong uri")
             return challenge()
+
+        if auth.qop != "auth":
+            print("Authority: QOP is not auth!")
+            return challenge()
             
-        response = digest(params["method"], auth.uri, cred.ha1, auth.nonce)
+        if auth.algorithm not in (None, "MD5"):
+            print("Authority: digest algorithm not MD5!")
+            return challenge()
+            
+        if not auth.cnonce:
+            print("Authority: cnonce not set!")
+            return challenge()
+
+        if not auth.nc:
+            print("Authority: nc not set!")
+            return challenge()
+            
+        response = digest(params["method"], auth.uri, cred.ha1, auth.nonce, auth.qop, auth.cnonce, auth.nc)
         
         if auth.response != response:
             print("Authority: wrong response")
@@ -86,17 +108,30 @@ class Authority(object):
     def provide_auth(self, cred, response, request):
         if not cred:
             return None
-            
-        # We already tried, sorry! TODO: check for staleness!
-        if "authorization" in request:
-            return None
-            
+
         www_auth = response["www_authenticate"]
+            
+        if "authorization" in request and not www_auth.stale:
+            print("Already tried and not even stale, sorry!")
+            return None
+        
+        if "auth" not in www_auth.qop:
+            print("Digest QOP auth not available!")
+            return None
+        
+        if www_auth.algorithm not in (None, "MD5"):
+            print("Digest algorithm not MD5!")
+            return None
         
         realm = www_auth.realm
         nonce = www_auth.nonce
+        opaque = www_auth.opaque
         username = cred.username
         uri = request["uri"].print()
-        response = digest(request["method"], uri, cred.ha1, nonce)
+        qop = "auth"
+        cnonce = generate_nonce()
+        nc = 1  # we don't reuse server nonce-s
+        response = digest(request["method"], uri, cred.ha1, nonce, qop, cnonce, nc)
 
-        return { 'authorization': Auth(realm, nonce, username, uri, response) }
+        auth = Auth(realm, nonce, username, uri, response, opaque=opaque, qop=qop, cnonce=cnonce, nc=nc)
+        return { 'authorization':  auth }
