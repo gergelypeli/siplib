@@ -27,40 +27,101 @@ class Hop(object):
         )
 
 
+def must_match(pattern, s):
+    m = re.search(pattern, s)
+    if m:
+        return m.groups()
+    else:
+        raise Error("Not matched %r!" % pattern)
+
+
 def parse_digest_params(value):
-    m = re.search(r"^Digest\s+(.*)", value)
-    if not m:
-        return None
-        
+    rest, = must_match(r"^Digest\s+(.*)", value)
     items = {}
-    for x in m.group(1).split(","):
-        k, v = x.split("=", 1)
-        items[k] = v.strip('"')
+    
+    while True:
+        key, rest = must_match(r"^(\w+)=(.*)", rest)
+        
+        if rest.startswith('"'):
+            value, rest = must_match(r'^"(.*?)"(.*)', rest)
+        else:
+            value, rest = must_match(r'^([^,]*)(.*)', rest)
+            
+        items[key] = value
+        
+        if not rest:
+            break
+        
+        rest, = must_match("^,(.*)", rest)
         
     return items
 
 
-class WwwAuth(collections.namedtuple("WwwAuth", [ "realm", "nonce" ])):
-    def print(self):
-        return 'Digest realm="%s",nonce="%s"' % (self)
-        
-    @classmethod
-    def parse(cls, value):
-        items = parse_digest_params(value)
-        values = [ items[x] for x in cls._fields ]
-        return cls(*values)
-        
-    
-class Auth(collections.namedtuple("Auth", [ "realm", "nonce", "username", "uri", "response" ])):
+class WwwAuth(collections.namedtuple("WwwAuth",
+    [ "realm", "nonce", "domain", "opaque", "algorithm", "stale", "qop" ]
+)):
+    def __new__(cls, realm, nonce, domain=None, opaque=None, algorithm=None, stale=None, qop=None):
+        return super(WwwAuth, cls).__new__(cls, realm, nonce, domain, opaque, algorithm, stale, qop)
+
 
     def print(self):
-        return 'Digest realm="%s",nonce="%s",username="%s",uri="%s",response="%s"' % (self)
+        components = [
+            'realm="%s"' % self.realm if self.realm else None,
+            'nonce="%s"' % self.nonce if self.nonce else None,
+            'domain="%s"' % self.domain if self.domain else None,
+            'opaque="%s"' % self.opaque if self.opaque else None,
+            'algorithm=%s' % self.algorithm if self.algorithm else None,
+            'stale=true' if self.stale else None,
+            'qop="%s"' % ",".join(self.qop) if self.qop else None
+        ]
+        
+        return 'Digest %s' % ",".join(c for c in components if c)
+
         
     @classmethod
     def parse(cls, value):
         items = parse_digest_params(value)
-        values = [ items[x] for x in cls._fields ]
-        return cls(*values)
+        
+        if "stale" in items:
+            items["stale"] = True if items["stale"].lower() == "true" else False
+        if "qop" in items:
+            items["qop"] = items["qop"].split(",")
+            
+        return cls(**items)
+        
+    
+class Auth(collections.namedtuple("Auth",
+    [ "realm", "nonce", "username", "uri", "response", "opaque", "algorithm", "qop", "cnonce", "nc" ]
+)):
+    def __new__(cls, realm, nonce, username, uri, response, opaque=None, algorithm=None, qop=None, cnonce=None, nc=None):
+        return super(Auth, cls).__new__(cls, realm, nonce, username, uri, response, opaque, algorithm, qop, cnonce, nc)
+
+
+    def print(self):
+        components = [
+            'realm="%s"' % self.realm if self.realm else None,
+            'nonce="%s"' % self.nonce if self.nonce else None,
+            'username="%s"' % self.username if self.username else None,
+            'uri="%s"' % self.uri if self.uri else None,
+            'response="%s"' % self.response if self.response else None,
+            'opaque="%s"' % self.opaque if self.opaque else None,
+            'algorithm=%s' % self.algorithm if self.algorithm else None,
+            'qop=%s' % self.qop if self.qop else None,  # single token
+            'cnonce="%s"' % self.cnonce if self.cnonce else None,
+            'nc=%08x' % self.nc if self.nc is not None else None
+        ]
+    
+        return 'Digest %s' % ",".join(c for c in components if c)
+        
+
+    @classmethod
+    def parse(cls, value):
+        items = parse_digest_params(value)
+        
+        if "nc" in items:
+            items["nc"] = int(items["nc"], 16)
+            
+        return cls(**items)
 
 
 def parse_parts(parts):
