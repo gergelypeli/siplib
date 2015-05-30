@@ -34,91 +34,113 @@ class Authority(object):
         self.nonces = set()
 
 
-    def get_ha1(self, username):
+    def authenticate(self, hop, authname):
+        # return:
+        #   None - request authentication unconditionally
+        #   (authname, ha1) - check, and if wrong then request authentication
+        #   (authname, None) - accept without check
+        return ("anonymous", None)
+    
+    
+    def authorize(self, params, authname):
+        # return:
+        #   True - if authname can perform params
+        return True
+
+
+    def identify(self, uri):
+        # return:
+        #   (authname, ha1) - how to identify ourselves at uri
         return None
         
-        
-    def is_allowed(self, username, params):
-        return False
+
+    def challenge(self, stale=False):
+        nonce = generate_nonce()
+        self.nonces.add(nonce)  # TODO: must clean these up
+        www = WwwAuth(self.realm, nonce, stale=stale, qop=[ "auth" ])
+        return { 'www_authenticate': www }
         
 
-    def need_auth(self, params):
-        if params["method"] in ("CANCEL", "ACK"):
-            return None
-            
-        def challenge(stale=False):
-            nonce = generate_nonce()
-            self.nonces.add(nonce)  # TODO: must clean these up
-            www = WwwAuth(self.realm, nonce, stale=stale, qop=[ "auth" ])
-            return { 'www_authenticate': www }
-            
-        auth = params.get("authorization")
+    def required_digest_challenge(self, method, uri, auth, ha1):
         if not auth:
             print("Authority: no Authorization header!")
-            return challenge()
+            return self.challenge()
+
+        if not ha1:
+            print("Authority: unknown user!")
+            return self.challenge()
             
         if auth.realm != self.realm:
             print("Authority: wrong realm!")
-            return challenge()
+            return self.challenge()
             
         if auth.nonce not in self.nonces:
             print("Authority: wrong nonce!")
-            return challenge(True)
+            return self.challenge(True)
             
-        if auth.uri != params["uri"].print():  # TODO: this can be more complex than this
+        if auth.uri != uri:  # TODO: this can be more complex than this
             print("Authority: wrong uri")
-            return challenge()
+            return self.challenge()
 
         if auth.qop != "auth":
             print("Authority: QOP is not auth!")
-            return challenge()
+            return self.challenge()
             
         if auth.algorithm not in (None, "MD5"):
             print("Authority: digest algorithm not MD5!")
-            return challenge()
+            return self.challenge()
             
         if not auth.cnonce:
             print("Authority: cnonce not set!")
-            return challenge()
+            return self.challenge()
 
         if not auth.nc:
             print("Authority: nc not set!")
-            return challenge()
+            return self.challenge()
 
-        ha1 = self.get_ha1(auth.username)
-        if not ha1:
-            print("Authority: unknown username!")
-            return challenge()
-            
-        #if cred.hop and params["hop"] != cred.hop:
-        #    print("Authority: wrong hop")
-        #    return challenge()
-            
-        response = digest(params["method"], auth.uri, ha1, auth.nonce, auth.qop, auth.cnonce, auth.nc)
+        response = digest(method, uri, ha1, auth.nonce, auth.qop, auth.cnonce, auth.nc)
         
         if auth.response != response:
             print("Authority: wrong response!")
-            return challenge()
+            return self.challenge()
             
         self.nonces.remove(auth.nonce)
-        
-        if not self.is_allowed(auth.username, params):
-            print("Authority: user not authorized for this operation!")
-            return challenge()
-            
         return None
 
 
-    def provide_auth(self, username, response, request):
-        if not username:
+    def require_auth(self, params):
+        if params["method"] in ("CANCEL", "ACK"):
             return None
-
-        www_auth = response["www_authenticate"]
             
-        if "authorization" in request and not www_auth.stale:
-            print("Already tried and not even stale, sorry!")
-            return None
+        auth = params.get("authorization")
+        authname = auth.username if auth else None
         
+        # Identify peer by address or authname
+        info = self.authenticate(params["hop"], authname)
+        
+        if not info:
+            # No user or invalid user, come again
+            return self.challenge()
+            
+        authname, ha1 = info
+        if ha1:
+            # Correct password required
+            challenge = self.required_digest_challenge(params["method"], params["uri"].print(), auth, ha1)
+            
+            # Invalid password, come again
+            if challenge:
+                return challenge
+        
+        if not self.authorize(params, authname):
+            # No permission to perform this under this user, come again
+            return self.challenge()
+            
+        # Profit!
+        params["authname"] = authname
+        return None
+
+
+    def provided_digest_response(self, method, uri, www_auth, authname, ha1):
         if "auth" not in www_auth.qop:
             print("Digest QOP auth not available!")
             return None
@@ -130,13 +152,30 @@ class Authority(object):
         realm = www_auth.realm
         nonce = www_auth.nonce
         opaque = www_auth.opaque
-        uri = request["uri"].print()
         qop = "auth"
         cnonce = generate_nonce()
         nc = 1  # we don't reuse server nonce-s
-        ha1 = self.get_ha1(username)
         
-        response = digest(request["method"], uri, ha1, nonce, qop, cnonce, nc)
+        response = digest(method, uri, ha1, nonce, qop, cnonce, nc)
 
-        auth = Auth(realm, nonce, username, uri, response, opaque=opaque, qop=qop, cnonce=cnonce, nc=nc)
+        auth = Auth(realm, nonce, authname, uri, response, opaque=opaque, qop=qop, cnonce=cnonce, nc=nc)
         return { 'authorization':  auth }
+    
+    
+    def provide_auth(self, response, request):
+        www_auth = response.get("www_authenticate")
+        if not www_auth:
+            print("No known challenge found, sorry!")
+            return None
+            
+        if "authorization" in request and not www_auth.stale:
+            print("Already tried and not even stale, sorry!")
+            return None
+
+        info = self.identify(request["uri"])
+        if not info:
+            print("Can't identify myself, sorry!")
+            return None
+            
+        authname, ha1 = info
+        return self.provided_digest_response(request["method"], request["uri"].print(), www_auth, authname, ha1)
