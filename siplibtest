@@ -14,7 +14,7 @@ from dialog import Dialog, DialogManager
 from leg import Leg, SipLeg, create_uninvited_leg
 from call import Call
 from sdp import Sdp
-from authority import Credentials, Authority
+from authority import Authority
 
 local_addr = Addr("localhost", 5060)
 
@@ -45,8 +45,6 @@ m=audio 49170 RTP/AVP 0
 m=video 51372 RTP/AVP 99
 a=rtpmap:99 h263-1998/90000
 """)
-
-credentials = Credentials("REALM", "USERNAME", "HA1", None)
 
 
 class CalleeLeg(Leg):
@@ -133,9 +131,24 @@ class Transport(object):
         self.reception(msg)
 
 
+class TestAuthority(Authority):
+    def get_ha1(self, username):
+        if username == "USERNAME":
+            return "HA1"
+        else:
+            return None
+
+    
+    def is_allowed(self, username, params):
+        if username == "USERNAME":
+            return True
+        else:
+            return False
+        
+
 class Switch(object):
     def __init__(self, local_addr):
-        self.authority = Authority()
+        self.authority = TestAuthority("REALM")
         self.transport = Transport(WeakMethod(self.reception))
         self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
         self.dialog_manager = DialogManager(
@@ -164,7 +177,7 @@ class Switch(object):
         if ctx["to"].uri.user == "callee":
             if ctx.get("src_proto") == "TEST":
                 outgoing_dialog = Dialog(Weak(self.dialog_manager))
-                outgoing_dialog.set_local_credentials(credentials)  # FIXME
+                outgoing_dialog.set_local_username("USERNAME")  # FIXME
                 outgoing_leg = SipLeg(outgoing_dialog)
                 return outgoing_leg
             else:
@@ -176,7 +189,7 @@ class Switch(object):
     def accept_invite(self, params):
         global call2
         incoming_dialog = Dialog(Weak(self.dialog_manager))
-        incoming_dialog.set_local_credentials(credentials)  # FIXME
+        incoming_dialog.set_local_username("USERNAME")  # FIXME
         incoming_leg = SipLeg(incoming_dialog)
         call2 = Call(WeakMethod(self.route))
         call2.add_leg(0, incoming_leg)
@@ -196,7 +209,7 @@ class Switch(object):
 
         report = None
         
-        challenge = self.authority.need_auth(credentials, params)  # FIXME
+        challenge = self.authority.need_auth(params)  # FIXME
         if challenge:
             report = WeakMethod(self.challenge_request, challenge)
 

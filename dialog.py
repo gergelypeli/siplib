@@ -81,14 +81,16 @@ class Dialog(object):
         self.local_sdp_session_version = 0
         self.local_sdp_session_host = self.dialog_manager.get_local_addr()[0]
         self.remote_sdp_session_version = None
+        
+        self.local_username = None
 
 
     def set_report(self, report):
         self.report = report
 
 
-    def set_local_credentials(self, cred):
-        self.local_cred = cred
+    def set_local_username(self, username):
+        self.local_username = username
 
 
     def is_established(self):
@@ -284,7 +286,7 @@ class Dialog(object):
             
         if status.code == 401:
             # Let's try authentication! TODO: 407, too!
-            auth = self.dialog_manager.provide_auth(self.local_cred, params, related_request)
+            auth = self.dialog_manager.provide_auth(self.local_username, params, related_request)
                 
             if auth:
                 # Retrying this request is a bit tricky, because our owner must
@@ -365,8 +367,8 @@ class DialogManager(object):
         return self.hopping(uri)
 
 
-    def provide_auth(self, cred, params, related_request):
-        return self.authing(cred, params, related_request)
+    def provide_auth(self, username, params, related_request):
+        return self.authing(username, params, related_request)
         
 
     def dialog_established(self, dialog):

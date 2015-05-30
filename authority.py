@@ -6,14 +6,6 @@ import hashlib
 from format import Auth, WwwAuth
 
 
-class Credentials(object):
-    def __init__(self, realm, username, ha1, hop):
-        self.realm = realm
-        self.username = username
-        self.ha1 = ha1
-        self.hop = hop
-
-
 def generate_nonce():
     return uuid.uuid4().hex[:8]
 
@@ -37,43 +29,41 @@ def digest(method, uri, ha1, nonce, qop=None, cnonce=None, nc=None):
 
 
 class Authority(object):
-    def __init__(self):
+    def __init__(self, realm):
+        self.realm = realm
         self.nonces = set()
 
 
-    def need_auth(self, cred, params):
+    def get_ha1(self, username):
+        return None
+        
+        
+    def is_allowed(self, username, params):
+        return False
+        
+
+    def need_auth(self, params):
         if params["method"] in ("CANCEL", "ACK"):
             return None
             
-        if not cred:
-            return None
-
         def challenge(stale=False):
             nonce = generate_nonce()
             self.nonces.add(nonce)  # TODO: must clean these up
-            www = WwwAuth(cred.realm, nonce, stale=stale, qop=[ "auth" ])
+            www = WwwAuth(self.realm, nonce, stale=stale, qop=[ "auth" ])
             return { 'www_authenticate': www }
             
         auth = params.get("authorization")
         if not auth:
-            print("Authority: no Authorization header")
+            print("Authority: no Authorization header!")
             return challenge()
             
-        if auth.username != cred.username:
-            print("Authority: wrong username")
-            return challenge()
-            
-        if auth.realm != cred.realm:
-            print("Authority: wrong realm")
+        if auth.realm != self.realm:
+            print("Authority: wrong realm!")
             return challenge()
             
         if auth.nonce not in self.nonces:
-            print("Authority: wrong nonce")
+            print("Authority: wrong nonce!")
             return challenge(True)
-            
-        if cred.hop and params["hop"] != cred.hop:
-            print("Authority: wrong hop")
-            return challenge()
             
         if auth.uri != params["uri"].print():  # TODO: this can be more complex than this
             print("Authority: wrong uri")
@@ -94,19 +84,33 @@ class Authority(object):
         if not auth.nc:
             print("Authority: nc not set!")
             return challenge()
+
+        ha1 = self.get_ha1(auth.username)
+        if not ha1:
+            print("Authority: unknown username!")
+            return challenge()
             
-        response = digest(params["method"], auth.uri, cred.ha1, auth.nonce, auth.qop, auth.cnonce, auth.nc)
+        #if cred.hop and params["hop"] != cred.hop:
+        #    print("Authority: wrong hop")
+        #    return challenge()
+            
+        response = digest(params["method"], auth.uri, ha1, auth.nonce, auth.qop, auth.cnonce, auth.nc)
         
         if auth.response != response:
-            print("Authority: wrong response")
+            print("Authority: wrong response!")
             return challenge()
             
         self.nonces.remove(auth.nonce)
+        
+        if not self.is_allowed(auth.username, params):
+            print("Authority: user not authorized for this operation!")
+            return challenge()
+            
         return None
 
 
-    def provide_auth(self, cred, response, request):
-        if not cred:
+    def provide_auth(self, username, response, request):
+        if not username:
             return None
 
         www_auth = response["www_authenticate"]
@@ -126,12 +130,13 @@ class Authority(object):
         realm = www_auth.realm
         nonce = www_auth.nonce
         opaque = www_auth.opaque
-        username = cred.username
         uri = request["uri"].print()
         qop = "auth"
         cnonce = generate_nonce()
         nc = 1  # we don't reuse server nonce-s
-        response = digest(request["method"], uri, cred.ha1, nonce, qop, cnonce, nc)
+        ha1 = self.get_ha1(username)
+        
+        response = digest(request["method"], uri, ha1, nonce, qop, cnonce, nc)
 
         auth = Auth(realm, nonce, username, uri, response, opaque=opaque, qop=qop, cnonce=cnonce, nc=nc)
         return { 'authorization':  auth }
