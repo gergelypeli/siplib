@@ -31,56 +31,44 @@ def generate_call_id():
     return uuid.uuid4().hex[:8]
 
 
-class Dialog(object):
-    def __init__(self, dialog_manager, registrar, register_to, register_by, register_at, hop=None):
-        self.dialog_manager = dialog_manager
-        self.report = None
+def generate_tag():
+    return uuid.uuid4().hex[:8]
 
-        self.registrar_uri = registrar
-    
-        # Things in the From/To fields
-        self.register_to_nameaddr = register_to
-        self.register_by_nameaddr = register_by
-        self.register_at_nameaddr = register_at
 
-        self.call_id = generate_call_id()
-        self.last_sent_cseq = 0
+class Record(object):
+    def __init__(self, record_manager, record_uri):
+        self.record_manager = record_manager
+        self.record_uri = record_uri
+
+        self.call_id = None
+        self.cseq = None
         
-        self.last_recved_call_id = None
-        self.last_recved_cseq = None
-
-        self.hop = hop or self.dialog_manager.get_hop(registrar)
+        self.expirations_by_contact_uri = {}
 
 
-    def set_report(self, report):
-        self.report = report
+    def process_updates(self, params):
+        # TODO: check authname!
+        now = datetime.datetime.now()
+
+        for contact_nameaddr in params["contact"]:
+            expires = contact_nameaddr.params.get("expires", params.get("expires"))
+                
+            uri = contact_nameaddr.uri.print()
+            seconds_left = int(expires) if expires is not None else 3600
+            expiration = now + datetime.timedelta(seconds=seconds_left)
+            
+            self.expirations_by_contact_uri[uri] = expiration
+            print("Registered %s to %s for %s seconds." % (uri, self.record_uri, expiration))
+        
+        contact = []
+        for uri, expiration in self.expirations_by_contact_uri.items():
+            seconds_left = int((expiration - now).total_seconds())
+            uri = Uri.parse(uri)
+            contact.append(Nameaddr(uri=uri, params=dict(expires=seconds_left)))
+
+        self.send_response(dict(status=Status(200, "OK"), contact=contact), params)
 
 
-    def set_local_credentials(self, cred):
-        self.local_cred = cred
-
-
-    def make_request(self, user_params):
-        self.last_sent_cseq += 1
-        cseq = self.last_sent_cseq
-
-        dialog_params = {
-            "is_response": False,
-            "uri": self.registrar_uri,
-            "from": self.register_by_nameaddr,
-            "to": self.register_to_nameaddr,
-            "contact": [ self.register_at_nameaddr ],
-            "call_id": self.call_id,
-            "cseq": cseq,
-            "maxfwd": MAXFWD,
-            "authorization": auth,
-            "hop": self.hop
-        }
-
-        return safe_update(user_params, dialog_params)
-
-
-    # TODO: the Record takes it
     def take_request(self, params):
         if params["is_response"]:
             raise Error("Not a request!")
@@ -88,25 +76,130 @@ class Dialog(object):
         call_id = params["call_id"]
         cseq = params["cseq"]
 
-        if call_id == self.last_recved_call_id and cseq < self.last_recved_cseq:
+        if call_id == self.call_id and cseq <= self.cseq:
+            self.send_response(dict(status=Status(400, "Whatever")), params)
             return None
 
-        self.last_recved_call_id = call_id
-        self.last_recved_cseq = cseq
+        self.call_id = call_id
+        self.cseq = cseq
+
+        if not params["contact"]:
+            self.send_response(dict(status=Status(400, "Whatever")), params)
+            return None
         
         return params
 
 
-    # TODO: the Record makes it
     def make_response(self, user_params, related_request):
         dialog_params = {
             "is_response": True,
             "from": related_request["from"],
-            "to": related_request["to"],
+            "to": related_request["to"].tagged(generate_tag()),
             "call_id": related_request["call_id"],
             "cseq": related_request["cseq"],
             "method": related_request["method"],
             "hop": related_request["hop"]
+        }
+
+        return safe_update(user_params, dialog_params)
+
+
+    def send_response(self, user_params, related_request):
+        print("Will send response: %s" % str(user_params))
+        params = self.make_response(user_params, related_request)
+        self.record_manager.transmit(params, related_request)
+        
+        
+    def recv_request(self, msg):
+        params = self.take_request(msg)
+        if params:
+            self.process_updates(params)
+
+
+class RecordManager(object):
+    def __init__(self, transmission):
+        self.transmission = transmission
+        self.records_by_id = {}
+        
+        
+    def match_incoming_request(self, params):
+        if params["method"] != "REGISTER":
+            raise Error("RecordManager has nothing to do with this!")
+            
+        uri = params["to"].uri
+        id = uri.print()
+        record = self.records_by_id.get(id)
+        
+        if record:
+            print("Found record: %s" % id)
+        else:
+            print("Created record: %s" % id)
+            record = Record(Weak(self), uri)
+            self.records_by_id[id] = record
+            
+        return WeakMethod(record.recv_request)
+        
+        
+    def transmit(self, params, related_params=None, report_response=None):
+        self.transmission(params, related_params, report_response)
+
+    
+    
+class Registration(object):
+    def __init__(self, registration_manager, registrar_uri, record_uri, contact_uri, hop=None):
+        self.registration_manager = registration_manager
+
+        self.registrar_uri = registrar_uri
+        self.record_uri = record_uri
+        self.contact_uri = contact_uri
+        
+        self.hop = hop or self.registration_manager.get_hop(registrar_uri)
+        self.local_tag = generate_tag()  # make it persistent just for the sake of safety
+        self.call_id = generate_call_id()
+        self.cseq = 0
+        
+        
+    def update(self):
+        user_params = {
+            'method': "REGISTER",
+            'uri': self.registrar_uri,
+            'from': Nameaddr(self.record_uri).tagged(self.local_tag),
+            'to': Nameaddr(self.record_uri),
+            'contact': [ Nameaddr(self.contact_uri, params=dict(expires=300)) ]
+        }
+        
+        self.send_request(user_params)
+        
+        
+    def process(self, params):
+        total = []
+
+        for contact_nameaddr in params["contact"]:
+            expires = contact_nameaddr.params.get("expires", params.get("expires"))
+                
+            uri = contact_nameaddr.uri
+            seconds_left = int(expires)
+            
+            total.append((uri, seconds_left))
+
+        print("Registration total: %s" % total)
+        # TODO: reschedule!
+        
+        
+    def make_request(self, user_params):
+        self.cseq += 1
+
+        dialog_params = {
+            "is_response": False,
+            #"uri": self.registrar_uri,
+            #"from": user_params["from"],
+            #"to": user_params["to"],
+            #"contact": user_params["contact"],
+            "call_id": self.call_id,
+            "cseq": self.cseq,
+            "maxfwd": MAXFWD,
+            "hop": self.hop,
+            "user_params": user_params.copy()
         }
 
         return safe_update(user_params, dialog_params)
@@ -117,12 +210,17 @@ class Dialog(object):
         
         if status.code == 401:
             # Let's try authentication! TODO: 407, too!
-            auth = self.dialog_manager.provide_auth(self.local_cred, params, related_request)
+            auth = self.registration_manager.provide_auth(params, related_request)
                 
             if auth:
+                user_params = related_request["user_params"]
+                related_request.clear()
+                related_request.update(user_params)
+                related_request.update(auth)
+                
                 print("Trying authorization...")
-                user_params = dict(method=related_request["method"], authorization=auth)
-                self.send_request(user_params)
+                print("... with: %s" % related_request)
+                self.send_request(related_request)
                 return None
             else:
                 print("Couldn't authorize, being rejected!")
@@ -132,57 +230,37 @@ class Dialog(object):
 
     def send_request(self, user_params):
         params = self.make_request(user_params)
-            
-        self.dialog_manager.transmit(params, None, WeakMethod(self.recv_response))
+        self.registration_manager.transmit(params, None, WeakMethod(self.recv_response))
 
 
-    # TODO: the Record
-    def send_response(self, user_params, related_request):
-        print("Will send response: %s" % str(user_params))
-        params = self.make_response(user_params, related_request)
-        self.dialog_manager.transmit(params, related_request)
-        
-        
-    # TODO: the Record
-    def recv_request(self, msg):
-        request = self.take_request(msg)
-        if request:  # may have been denied
-            self.report(request)
-    
-    
     def recv_response(self, msg, related_request):
-        response = self.take_response(msg, related_request)
-        if response:  # may have been retried
-            self.report(response)
+        params = self.take_response(msg, related_request)
+        if params:  # may have been retried
+            self.process(params)
 
 
-class DialogManager(object):
+class RegistrationManager(object):
     def __init__(self, transmission, hopping, authing):
         self.transmission = transmission
         self.hopping = hopping
         self.authing = authing
-        self.dialogs_by_id = WeakValueDictionary()  # weak? id?
+        self.registrations_by_id = {}
         
         
     def get_hop(self, uri):
         return self.hopping(uri)
 
 
-    def provide_auth(self, cred, params, related_request):
-        return self.authing(cred, params, related_request)
+    def provide_auth(self, params, related_request):
+        return self.authing(params, related_request)
         
 
-    def match_incoming_request(self, params):
-        did = params["to"]
-        dialog = self.dialogs_by_id.get(did)
-        
-        if dialog:
-            print("Found dialog: %s" % (did,))
-            return WeakMethod(dialog.recv_request)
-
-        #print("No dialog %s" % (did,))
-        return None
-        
-        
     def transmit(self, params, related_params=None, report_response=None):
         self.transmission(params, related_params, report_response)
+
+
+    def start_registration(self, registrar_uri, record_uri, contact_uri, hop=None):
+        id = (registrar_uri.print(), record_uri.print())
+        registration = Registration(Weak(self), registrar_uri, record_uri, contact_uri, hop)
+        self.registrations_by_id[id] = registration
+        registration.update()

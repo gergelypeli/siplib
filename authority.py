@@ -42,12 +42,6 @@ class Authority(object):
         return ("anonymous", None)
     
     
-    def authorize(self, params, authname):
-        # return:
-        #   True - if authname can perform params
-        return True
-
-
     def identify(self, uri):
         # return:
         #   (authname, ha1) - how to identify ourselves at uri
@@ -131,10 +125,6 @@ class Authority(object):
             if challenge:
                 return challenge
         
-        if not self.authorize(params, authname):
-            # No permission to perform this under this user, come again
-            return self.challenge()
-            
         # Profit!
         params["authname"] = authname
         return None

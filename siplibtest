@@ -15,6 +15,7 @@ from leg import Leg, SipLeg, create_uninvited_leg
 from call import Call
 from sdp import Sdp
 from authority import Authority
+from registrar import RegistrationManager, RecordManager
 
 local_addr = Addr("localhost", 5060)
 
@@ -22,6 +23,7 @@ caller_uri = Uri(local_addr, "caller")
 caller_name = "Caller"
 caller_nameaddr = Nameaddr(caller_uri, caller_name)
 
+callee_registrar = Uri(local_addr)
 callee_uri = Uri(local_addr, "callee")
 callee_name = "Callee"
 callee_nameaddr = Nameaddr(callee_uri, callee_name)
@@ -145,9 +147,15 @@ class TestAuthority(Authority):
 
 class Switch(object):
     def __init__(self, local_addr):
-        self.authority = TestAuthority("REALM")
         self.transport = Transport(WeakMethod(self.reception))
         self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
+        self.record_manager = RecordManager(WeakMethod(self.transaction_manager.send_message))
+        self.authority = TestAuthority("REALM")  # will need the record_manager
+        self.registration_manager = RegistrationManager(
+            WeakMethod(self.transaction_manager.send_message),
+            WeakMethod(self.transport.get_hop),
+            WeakMethod(self.authority.provide_auth)
+        )
         self.dialog_manager = DialogManager(
             local_addr,
             WeakMethod(self.transaction_manager.send_message),
@@ -204,9 +212,13 @@ class Switch(object):
 
         report = None
         
-        challenge = self.authority.require_auth(params)  # FIXME
+        challenge = self.authority.require_auth(params)
         if challenge:
             report = WeakMethod(self.challenge_request, challenge)
+            
+        if not report:
+            if params["method"] == "REGISTER":
+                report = self.record_manager.match_incoming_request(params)
 
         if not report:
             report = self.dialog_manager.match_incoming_request(params)
@@ -225,10 +237,12 @@ class Switch(object):
         global call1
         print("Testing begins.")
 
-        incoming_leg = CallerLeg()
-        call1 = Call(WeakMethod(self.route))
-        call1.add_leg(0, incoming_leg)
-        incoming_leg.dial()
+        self.registration_manager.start_registration(callee_registrar, callee_uri, wrong_uri)
+
+        #incoming_leg = CallerLeg()
+        #call1 = Call(WeakMethod(self.route))
+        #call1.add_leg(0, incoming_leg)
+        #incoming_leg.dial()
 
 
 switch = Switch(local_addr)
