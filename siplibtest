@@ -134,14 +134,11 @@ class Transport(object):
 
 
 class TestAuthority(Authority):
-    def authenticate(self, hop, authname):
-        if authname == "AUTHNAME":
-            return (authname, "HA1")
-        else:
-            return None
+    def authenticate(self, params):
+        return self.check_digest_authname_ha1(params, "AUTHNAME", "HA1")
             
             
-    def identify(self, uri):
+    def identify(self, params):
         return ("AUTHNAME", "HA1")
         
 

@@ -219,7 +219,7 @@ class Registration(object):
                 related_request.update(auth)
                 
                 print("Trying authorization...")
-                print("... with: %s" % related_request)
+                #print("... with: %s" % related_request)
                 self.send_request(related_request)
                 return None
             else:
