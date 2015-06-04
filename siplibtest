@@ -49,29 +49,33 @@ a=rtpmap:99 h263-1998/90000
 """)
 
 
+def sleep(secs, method):
+    metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
+
+
 class CalleeLeg(Leg):
-    def sleep(self, secs, method):
-        metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
+    #def sleep(self, secs, method):
+    #    metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
 
 
     def do(self, action):
         if action["type"] == "dial":
             self.offer = action.get("sdp")
             print("Got offer:\n%s" % repr(self.offer))
-            self.sleep(1, self.ringing)
+            sleep(1, self.ringing)
         elif action["type"] == "hangup":
             print("The caller hung up.")
 
         
     def ringing(self):
         self.report(dict(type="ring"))
-        self.sleep(1, self.answering)
+        sleep(1, self.answering)
 
 
     def answering(self):
         answer = self.make_answer(self.offer)
         self.report(dict(type="answer", sdp=answer))  # TODO: rename to accept?
-        self.sleep(1, self.hanging)
+        sleep(1, self.hanging)
         
         
     def hanging(self):
@@ -83,8 +87,8 @@ class CalleeLeg(Leg):
 
 
 class CallerLeg(Leg):
-    def sleep(self, secs, method):
-        metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
+    #def sleep(self, secs, method):
+    #    metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
 
 
     def dial(self):
@@ -134,7 +138,19 @@ class Transport(object):
 
 
 class TestAuthority(Authority):
+    def __init__(self, realm, record_manager):
+        super(TestAuthority, self).__init__(realm)
+        
+        self.record_manager = record_manager
+        
+
     def authenticate(self, params):
+        from_uri = params["from"].uri
+        
+        if self.record_manager.lookup_contact_uris(from_uri):
+            print("Trusting registered user '%s'" % (from_uri,))
+            return True
+        
         return self.check_digest_authname_ha1(params, "AUTHNAME", "HA1")
             
             
@@ -147,7 +163,7 @@ class Switch(object):
         self.transport = Transport(WeakMethod(self.reception))
         self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
         self.record_manager = RecordManager(WeakMethod(self.transaction_manager.send_message))
-        self.authority = TestAuthority("REALM")  # will need the record_manager
+        self.authority = TestAuthority("REALM", Weak(self.record_manager))
         self.registration_manager = RegistrationManager(
             WeakMethod(self.transaction_manager.send_message),
             WeakMethod(self.transport.get_hop),
@@ -176,14 +192,18 @@ class Switch(object):
     def route(self, ctx):
         print("Routing: %s" % ctx)
 
-        if ctx["to"].uri.user == "callee":
-            if ctx.get("src_proto") == "TEST":
+        if ctx.get("src_proto") == "TEST":
+            contacts = self.record_manager.lookup_contact_uris(ctx["to"].uri)
+            
+            if contacts:
+                ctx["to"] = Nameaddr(contacts[0])
                 outgoing_dialog = Dialog(Weak(self.dialog_manager))
                 outgoing_leg = SipLeg(outgoing_dialog)
                 return outgoing_leg
-            else:
+        else:
+            if ctx["to"].uri.user == "callee":
                 return CalleeLeg()  # Callee display name going back?
-                
+
         return None
         
 
@@ -196,6 +216,24 @@ class Switch(object):
         return WeakMethod(incoming_dialog.recv_request)
 
 
+    def process_request(self, params):
+        challenge = self.authority.require_auth(params)
+        if challenge:
+            return WeakMethod(self.challenge_request, challenge)
+
+        if params["method"] == "REGISTER":
+            return self.record_manager.match_incoming_request(params)
+
+        report = self.dialog_manager.match_incoming_request(params)
+        if report:
+            return report
+    
+        if params["method"] == "INVITE" and "tag" not in params["to"].params:
+            return self.accept_invite(params)
+    
+        return WeakMethod(self.reject_request)
+        
+
     def reception(self, params):
         #print("Got message from transport.")
         #print("Req params: %s" % req_params)
@@ -203,43 +241,27 @@ class Switch(object):
         if uninvite_params:
             create_uninvited_leg(uninvite_params)
     
-        processed = self.transaction_manager.match_incoming_message(params)
-        if processed:
+        if self.transaction_manager.match_incoming_message(params):
             return
 
-        report = None
-        
-        challenge = self.authority.require_auth(params)
-        if challenge:
-            report = WeakMethod(self.challenge_request, challenge)
-            
-        if not report:
-            if params["method"] == "REGISTER":
-                report = self.record_manager.match_incoming_request(params)
-
-        if not report:
-            report = self.dialog_manager.match_incoming_request(params)
-    
-        if not report:
-            if params["method"] == "INVITE" and "tag" not in params["to"].params:
-                report = self.accept_invite(params)
-    
-        if not report:
-            report = WeakMethod(self.reject_request)
+        report = self.process_request(params)
         
         self.transaction_manager.create_incoming_request(params, report)
 
 
     def testing(self):
-        global call1
         print("Testing begins.")
 
-        self.registration_manager.start_registration(callee_registrar, callee_uri, wrong_uri)
+        self.registration_manager.start_registration(callee_registrar, callee_uri, callee_uri)
+        sleep(1, self.testing1)
 
-        #incoming_leg = CallerLeg()
-        #call1 = Call(WeakMethod(self.route))
-        #call1.add_leg(0, incoming_leg)
-        #incoming_leg.dial()
+
+    def testing1(self):
+        global call1
+        incoming_leg = CallerLeg()
+        call1 = Call(WeakMethod(self.route))
+        call1.add_leg(0, incoming_leg)
+        incoming_leg.dial()
 
 
 switch = Switch(local_addr)

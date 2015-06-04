@@ -117,6 +117,7 @@ class Authority(object):
             auth.stale = False  # temporary attribute
             
         ok = self.authenticate(params)
+        print("Authenticated: %s" % ok)
         if ok:
             return None
             

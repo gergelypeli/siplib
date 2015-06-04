@@ -146,6 +146,12 @@ class Uri(collections.namedtuple("Uri", "addr user params")):
         return super(Uri, cls).__new__(cls, addr, user, params or {})
 
 
+    def __hash__(self):
+        # It's unlikely that two URIs differ only in parameters, but even in
+        # that case the equality will sort that out, hashing is only a speedup.
+        return hash((self.addr, self.user))
+        
+
     def print(self):
         host, port = self.addr
         hostport = "%s:%d" % (host, port) if port else host

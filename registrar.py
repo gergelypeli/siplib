@@ -143,6 +143,15 @@ class RecordManager(object):
     def transmit(self, params, related_params=None, report_response=None):
         self.transmission(params, related_params, report_response)
 
+
+    def lookup_contact_uris(self, record_uri):
+        id = record_uri.print()
+        record = self.records_by_id.get(id)
+        
+        if record:
+            return [ Uri.parse(uri) for uri in record.expirations_by_contact_uri ]
+        else:
+            return None
     
     
 class Registration(object):
