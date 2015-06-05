@@ -3,6 +3,7 @@ from __future__ import print_function, unicode_literals, absolute_import
 from pprint import pprint, pformat
 import uuid
 import datetime
+import collections
 from weakref import proxy as Weak, WeakValueDictionary
 
 import format
@@ -35,6 +36,9 @@ def generate_tag():
     return uuid.uuid4().hex[:8]
 
 
+RecordContact = collections.namedtuple("RecordContact", [ "expiration", "hop" ])
+
+
 class Record(object):
     def __init__(self, record_manager, record_uri):
         self.record_manager = record_manager
@@ -43,8 +47,16 @@ class Record(object):
         self.call_id = None
         self.cseq = None
         
-        self.expirations_by_contact_uri = {}
+        self.contacts_by_uri = {}
 
+
+    def get_contact_uris(self):
+        return self.contacts_by_uri.keys()
+        
+
+    def get_contact_hops(self):
+        return [ c.hop for c in self.contacts_by_uri.values() ]
+        
 
     def process_updates(self, params):
         # TODO: check authname!
@@ -53,17 +65,17 @@ class Record(object):
         for contact_nameaddr in params["contact"]:
             expires = contact_nameaddr.params.get("expires", params.get("expires"))
                 
-            uri = contact_nameaddr.uri.print()
+            uri = contact_nameaddr.uri
             seconds_left = int(expires) if expires is not None else 3600
             expiration = now + datetime.timedelta(seconds=seconds_left)
+            hop = params["hop"]
             
-            self.expirations_by_contact_uri[uri] = expiration
-            print("Registered %s to %s for %s seconds." % (uri, self.record_uri, expiration))
+            self.contacts_by_uri[uri] = RecordContact(expiration, hop)
+            print("Registered %s to %s via %s until %s." % (uri, self.record_uri, hop, expiration))
         
         contact = []
-        for uri, expiration in self.expirations_by_contact_uri.items():
-            seconds_left = int((expiration - now).total_seconds())
-            uri = Uri.parse(uri)
+        for uri, c in self.contacts_by_uri.items():
+            seconds_left = int((c.expiration - now).total_seconds())
             contact.append(Nameaddr(uri=uri, params=dict(expires=seconds_left)))
 
         self.send_response(dict(status=Status(200, "OK"), contact=contact), params)
@@ -119,23 +131,22 @@ class Record(object):
 class RecordManager(object):
     def __init__(self, transmission):
         self.transmission = transmission
-        self.records_by_id = {}
+        self.records_by_uri = {}
         
         
     def match_incoming_request(self, params):
         if params["method"] != "REGISTER":
-            raise Error("RecordManager has nothing to do with this!")
+            raise Error("RecordManager has nothing to do with this request!")
             
         uri = params["to"].uri
-        id = uri.print()
-        record = self.records_by_id.get(id)
+        record = self.records_by_uri.get(uri)
         
         if record:
-            print("Found record: %s" % id)
+            print("Found record: %s" % (uri,))
         else:
-            print("Created record: %s" % id)
+            print("Created record: %s" % (uri,))
             record = Record(Weak(self), uri)
-            self.records_by_id[id] = record
+            self.records_by_uri[uri] = record
             
         return WeakMethod(record.recv_request)
         
@@ -145,15 +156,17 @@ class RecordManager(object):
 
 
     def lookup_contact_uris(self, record_uri):
-        id = record_uri.print()
-        record = self.records_by_id.get(id)
+        record = self.records_by_uri.get(record_uri)
         
-        if record:
-            return [ Uri.parse(uri) for uri in record.expirations_by_contact_uri ]
-        else:
-            return None
-    
-    
+        return record.get_contact_uris() if record else []
+
+
+    def lookup_contact_hops(self, record_uri):
+        record = self.records_by_uri.get(record_uri)
+        
+        return record.get_contact_hops() if record else []
+
+
 class Registration(object):
     def __init__(self, registration_manager, registrar_uri, record_uri, contact_uri, hop=None):
         self.registration_manager = registration_manager

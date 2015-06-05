@@ -17,18 +17,21 @@ from sdp import Sdp
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
 
-local_addr = Addr("localhost", 5060)
+#local_addr = Addr("localhost", 5060)
+a_addr = Addr("a.net", 5060)
+b_addr = Addr("b.net", 5060)
 
-caller_uri = Uri(local_addr, "caller")
+a_registrar = Uri(a_addr)
+
+caller_uri = Uri(a_addr, "caller")
 caller_name = "Caller"
 caller_nameaddr = Nameaddr(caller_uri, caller_name)
 
-callee_registrar = Uri(local_addr)
-callee_uri = Uri(local_addr, "callee")
+callee_uri = Uri(b_addr, "callee")
 callee_name = "Callee"
 callee_nameaddr = Nameaddr(callee_uri, callee_name)
 
-wrong_uri = Uri(local_addr, "wrong")
+#wrong_uri = Uri(local_addr, "wrong")
 
 caller_audio_addr = ("localhost", 10000)
 caller_video_addr = ("localhost", 10001)
@@ -110,30 +113,41 @@ class CallerLeg(Leg):
 
 
 class Transport(object):
-    def __init__(self, reception):
+    def __init__(self, local_addr, reception):
         self.reception = reception
+        self.transmission = None
+        self.hop = Hop(local_addr=local_addr, remote_addr=None, iface="virt")
+        
+        
+    def set_peer(self, peer):
+        self.transmission = WeakMethod(peer.process)
+        self.hop = Hop(local_addr=self.hop.local_addr, remote_addr=peer.hop.local_addr, iface=self.hop.iface)
+        
         
     def get_hop(self, uri):
         # FIXME: cheating!
-        return Hop(local_addr=("a", 10000), remote_addr=("b", 20000), iface="eth0")
+        #return Hop(local_addr=("a", 10000), remote_addr=("b", 20000), iface="eth0")
+        return self.hop
         
         
     def send(self, msg):
-        hop = msg["hop"]
+        if msg["hop"] != self.hop:
+            print("This transport can't send this!")
+            return
+        
         sip = print_structured_message(msg)
-        print("Transport sending by %s:" % (hop,))
+        print("Transport sending by %s:" % (self.hop,))
         print("\n" + "\n".join("  %s" % line for line in sip.split("\n")))
         
-        poh = Hop(local_addr=hop.remote_addr, remote_addr=hop.local_addr, iface=hop.iface)
-        metapoll.register_timeout(timedelta(), WeakMethod(self.process, sip, poh))
-        #self.process(sip)
+        #poh = Hop(local_addr=hop.remote_addr, remote_addr=hop.local_addr, iface=hop.iface)
+        metapoll.register_timeout(timedelta(), self.transmission.rebind(sip))
 
 
-    def process(self, sip, hop):
+    def process(self, sip):
         #print("Transport receiving:")
         #print(s)
         msg = parse_structured_message(sip)
-        msg["hop"] = hop  # TODO: 2 transports!
+        msg["hop"] = self.hop
         self.reception(msg)
 
 
@@ -142,25 +156,41 @@ class TestAuthority(Authority):
         super(TestAuthority, self).__init__(realm)
         
         self.record_manager = record_manager
+        self.users = {}
+        self.myuser = None
+        
+        
+    def adduser(self, authname, ha1):
+        self.users[authname] = ha1
+        
+        
+    def setuser(self, authname, ha1):
+        self.myuser = (authname, ha1)
         
 
     def authenticate(self, params):
+        method = params["method"]
         from_uri = params["from"].uri
+        hop = params["hop"]
         
-        if self.record_manager.lookup_contact_uris(from_uri):
+        if method != "REGISTER" and hop in self.record_manager.lookup_contact_hops(from_uri):
             print("Trusting registered user '%s'" % (from_uri,))
             return True
         
-        return self.check_digest_authname_ha1(params, "AUTHNAME", "HA1")
+        authname = self.get_digest_authname(params)
+        if authname in self.users:
+            return self.check_digest_ha1(params, self.users[authname])
+            
+        return False
             
             
     def identify(self, params):
-        return ("AUTHNAME", "HA1")
+        return self.myuser
         
 
 class Switch(object):
     def __init__(self, local_addr):
-        self.transport = Transport(WeakMethod(self.reception))
+        self.transport = Transport(local_addr, WeakMethod(self.reception))
         self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
         self.record_manager = RecordManager(WeakMethod(self.transaction_manager.send_message))
         self.authority = TestAuthority("REALM", Weak(self.record_manager))
@@ -200,19 +230,22 @@ class Switch(object):
                 outgoing_dialog = Dialog(Weak(self.dialog_manager))
                 outgoing_leg = SipLeg(outgoing_dialog)
                 return outgoing_leg
+            else:
+                print("Can't route TEST to SIP, no registered client!")
         else:
             if ctx["to"].uri.user == "callee":
                 return CalleeLeg()  # Callee display name going back?
+            else:
+                print("Can't route SIP to TEST, no such callee!")
 
         return None
         
 
     def accept_invite(self, params):
-        global call2
         incoming_dialog = Dialog(Weak(self.dialog_manager))
         incoming_leg = SipLeg(incoming_dialog)
-        call2 = Call(WeakMethod(self.route))
-        call2.add_leg(0, incoming_leg)
+        self.call = Call(WeakMethod(self.route))
+        self.call.add_leg(0, incoming_leg)
         return WeakMethod(incoming_dialog.recv_request)
 
 
@@ -249,27 +282,43 @@ class Switch(object):
         self.transaction_manager.create_incoming_request(params, report)
 
 
-    def testing(self):
-        print("Testing begins.")
+class SwitchA(Switch):
+    def test_dialing(self):
+        print("Dialing begins.")
 
-        self.registration_manager.start_registration(callee_registrar, callee_uri, callee_uri)
-        sleep(1, self.testing1)
-
-
-    def testing1(self):
-        global call1
         incoming_leg = CallerLeg()
-        call1 = Call(WeakMethod(self.route))
-        call1.add_leg(0, incoming_leg)
+        self.call = Call(WeakMethod(self.route))
+        self.call.add_leg(0, incoming_leg)
         incoming_leg.dial()
+    
 
+class SwitchB(Switch):
+    def test_registering(self):
+        print("Registering begins.")
 
-switch = Switch(local_addr)
+        self.registration_manager.start_registration(a_registrar, callee_uri, callee_uri)
+        #sleep(1, self.testing1)
+    
 
 logging.basicConfig(level=logging.DEBUG)
+
+switch_a = SwitchA(a_addr)
+switch_b = SwitchB(b_addr)
+
+switch_a.transport.set_peer(switch_b.transport)
+switch_b.transport.set_peer(switch_a.transport)
+
+switch_a.authority.adduser("CALLEE_AUTHNAME", "CALLEE_HA1")
+switch_b.authority.setuser("CALLEE_AUTHNAME", "CALLEE_HA1")
+switch_a.authority.setuser("CALLER_AUTHNAME", "CALLER_HA1")
+switch_b.authority.adduser("CALLER_AUTHNAME", "CALLER_HA1")
+
 metapoll = Metapoll()
-metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(switch.transaction_manager.maintenance), repeat=True)
-metapoll.register_timeout(timedelta(seconds=1), WeakMethod(switch.testing))
+metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(switch_a.transaction_manager.maintenance), repeat=True)
+metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(switch_b.transaction_manager.maintenance), repeat=True)
+
+metapoll.register_timeout(timedelta(seconds=1), WeakMethod(switch_b.test_registering))
+metapoll.register_timeout(timedelta(seconds=2), WeakMethod(switch_a.test_dialing))
 
 while True:
     try:

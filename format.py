@@ -25,6 +25,10 @@ class Hop(object):
         return "Hop(local_addr=%r, remote_addr=%r, iface=%r)" % (
             self.local_addr, self.remote_addr, self.iface
         )
+        
+    
+    def __str__(self):
+        return "%s:%d >-(%s)-> %s:%d" % (self.local_addr + (self.iface,) + self.remote_addr)
 
 
 def must_match(pattern, s):
