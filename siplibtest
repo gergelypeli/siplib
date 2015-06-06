@@ -33,6 +33,9 @@ callee_nameaddr = Nameaddr(callee_uri, callee_name)
 
 #wrong_uri = Uri(local_addr, "wrong")
 
+caller_cred = ("CALLER_AUTHNAME", "CALLER_HA1")
+callee_cred = ("CALLEE_AUTHNAME", "CALLEE_HA1")
+
 caller_audio_addr = ("localhost", 10000)
 caller_video_addr = ("localhost", 10001)
 
@@ -189,11 +192,12 @@ class TestAuthority(Authority):
         
 
 class Switch(object):
-    def __init__(self, local_addr):
+    def __init__(self, metapoll, local_addr, realm):
+        self.metapoll = metapoll
         self.transport = Transport(local_addr, WeakMethod(self.reception))
         self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
         self.record_manager = RecordManager(WeakMethod(self.transaction_manager.send_message))
-        self.authority = TestAuthority("REALM", Weak(self.record_manager))
+        self.authority = TestAuthority(realm, Weak(self.record_manager))
         self.registration_manager = RegistrationManager(
             WeakMethod(self.transaction_manager.send_message),
             WeakMethod(self.transport.get_hop),
@@ -205,6 +209,8 @@ class Switch(object):
             WeakMethod(self.transport.get_hop),
             WeakMethod(self.authority.provide_auth)
         )
+
+        metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
 
     
     def reject_request(self, msg):
@@ -219,26 +225,23 @@ class Switch(object):
             self.transaction_manager.send_message(response, msg)
 
 
-    def route(self, ctx):
-        print("Routing: %s" % ctx)
-
-        if ctx.get("src_proto") == "TEST":
-            contacts = self.record_manager.lookup_contact_uris(ctx["to"].uri)
+    def route_to_registered_sip_contact(self, ctx):
+        to_uri = ctx["to"].uri
+        print("Checking registered SIP contact: %s" % (to_uri,))
+        contacts = self.record_manager.lookup_contact_uris(to_uri)
             
-            if contacts:
-                ctx["to"] = Nameaddr(contacts[0])
-                outgoing_dialog = Dialog(Weak(self.dialog_manager))
-                outgoing_leg = SipLeg(outgoing_dialog)
-                return outgoing_leg
-            else:
-                print("Can't route TEST to SIP, no registered client!")
+        if contacts:
+            ctx["to"] = Nameaddr(contacts[0])
+            outgoing_dialog = Dialog(Weak(self.dialog_manager))
+            outgoing_leg = SipLeg(outgoing_dialog)
+            return outgoing_leg
         else:
-            if ctx["to"].uri.user == "callee":
-                return CalleeLeg()  # Callee display name going back?
-            else:
-                print("Can't route SIP to TEST, no such callee!")
+            print("No such registered SIP contact: %s" % (to_uri,))
+            return None
+        
 
-        return None
+    def route(self, ctx):
+        return self.route_to_registered_sip_contact(ctx)
         
 
     def accept_invite(self, params):
@@ -283,6 +286,15 @@ class Switch(object):
 
 
 class SwitchA(Switch):
+    def __init__(self, metapoll, *args):
+        super(SwitchA, self).__init__(metapoll, *args)
+        
+        self.authority.setuser(*caller_cred)
+        self.authority.adduser(*callee_cred)
+
+        metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_dialing))
+        
+        
     def test_dialing(self):
         print("Dialing begins.")
 
@@ -293,6 +305,24 @@ class SwitchA(Switch):
     
 
 class SwitchB(Switch):
+    def __init__(self, metapoll, *args):
+        super(SwitchB, self).__init__(metapoll, *args)
+        
+        self.authority.setuser(*callee_cred)
+        self.authority.adduser(*caller_cred)
+
+        metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
+
+
+    def route(self, ctx):
+        to_uri = ctx["to"].uri
+        
+        if to_uri.user == "callee":
+            return CalleeLeg()
+            
+        return super(SwitchB, self).route(ctx)
+        
+        
     def test_registering(self):
         print("Registering begins.")
 
@@ -301,24 +331,13 @@ class SwitchB(Switch):
     
 
 logging.basicConfig(level=logging.DEBUG)
+metapoll = Metapoll()
 
-switch_a = SwitchA(a_addr)
-switch_b = SwitchB(b_addr)
+switch_a = SwitchA(metapoll, a_addr, "A-NET")
+switch_b = SwitchB(metapoll, b_addr, "B-NET")
 
 switch_a.transport.set_peer(switch_b.transport)
 switch_b.transport.set_peer(switch_a.transport)
-
-switch_a.authority.adduser("CALLEE_AUTHNAME", "CALLEE_HA1")
-switch_b.authority.setuser("CALLEE_AUTHNAME", "CALLEE_HA1")
-switch_a.authority.setuser("CALLER_AUTHNAME", "CALLER_HA1")
-switch_b.authority.adduser("CALLER_AUTHNAME", "CALLER_HA1")
-
-metapoll = Metapoll()
-metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(switch_a.transaction_manager.maintenance), repeat=True)
-metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(switch_b.transaction_manager.maintenance), repeat=True)
-
-metapoll.register_timeout(timedelta(seconds=1), WeakMethod(switch_b.test_registering))
-metapoll.register_timeout(timedelta(seconds=2), WeakMethod(switch_a.test_dialing))
 
 while True:
     try:

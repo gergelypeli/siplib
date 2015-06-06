@@ -145,15 +145,19 @@ def print_params(params):
     return [ "%s=%s" % (k, v) if v is not True else k for k, v in params.items() if v]
 
 
-class Uri(collections.namedtuple("Uri", "addr user params")):
-    def __new__(cls, addr, user=None, params=None):
-        return super(Uri, cls).__new__(cls, addr, user, params or {})
+class Uri(collections.namedtuple("Uri", "addr user schema params")):
+    def __new__(cls, addr, user=None, schema=None, params=None):
+        return super(Uri, cls).__new__(cls, addr, user, schema or "sip", params or {})
 
 
     def __hash__(self):
         # It's unlikely that two URIs differ only in parameters, but even in
         # that case the equality will sort that out, hashing is only a speedup.
-        return hash((self.addr, self.user))
+        return hash((self.addr, self.user, self.schema))
+        
+        
+    def __str__(self):
+        return self.print()
         
 
     def print(self):
@@ -162,23 +166,22 @@ class Uri(collections.namedtuple("Uri", "addr user params")):
         userhostport = "%s@%s" % (self.user, hostport) if self.user else hostport
         params = print_params(self.params)
 
-        return "sip:" + ";".join([userhostport] + params)
+        return self.schema + ":" + ";".join([userhostport] + params)
 
 
     @classmethod
     def parse(cls, uri):
         parts = uri.split(";")
-        m = re.search("^sip:(([\\w.+-]+)@)?([\\w.-]+)(:(\\d+))?$", parts[0])
+        m = re.search("^(\\w+):(([\\w.+-]+)@)?([\\w.-]+)(:(\\d+))?$", parts[0])
         if not m:
             raise FormatError("Invalid SIP URI: %r" % uri)
 
-        user = m.group(2)
-        host = m.group(3)
-        port = int(m.group(5)) if m.group(5) else None
+        schema, x, user, host, y, port = m.groups()
+        port = int(port) if port else None
 
         params = parse_parts(parts[1:])
 
-        return cls(Addr(host, port), user, params)
+        return cls(Addr(host, port), user, schema, params)
 
 
 class Nameaddr(collections.namedtuple("Nameaddr", "uri name params")):
