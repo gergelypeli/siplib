@@ -62,6 +62,7 @@ class Record(object):
         # TODO: check authname!
         now = datetime.datetime.now()
 
+        # No contact is valid for just fetching the registrations
         for contact_nameaddr in params["contact"]:
             expires = contact_nameaddr.params.get("expires", params.get("expires"))
                 
@@ -95,10 +96,6 @@ class Record(object):
         self.call_id = call_id
         self.cseq = cseq
 
-        if not params["contact"]:
-            self.send_response(dict(status=Status(400, "Whatever")), params)
-            return None
-        
         return params
 
 
@@ -139,8 +136,10 @@ class RecordManager(object):
             raise Error("RecordManager has nothing to do with this request!")
             
         uri = params["to"].uri
+        if uri.schema != "sip":
+            return WeakMethod(self.reject_request, Status(404, "Not found"))
+            
         record = self.records_by_uri.get(uri)
-        
         if record:
             print("Found record: %s" % (uri,))
         else:
@@ -153,6 +152,12 @@ class RecordManager(object):
         
     def transmit(self, params, related_params=None, report_response=None):
         self.transmission(params, related_params, report_response)
+
+
+    def reject_request(self, msg, status):
+        if msg:
+            response = make_simple_response(msg, status)
+            self.transmission(response, msg)
 
 
     def lookup_contact_uris(self, record_uri):

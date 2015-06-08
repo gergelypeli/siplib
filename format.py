@@ -163,22 +163,33 @@ class Uri(collections.namedtuple("Uri", "addr user schema params")):
     def print(self):
         host, port = self.addr
         hostport = "%s:%d" % (host, port) if port else host
-        userhostport = "%s@%s" % (self.user, hostport) if self.user else hostport
-        params = print_params(self.params)
+        parts = [ hostport ] + print_params(self.params)
+        rest = ";".join(parts)
+        rest = "%s@%s" % (self.user, rest) if self.user else rest
+        uri = "%s:%s" % (self.schema, rest)
 
-        return self.schema + ":" + ";".join([userhostport] + params)
+        return uri
 
 
     @classmethod
     def parse(cls, uri):
-        parts = uri.split(";")
-        m = re.search("^(\\w+):(([\\w.+-]+)@)?([\\w.-]+)(:(\\d+))?$", parts[0])
-        if not m:
-            raise FormatError("Invalid SIP URI: %r" % uri)
-
-        schema, x, user, host, y, port = m.groups()
-        port = int(port) if port else None
-
+        schema, rest = uri.split(':', 1)
+        
+        if "@" in rest:
+            user, rest = rest.split('@', 1)
+        else:
+            user = None
+            
+        # TODO: split password from user!
+        parts = rest.split(";")
+        
+        if ":" in parts[0]:
+            host, port = parts[0].split(':', 1)
+            port = int(port)
+        else:
+            host = part[0]
+            port = None
+        
         params = parse_parts(parts[1:])
 
         return cls(Addr(host, port), user, schema, params)

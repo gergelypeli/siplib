@@ -98,7 +98,6 @@ class CallerLeg(Leg):
 
 
     def dial(self):
-        self.ctx["src_proto"] = "TEST"
         self.ctx["from"] = Nameaddr(caller_uri, caller_name)
         self.ctx["to"] = Nameaddr(callee_uri)
         self.report(dict(type="dial", ctx=self.ctx, sdp=caller_sdp))
@@ -197,7 +196,7 @@ class Switch(object):
         self.transport = Transport(local_addr, WeakMethod(self.reception))
         self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
         self.record_manager = RecordManager(WeakMethod(self.transaction_manager.send_message))
-        self.authority = TestAuthority(realm, Weak(self.record_manager))
+        self.authority = TestAuthority(realm, Weak(self.record_manager))  # TODO: domain2realm!
         self.registration_manager = RegistrationManager(
             WeakMethod(self.transaction_manager.send_message),
             WeakMethod(self.transport.get_hop),
@@ -213,9 +212,9 @@ class Switch(object):
         metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
 
     
-    def reject_request(self, msg):
+    def reject_request(self, msg, status):
         if msg:
-            response = make_simple_response(msg, Status(400, "WTF"))
+            response = make_simple_response(msg, status)
             self.transaction_manager.send_message(response, msg)
 
 
@@ -253,6 +252,9 @@ class Switch(object):
 
 
     def process_request(self, params):
+        if params["uri"].schema != "sip":
+            WeakMethod(self.reject_request, Status(404, "Not found"))
+            
         challenge = self.authority.require_auth(params)
         if challenge:
             return WeakMethod(self.challenge_request, challenge)
@@ -267,7 +269,7 @@ class Switch(object):
         if params["method"] == "INVITE" and "tag" not in params["to"].params:
             return self.accept_invite(params)
     
-        return WeakMethod(self.reject_request)
+        return WeakMethod(self.reject_request, Status(400, "Bad request"))
         
 
     def reception(self, params):

@@ -103,7 +103,6 @@ class SipLeg(Leg):
                     "to": msg["to"]
                 })
                 
-                # TODO: create leg context!
                 self.pending_received_message = msg
                 self.report(dict(type="dial", ctx=self.ctx, sdp=msg.get("sdp")))
                 self.state = self.DIALING_IN
