@@ -60,10 +60,11 @@ def sleep(secs, method):
 
 
 class CalleeLeg(Leg):
-    #def sleep(self, secs, method):
-    #    metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
-
-
+    def __init__(self):
+        super(CalleeLeg, self).__init__()
+        
+        self.rtp_socket = socket.socket()
+        
     def do(self, action):
         if action["type"] == "dial":
             self.offer = action.get("sdp")
@@ -93,10 +94,6 @@ class CalleeLeg(Leg):
 
 
 class CallerLeg(Leg):
-    #def sleep(self, secs, method):
-    #    metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
-
-
     def dial(self):
         self.ctx["from"] = Nameaddr(caller_uri, caller_name)
         self.ctx["to"] = Nameaddr(callee_uri)
