@@ -72,6 +72,7 @@ class Leg(object):
         self.index = index
         self.context = context
         self.send_pts_by_format = None
+        self.recv_formats_by_pt = None
         
         self.name = "%s/%d" % (self.context.name, self.index)
         print("Created %s leg %s" % (type, self.name))
@@ -84,10 +85,20 @@ class Leg(object):
     def set(self, params):
         if "send_formats" in params:
             self.send_pts_by_format = revdict(parse_formats(params["send_formats"]))
+            
+        if "recv_formats" in params:
+            self.recv_formats_by_pt = parse_formats(params["recv_formats"])
 
 
-    def forward(self, packet):
-        self.context.forward(self.index, packet)
+    def recv_format(self, packet):
+        pt = get_payload_type(packet)
+        
+        try:
+            format = self.recv_formats_by_pt[pt]
+        except KeyError:
+            raise Error("Ignoring unknown payload type %d" % pt)
+            
+        self.context.forward(self.index, format, packet)
 
 
     def send(self, packet):
@@ -107,7 +118,7 @@ class Leg(object):
 
 class NetLeg(Leg):
     def __init__(self, index, context):
-        super().__init__("net", index, context)
+        super(NetLeg, self).__init__("net", index, context)
         self.local_addr = None
         self.remote_addr = None
         self.socket = None
@@ -119,14 +130,14 @@ class NetLeg(Leg):
             
         
     def set(self, params):
-        super().set(params)
+        super(NetLeg, self).set(params)
             
         if "local_host" in params and "local_port" in params:
             try:
                 self.local_addr = (params["local_host"], int(params["local_port"]))
                 self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 self.socket.bind(self.local_addr)
-                self.context.manager.register(self.socket.fileno(), WeakMethod(self.readable))
+                self.context.manager.register(self.socket.fileno(), WeakMethod(self.recv))
             except Exception as e:
                 raise Error("Couldn't set leg: %s" % e)
         elif "local_host" in params or "local_port" in params:
@@ -136,7 +147,7 @@ class NetLeg(Leg):
             self.remote_addr = (params["remote_host"], None)
     
     
-    def readable(self):
+    def recv(self):
         print("Receiving on %s" % self.name)
         packet, addr = self.socket.recvfrom(65535)
         if self.remote_addr and self.remote_addr[0] != addr[0]:
@@ -146,7 +157,7 @@ class NetLeg(Leg):
             self.context.detected(self.index, addr)
             self.remote_addr = addr
             
-        self.forward(packet)
+        self.recv_format(packet)
     
     
     def send(self, packet):
@@ -159,23 +170,23 @@ class NetLeg(Leg):
 
 class EchoLeg(Leg):
     def __init__(self, index, context):
-        super().__init__("echo", index, context)
+        super(EchoLeg, self).__init__("echo", index, context)
 
 
     def send(self, packet):
         print("Echoing on %s" % self.name)
-        self.forward(packet)
+        self.recv_format(packet)
 
 
 class Context(object):
     def __init__(self, name, params, manager):
-        if "recv_formats" not in params:
-            raise Error("Incomplete create context params: %s" % params)
+        #if "recv_formats" not in params:
+        #    raise Error("Incomplete create context params: %s" % params)
             
         self.manager = manager
         self.legs = []
         self.name = name
-        self.recv_formats_by_pt = parse_formats(params["recv_formats"])
+        #self.recv_formats_by_pt = parse_formats(params["recv_formats"])
         print("Created context %s" % self.name)
         
         
@@ -213,20 +224,13 @@ class Context(object):
         self.manager.detected(self.name, incoming_index, remote_addr)
         
     
-    def forward(self, incoming_index, packet):
+    def forward(self, incoming_index, format, packet):
         outgoing_index = (1 if incoming_index == 0 else 0)
         try:
             leg = self.legs[outgoing_index]
         except IndexError:
             raise Error("No outgoing leg!")
 
-        pt = get_payload_type(packet)
-        
-        try:
-            format = self.recv_formats_by_pt[pt]
-        except KeyError:
-            raise Error("Ignoring unknown payload type %d" % pt)
-            
         print("Forwarding in %s a %s from %d to %d" % (self.name, format, incoming_index, outgoing_index))
         
         leg.send_format(format, packet)
@@ -354,22 +358,24 @@ class Controller(object):
     def recv_request(self, mid, message):
         params = parse_msg(message)
         name = params["ctx"]
-        cc = self.context_callbacks[name]
+        cc = self.context_callbacks.get(name)
         if cc:
             cc(mid, params)
         
         
-    def create_context(self, name, recv_formats, callback=None, context_callback=None):
+    def create_context(self, name, callback=None, context_callback=None):
         self.context_callbacks[name] = context_callback
         
         params = collections.OrderedDict()
         params["ctx"] = name
         params["request"] = "create"
-        params["recv_formats"] = print_formats(recv_formats)
+        #params["recv_formats"] = print_formats(recv_formats)
         self.send_request(params, callback)
         
         
-    def modify_context(self, name, leg, type=None, local_host=None, local_port=None, remote_host=None, send_formats=None, callback=None):
+    def modify_context(self, name, leg, type=None,
+            local_host=None, local_port=None, remote_host=None,
+            recv_formats=None, send_formats=None, callback=None):
         params = collections.OrderedDict()
         params["ctx"] = name
         params["request"] = "modify"
@@ -387,6 +393,9 @@ class Controller(object):
         if remote_host:
             params["remote_host"] = remote_host
             
+        if recv_formats:
+            params["recv_formats"] = print_formats(recv_formats)
+
         if send_formats:
             params["send_formats"] = print_formats(send_formats)
             

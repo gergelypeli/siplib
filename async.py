@@ -163,12 +163,12 @@ class Metapoll(object):
             if soonest_deadline <= now:
                 timeout = 0
             else:
-                timeout = (soonest_deadline - now).total_seconds()
+                timeout = (soonest_deadline - now).total_seconds() * 1000 + 1  # Must round up
 
         #logging.debug("Readers: %r" % self.readers_by_fd)
         #logging.debug("Writers: %r" % self.writers_by_fd)
         #logging.debug("Timeout: %s" % timeout)
-        events = self.poll.poll(timeout * 1000 + 1)  # Must round up
+        events = self.poll.poll(timeout)
         #logging.debug("Events: %r" % events)
 
         for fd, event in events:

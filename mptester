@@ -21,10 +21,6 @@ def loop_a_bit():
         metapoll.do_poll()
 
 
-def receiving_callback(type, payload):
-    print("Received RTP %d: %r" % (type, payload))
-    
-
 @coroutine
 def receiving_generator(self, pattern):
     print("Receiving started!")
@@ -48,9 +44,9 @@ dst = mp.Rtp(metapoll, (HOST, 20002), (HOST, 10002), WeakMethod(dst_rcv.send))
 def context_callback(mid, params):
     print("Got context event: %r" % params)
 
-ctl.create_context(CTX, recv_formats=FORMATS, context_callback=context_callback)
-ctl.modify_context(CTX, 0, type="net", local_host=HOST, local_port=10001, send_formats=FORMATS)
-ctl.modify_context(CTX, 1, type="net", local_host=HOST, local_port=10002, send_formats=FORMATS)
+ctl.create_context(CTX, context_callback=context_callback)
+ctl.modify_context(CTX, 0, type="net", local_host=HOST, local_port=10001, recv_formats=FORMATS, send_formats=FORMATS)
+ctl.modify_context(CTX, 1, type="net", local_host=HOST, local_port=10002, recv_formats=FORMATS, send_formats=FORMATS)
 
 src.send(8, "xxx1")
 loop_a_bit()
