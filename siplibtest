@@ -63,7 +63,7 @@ class CalleeLeg(Leg):
     def __init__(self):
         super(CalleeLeg, self).__init__()
         
-        self.rtp_socket = socket.socket()
+        #self.rtp_socket = socket.socket()
         
     def do(self, action):
         if action["type"] == "dial":
