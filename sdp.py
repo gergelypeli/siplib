@@ -231,7 +231,16 @@ class Channel(object):
                 self.attributes.append(x)
 
 
-class Sdp(object):
+class EmptySdp(object):
+    def is_empty(self):
+        return True
+        
+        
+    def is_session(self):
+        return False
+        
+
+class Sdp(EmptySdp):
     def __init__(self, origin, bandwidth, attributes, channels):
         # v ignored
         self.origin = origin
@@ -249,6 +258,14 @@ class Sdp(object):
             self.origin, self.bandwidth, self.attributes, self.channels
         )
 
+
+    def is_empty(self):
+        return False
+        
+        
+    def is_session(self):
+        return True
+        
 
     def print(self):
         directions = set(c.direction for c in self.channels)

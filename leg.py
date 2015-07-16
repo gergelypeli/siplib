@@ -20,14 +20,108 @@ class Leg(object):
         raise NotImplementedError()
 
 
-class InviteState(object):
-    PROVISIONAL_SESSION_NONE = "PROVISIONAL_SESSION_NONE"
-    PROVISIONAL_SESSION_UNRELIABLE = "PROVISIONAL_SESSION_UNRELIABLE"
-    PROVISIONAL_SESSION_RELIABLE = "PROVISIONAL_SESSION_RELIABLE"
+class Session(object):  # TODO: this is a reimplementation from call.py!
+    def __init__(self):
+        self.local_sdp = None
+        self.remote_sdp = None
+        self.pending_local_sdp = None
+        self.pending_remote_sdp = None
+        
+        
+    def set_local_offer(self, sdp):
+        if sdp is None:
+            raise Error("No SDP specified!")
+        elif self.pending_local_sdp:
+            raise Error("Outgoing offer already pending!")
+        elif self.pending_remote_sdp:
+            raise Error("Incoming offer also pending!")
+        else:
+            self.pending_local_sdp = sdp
 
+
+    def set_remote_offer(self, sdp):
+        if sdp is None:
+            raise Error("No SDP specified!")
+        elif self.pending_local_sdp:
+            raise Error("Outgoing offer also pending!")
+        elif self.pending_remote_sdp:
+            raise Error("Incoming offer already pending!")
+        else:
+            self.pending_remote_sdp = sdp
+            
+            
+    def set_local_answer(self, sdp):
+        if sdp is None:
+            raise Error("No SDP specified!")
+        elif not self.pending_remote_sdp:
+            raise Error("Incoming offer not pending!")
+        else:
+            # empty is rejection
+            if not sdp.is_empty():
+                self.remote_sdp = self.pending_remote_sdp
+                self.local_sdp = sdp
+                
+            self.pending_remote_sdp = None
+
+
+    def set_remote_answer(self, sdp):
+        if sdp is None:
+            raise Error("No SDP specified!")
+        elif not self.pending_local_sdp:
+            raise Error("Outgoing offer not pending!")
+        else:
+            # empty is rejection
+            if not sdp.is_empty():
+                self.local_sdp = self.pending_local_sdp
+                self.remote_sdp = sdp
+                
+            self.pending_local_sdp = None
+
+
+    def get_local_offer(self):
+        if self.pending_local_sdp:
+            return self.pending_local_sdp
+        else:
+            raise Error("Outgoing offer not pending!")
+        
+        
+    def get_remote_offer(self):
+        if self.pending_remote_sdp:
+            return self.pending_remote_sdp
+        else:
+            raise Error("Incoming offer not pending!")
+            
+            
+    def get_local_answer(self):
+        if self.pending_local_sdp:
+            raise Error("Outgoing offer is pending!")
+        elif self.pending_remote_sdp:
+            raise Error("Incoming offer still pending!")
+        elif not self.local_sdp:
+            raise Error("No outgoing answer yet!")
+        else:
+            return self.local_sdp
+
+
+    def get_remote_answer(self):
+        if self.pending_local_sdp:
+            raise Error("Outgoing offer still pending!")
+        elif self.pending_remote_sdp:
+            raise Error("Incoming offer is pending!")
+        elif not self.remote_sdp:
+            raise Error("No incoming answer yet!")
+        else:
+            return self.remote_sdp
+
+
+class InviteState(object):
     def __init__(self, request):
         self.request = request
-        self.provisional_session = self.PROVISIONAL_SESSION_NONE
+        sdp = request.get("sdp")
+        self.has_offer_in_request = (sdp and sdp.is_session())
+        self.responded_session = None
+        self.rpr_session_done = False
+        self.final_response = None
 
 
 class SipLeg(Leg):
@@ -37,6 +131,7 @@ class SipLeg(Leg):
     DIALING_IN_RINGING = "DIALING_IN_RINGING"
     DIALING_OUT_RINGING = "DIALING_OUT_RINGING"
     DIALING_IN_ANSWERED = "DIALING_IN_ANSWERED"
+    DIALING_OUT_ANSWERED = "DIALING_OUT_ANSWERED"
     UP = "UP"
     DISCONNECTING_OUT = "DISCONNECTING_OUT"
     
@@ -46,9 +141,7 @@ class SipLeg(Leg):
         self.state = self.DOWN
         self.dialog = dialog
         self.invite_state = None
-        #self.received_invite = None  # TODO: rethink these!
-        #self.sent_invite = None
-        #self.provisional_session = self.PROVISIONAL_SESSION_NONE
+        self.session = Session()
         
         self.dialog.set_report(WeakMethod(self.process))
 
@@ -66,7 +159,15 @@ class SipLeg(Leg):
 
     def do(self, action):
         type = action["type"]
-        sdp = action.get("sdp")
+        offer = action.get("offer")
+        answer = action.get("answer")
+        
+        if offer and answer:
+            raise Error("WTF?")
+        elif offer:
+            self.session.set_local_offer(offer)
+        elif answer:
+            self.session.set_local_answer(answer)
         
         if self.state == self.DOWN:
             if type == "dial":
@@ -76,9 +177,9 @@ class SipLeg(Leg):
                     self.ctx.get("route"), self.ctx.get("hop")
                 )
                 
-                invite = dict(method="INVITE", sdp=sdp)
-                self.send_request(invite)  # Will be extended!
-                self.invite_state = InviteState(invite)
+                invite_request = dict(method="INVITE", sdp=offer)
+                self.send_request(invite_request)  # Will be extended!
+                self.invite_state = InviteState(invite_request)
                 self.state = self.DIALING_OUT
                 return
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
@@ -86,16 +187,38 @@ class SipLeg(Leg):
                 self.send_request(dict(method="CANCEL"), self.invite_state.request)
                 self.state = self.DISCONNECTING_OUT
                 return
-        elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
-            if type == "ring":
-                if self.state == self.DIALING_IN:
-                    self.send_response(dict(status=Status(180, "Ringing")), self.invite_state.request)
-                    self.state = self.DIALING_IN_RINGING
+        elif self.state in (self.DIALING_OUT_ANSWERED,):  # TODO: into InviteState?
+            if type == "session":
+                # send ACK with SDP
+                if not answer:
+                    raise Error("Answer expected in ACK!")
+                    
+                self.send_request(dict(method="ACK", sdp=answer), self.invite_state.final_response)
+                self.state = self.UP
                 return
-            elif type == "answer":
-                self.send_response(dict(status=Status(200, "OK"), sdp=sdp), self.invite_state.request)
+        elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
+            if self.invite_state.responded_session:
+                sdp = self.invite_state.responded_session
+            else:
+                sdp = answer if self.invite_state.has_offer_in_request else offer
+                if sdp:
+                    self.invite_state.responded_session = sdp
+                
+            if type == "ring":
+                invite_response = dict(status=Status(180, "Ringing"), sdp=sdp)
+                self.send_response(invite_response, self.invite_state.request)
+                self.state = self.DIALING_IN_RINGING
+                return
+            elif type == "session":
+                invite_response = dict(status=Status(183, "Session Progress"), sdp=sdp)
+                self.send_response(invite_response, self.invite_state.request)
+                return
+            elif type == "accept":
+                invite_response = dict(status=Status(200, "OK"), sdp=sdp)
+                self.send_response(invite_response, self.invite_state.request)
                 self.state = self.DIALING_IN_ANSWERED  # TODO: into InviteState?
-                # Must wait for the ACK
+                # TODO: Do we need to block requests here, or can we already send new ones?
+                # Just wait for the ACK for now.
                 return
         elif self.state == self.UP:
             if type == "hangup":
@@ -119,8 +242,12 @@ class SipLeg(Leg):
                     "to": msg["to"]
                 })
                 
+                offer = sdp if sdp and sdp.is_session() else None
+                if offer:
+                    self.session.set_remote_offer(offer)  # TODO: session query?
+                    
                 self.invite_state = InviteState(msg)
-                self.report(dict(type="dial", ctx=self.ctx, sdp=sdp))
+                self.report(dict(type="dial", ctx=self.ctx, offer=offer))
                 self.state = self.DIALING_IN
                 return
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
@@ -133,10 +260,26 @@ class SipLeg(Leg):
                 return
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
             if is_response and method == "INVITE":
+                offer, answer = None, None
+                
+                if sdp and sdp.is_session() and not self.invite_state.responded_session:
+                    if self.invite_state.has_offer_in_request:
+                        self.session.set_remote_answer(sdp)
+                        answer = sdp
+                    else:
+                        self.session.set_remote_offer(sdp)
+                        offer = sdp
+
+                    self.invite_state.responded_session = sdp  # just to ignore any further
+                    
                 if status.code == 180:
                     if self.state == self.DIALING_OUT:
-                        self.report(dict(type="ring"))
+                        self.report(dict(type="ring", offer=offer, answer=answer))
                         self.state = self.DIALING_OUT_RINGING
+                    return
+                elif status.code == 183:
+                    if offer or answer:
+                        self.report(dict(type="ring", offer=offer, answer=answer))
                     return
                 elif status.code >= 300:
                     self.report(dict(type="reject", status=status))
@@ -144,12 +287,33 @@ class SipLeg(Leg):
                     # ACKed by tr
                     return
                 elif status.code >= 200:
-                    self.report(dict(type="answer", sdp=sdp))
-                    self.state = self.UP
-                    self.send_request(dict(method="ACK"), msg)
+                    if self.invite_state.has_offer_in_request:
+                        # send ACK without SDP now
+                        self.send_request(dict(method="ACK"), msg)
+                        self.state = self.UP
+                    else:
+                        # wait for outgoing session for the ACK
+                        # beware, the report() below may send it!
+                        self.invite_state.final_response = msg
+                        self.state = self.DIALING_OUT_ANSWERED
+                        
+                    self.report(dict(type="accept", offer=offer, answer=answer))
                     return
         elif self.state == self.DIALING_IN_ANSWERED:
             if not is_response and method == "ACK":
+                answer = None
+                
+                if self.invite_state.has_offer_in_request:
+                    if sdp and sdp.is_session():
+                        print("Unexpected session in ACK!")
+                else:
+                    if not (sdp and sdp.is_session()):
+                        print("Unexpected sessionless ACK!")
+                    else:
+                        self.session.set_remote_answer(sdp)
+                        answer = sdp
+                        self.report(dict(type="session", answer=answer))
+                    
                 # Stop the retransmission of the final answer
                 self.send_response(make_virtual_response(), self.invite_state.request)
                 # Let the ACK server transaction expire

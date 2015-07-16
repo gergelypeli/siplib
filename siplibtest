@@ -67,7 +67,7 @@ class CalleeLeg(Leg):
         
     def do(self, action):
         if action["type"] == "dial":
-            self.offer = action.get("sdp")
+            self.offer = action.get("offer")
             print("Got offer:\n%s" % repr(self.offer))
             sleep(1, self.ringing)
         elif action["type"] == "hangup":
@@ -81,7 +81,7 @@ class CalleeLeg(Leg):
 
     def answering(self):
         answer = self.make_answer(self.offer)
-        self.report(dict(type="answer", sdp=answer))  # TODO: rename to accept?
+        self.report(dict(type="accept", answer=answer))
         sleep(1, self.hanging)
         
         
@@ -97,13 +97,13 @@ class CallerLeg(Leg):
     def dial(self):
         self.ctx["from"] = Nameaddr(caller_uri, caller_name)
         self.ctx["to"] = Nameaddr(callee_uri)
-        self.report(dict(type="dial", ctx=self.ctx, sdp=caller_sdp))
+        self.report(dict(type="dial", ctx=self.ctx, offer=caller_sdp))
         #self.sleep(3, self.hanging)
 
 
     def do(self, action):
-        if action["type"] == "answer":
-            print("Answered with SDP:\n%s" % repr(action.get("sdp")))
+        if action["type"] == "accept":
+            print("Accepted with SDP:\n%s" % repr(action.get("answer")))
             #self.sleep(1, self.hanging)
 
             

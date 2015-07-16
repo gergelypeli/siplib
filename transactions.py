@@ -342,6 +342,8 @@ class InviteClientTransaction(PlainClientTransaction):
                     self.bastards[remote_tag] = him = Bastard(self.report_response)
                     self.report_response = None
             
+                # FIXME: this check is too strict, the same status code may arrive
+                # with different content, either check it fully, or drop this check!
                 if code not in him.statuses:
                     him.statuses.add(code)
                     him.report_response(response, self.outgoing_msg)
