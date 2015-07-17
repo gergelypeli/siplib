@@ -210,7 +210,8 @@ class SipLeg(Leg):
                 self.state = self.DIALING_IN_RINGING
                 return
             elif type == "session":
-                invite_response = dict(status=Status(183, "Session Progress"), sdp=sdp)
+                status = Status(180, "Ringing") if self.state == self.DIALING_IN_RINGING else Status(183, "Session Progress")
+                invite_response = dict(status=status, sdp=sdp)
                 self.send_response(invite_response, self.invite_state.request)
                 return
             elif type == "accept":
@@ -275,11 +276,13 @@ class SipLeg(Leg):
                 if status.code == 180:
                     if self.state == self.DIALING_OUT:
                         self.report(dict(type="ring", offer=offer, answer=answer))
-                        self.state = self.DIALING_OUT_RINGING
+                    elif offer or answer:
+                        self.report(dict(type="session", offer=offer, answer=answer))
+                    self.state = self.DIALING_OUT_RINGING
                     return
                 elif status.code == 183:
                     if offer or answer:
-                        self.report(dict(type="ring", offer=offer, answer=answer))
+                        self.report(dict(type="session", offer=offer, answer=answer))
                     return
                 elif status.code >= 300:
                     self.report(dict(type="reject", status=status))

@@ -344,7 +344,7 @@ class InviteClientTransaction(PlainClientTransaction):
             
                 # FIXME: this check is too strict, the same status code may arrive
                 # with different content, either check it fully, or drop this check!
-                if code not in him.statuses:
+                if True:  # code not in him.statuses:
                     him.statuses.add(code)
                     him.report_response(response, self.outgoing_msg)
 

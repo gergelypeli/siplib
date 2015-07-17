@@ -4,6 +4,7 @@ import re
 import collections
 from sdp import Sdp
 
+# TODO: use attributes instead for these
 META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "sdp", "hop", "user_params", "authname" ]
 
 class FormatError(Exception):
