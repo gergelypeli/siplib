@@ -341,17 +341,19 @@ class InviteClientTransaction(PlainClientTransaction):
                 
                     self.bastards[remote_tag] = him = Bastard(self.report_response)
                     self.report_response = None
+
+                if code >= 300:
+                    # final non-2xx responses are ACK-ed here in the same transaction (17.1.1.3)
+                    # send this ACK before an upper layer changes the outgoing message,
+                    # it can happen with authorization!
+                    ack_params = make_ack(self.outgoing_msg, remote_tag)
+                    self.create_and_send_ack(self.branch, ack_params)
             
                 # FIXME: this check is too strict, the same status code may arrive
                 # with different content, either check it fully, or drop this check!
                 if True:  # code not in him.statuses:
                     him.statuses.add(code)
                     him.report_response(response, self.outgoing_msg)
-
-            if code >= 300:
-                # final non-2xx responses are ACK-ed here in the same transaction (17.1.1.3)
-                ack_params = make_ack(self.outgoing_msg, remote_tag)
-                self.create_and_send_ack(self.branch, ack_params)
 
             if self.state != self.WAITING:
                 if code < 200:
