@@ -155,10 +155,10 @@ class RtpFormat(object):
 class Channel(object):
     def __init__(self, session_host, session_direction):
         self.type = None
-        self.addr = (session_host, None)
+        self.addr = (session_host, None)  # default
         self.proto = None
         self.formats = []
-        self.direction = session_direction
+        self.direction = session_direction  # default
         self.attributes = []
         
         
@@ -265,6 +265,10 @@ class Sdp(EmptySdp):
         
     def is_session(self):
         return True
+
+
+    #def copy(self):
+    #    return Sdp(self.origin, self.bandwidth, self.attributes, self.channels)
         
 
     def print(self):
@@ -303,7 +307,7 @@ class Sdp(EmptySdp):
 
     @classmethod
     def parse(cls, s):
-        origin, session_host, bandwidth, session_direction = [ None ] * 4
+        origin, session_host, bandwidth, session_direction = None, None, None, None
         channels = []
         attributes = []  # one key may appear multiple times, also keep order just in case
         current_channel = None

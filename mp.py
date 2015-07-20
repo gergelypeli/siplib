@@ -237,10 +237,10 @@ class Context(object):
 
 
 class ContextManager(object):
-    def __init__(self, metapoll, control_addr):
+    def __init__(self, metapoll, mgw_addr):
         self.contexts_by_name = {}
         self.metapoll = metapoll
-        self.msgp = msgp.Msgp(metapoll, control_addr, WeakMethod(self.request_handler))
+        self.msgp = msgp.Msgp(metapoll, mgw_addr, WeakMethod(self.request_handler))
         #self.handlers_by_fd = {}
         self.controller_addr = None
 
@@ -330,18 +330,10 @@ class ContextManager(object):
         sid = (self.controller_addr, None)
         self.msgp.send_request(sid, message)
 
-        
-def run_media_gateway(controller_addr):
-    metapoll = Metapoll()
-    cm = ContextManager(metapoll, controller_addr)
-    
-    while True:
-        metapoll.do_poll()
-
 
 class Controller(object):
-    def __init__(self, metapoll, control_addr):
-        self.control_addr = control_addr
+    def __init__(self, metapoll, mgw_addr):
+        self.mgw_addr = mgw_addr
         self.local_addr = ("", 0)
         self.context_callbacks = {}
         
@@ -351,7 +343,7 @@ class Controller(object):
         
     def send_request(self, params, callback):
         msg = print_msg(params)
-        sid = (self.control_addr, None)
+        sid = (self.mgw_addr, None)
         self.msgp.send_request(sid, msg, callback=callback)
         
         

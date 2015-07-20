@@ -2,4 +2,9 @@
 
 import mp
 
-mp.run_media_gateway(("localhost", 10000))
+controller_addr = ("localhost", 10000)
+metapoll = Metapoll()
+cm = ContextManager(metapoll, controller_addr)
+
+while True:
+    metapoll.do_poll()

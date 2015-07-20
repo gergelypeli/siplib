@@ -54,6 +54,8 @@ m=video 51372 RTP/AVP 99
 a=rtpmap:99 h263-1998/90000
 """)
 
+mgw_addr = ("localhost", 20000)
+
 
 def sleep(secs, method):
     metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
@@ -331,6 +333,9 @@ class SwitchB(Switch):
 
 logging.basicConfig(level=logging.DEBUG)
 metapoll = Metapoll()
+
+mgw = mp.ContextManager(metapoll, mgw_ddr)
+mgc = mp.Controller(metapoll, mgw_addr)
 
 switch_a = SwitchA(metapoll, a_addr, "A-NET")
 switch_b = SwitchB(metapoll, b_addr, "B-NET")
