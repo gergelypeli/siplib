@@ -52,18 +52,18 @@ def print_msg(params):
     return " ".join("%s:%s" % (k, v) for k, v in params.items()) + "\n"
     
     
-class Connection(object):
-    def __init__(self, addr):
-        self.addr = addr
+#class Connection(object):
+#    def __init__(self, addr):
+#        self.addr = addr
         
-        self.reconnect()
+#        self.reconnect()
         
         
-    def reconnect(self):
-        pass
+#    def reconnect(self):
+#        pass
         
-    def send(self, msg):
-        self.socket
+#    def send(self, msg):
+#        self.socket
 
 
 class Leg(object):
@@ -179,161 +179,125 @@ class EchoLeg(Leg):
 
 
 class Context(object):
-    def __init__(self, name, params, manager):
-        #if "recv_formats" not in params:
-        #    raise Error("Incomplete create context params: %s" % params)
-            
+    def __init__(self, sid, params, manager):
         self.manager = manager
         self.legs = []
-        self.name = name
-        #self.recv_formats_by_pt = parse_formats(params["recv_formats"])
-        print("Created context %s" % self.name)
+        self.sid = sid
+        print("Created context %s" % (self.sid,))
         
         
     def __del__(self):
-        if hasattr(self, "name"):
-            print("Deleted context %s" % self.name)
+        print("Deleted context %s" % (self.sid,))
         
         
-    def set_leg(self, index, params):
-        while index >= len(self.legs):
+    def set_leg(self, li, params):
+        while li >= len(self.legs):
             self.legs.append(None)
 
         if not params:
-            self.legs[index] = None
+            self.legs[li] = None
             return
 
         type = params.pop("type", None)
         if not type:
             raise Error("No leg type!")
 
-        if not self.legs[index] or self.legs[index].type != type:
+        if not self.legs[li] or self.legs[li].type != type:
             if type == "net":
-                leg = NetLeg(index, weakref.proxy(self))
+                leg = NetLeg(li, weakref.proxy(self))
             elif type == "echo":
-                leg = EchoLeg(index, weakref.proxy(self))
+                leg = EchoLeg(li, weakref.proxy(self))
             else:
                 raise Error("Invalid leg type %r!" % type)
                 
-            self.legs[index] = leg
+            self.legs[li] = leg
         
-        self.legs[index].set(params)
+        self.legs[li].set(params)
         
         
-    def detected(self, incoming_index, remote_addr):
-        self.manager.detected(self.name, incoming_index, remote_addr)
+    def detected(self, li, remote_addr):
+        self.manager.detected(self.sid, li, remote_addr)
         
     
-    def forward(self, incoming_index, format, packet):
-        outgoing_index = (1 if incoming_index == 0 else 0)
+    def forward(self, li, format, packet):
+        lj = (1 if li == 0 else 0)
+        
         try:
-            leg = self.legs[outgoing_index]
+            leg = self.legs[lj]
         except IndexError:
             raise Error("No outgoing leg!")
 
-        print("Forwarding in %s a %s from %d to %d" % (self.name, format, incoming_index, outgoing_index))
+        print("Forwarding in %s a %s from %d to %d" % (self.sid, format, li, lj))
         
         leg.send_format(format, packet)
 
 
 class ContextManager(object):
     def __init__(self, metapoll, mgw_addr):
-        self.contexts_by_name = {}
+        self.contexts_by_sid = {}
         self.metapoll = metapoll
-        self.jlp_server = jlp.JlpServer(metapoll, mgw_addr, WeakMethod(self.process_message))
+        self.msgp = msgp.JsonMsgp(metapoll, mgw_addr, WeakMethod(self.process_message))
 
         
-    def process_message(self, params):
-        for context_id, context_params in params.get("contexts", {}):
-            context = self.contexts_by_name.get(context_id)
+    def process_message(self, sid, seq, target, params):
+        context = self.contexts_by_sid.get(sid)
 
-            if not context_params:
-                if context:
-                    self.contexts_by_name.pop(context_id)
-            else:
-                if not context:
-                    context = Context(name, params, weakref.proxy(self))
-                    self.contexts_by_name[name] = context
-                    
-                for li, leg_params in context_params.get("legs", {}):
-                    context.set_leg(li, leg_params)
+        if not params:
+            if context:
+                self.contexts_by_sid.pop(sid)
+        else:
+            if not context:
+                context = Context(sid, params, weakref.proxy(self))
+                self.contexts_by_sid[sid] = context
+                
+            for li, leg_params in params.get("legs", {}):
+                context.set_leg(li, leg_params)
+                
+        self.msgp.send_message(sid, seq, "ok")
 
 
-    def detected(self, ctx, leg, remote_addr):
-        params = {
-            'contexts': {
-                ctx: {
-                    'legs': {
-                        leg: {
-                            'event': 'detected',
-                            'remote_addr': addr
-                        }
-                    }
-                }
-            }
-        }
-        
-        self.jlp_server.send_message(params)
+    def detected(self, sid, li, remote_addr):
+        params = { 'legs': { li: { 'remote_addr': remote_addr } } }
+        self.msgp.send_message(sid, "detected", params)
 
 
 class Controller(object):
-    def __init__(self, metapoll, mgw_addr):
-        self.mgw_addr = mgw_addr
+    def __init__(self, metapoll, mgc_addr):
+        self.mgc_addr = mgc_addr
         self.context_callbacks = {}
         
         self.metapoll = metapoll
-        self.jlp_client = jlp.JlpClient(metapoll, mgw_addr, WeakMethod(self.process_message))
+        self.msgp = msgp.JsonMsgp(metapoll, mgc_addr, WeakMethod(self.process_message))
         
         
-    def set_context_callback(self, context_id, callback):
+    def send_message(self, sid, target, params):
+        self.msgp.send_message(sid, target, params)
+        
+        
+    def process_message(self, sid, seq, target, params):
+        callback = self.context_callbacks.get(sid)
+
         if callback:
-            self.context_callbacks[context_id] = callback
-        else
-            self.context_callbacks.pop(context_id)
-            
-        
-    def send_message(self, params):
-        self.jlp_client.send_message(params)
+            callback(seq, target, params)
         
         
-    def process_message(self, params):
-        for context_id, context_params in params.get("contexts", {}):
-            callback = self.context_callbacks.get(context_id)
-            if callback:
-                callback(context_params)
+    def create_context(self, sid, params, callback=None):
+        self.context_callbacks[sid] = callback
+        self.send_message(sid, "create", params)
+
+
+    def modify_context(self, sid, params):
+        self.send_message(sid, "modify", params)
+
+
+    def delete_context(self, sid):
+        self.context_callbacks.pop(sid)
+        self.send_message(sid, "delete", None)
         
         
-    def create_context(self, name, params, callback=None):
-        self.context_callbacks[name] = callback
-        self.send_message({ 'contexts': { name: params } })
+    def allocate_media(self, leg_count):
+        raise NotImplemented()
 
-
-    def modify_context(self, name, params):
-        self.send_message({ 'contexts': { name: params } })
-
-
-    def delete_context(self, name):
-        self.context_callbacks.pop(name)
-        self.send_message({ 'contexts': { name: None } })
-
-
-    def create_context_leg(self, name, li, params):
-        self.send_message({ 'contexts': { name: { 'legs': { li: params } } } })
-        
-
-    def modify_context_leg(self, name, li, params):
-        self.send_message({ 'contexts': { name: { 'legs': { li: params } } } })
-
-
-    def delete_context_leg(self, name, li):
-        self.send_message({ 'contexts': { name: { 'legs': { li: None } } } })
-        
-
-    #def loop(self, timeout=None):
-    #    while self.poll.poll(timeout):
-    #        self.msgp.recv()
-    #        timeout = 0
-            
 
 class Rtp(object):
     def __init__(self, metapoll, local_addr, remote_addr, receiving_callback):

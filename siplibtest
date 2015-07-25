@@ -12,10 +12,11 @@ from format import Addr, Uri, Nameaddr, Status, Via, Hop, print_structured_messa
 from transactions import TransactionManager, make_virtual_response, make_simple_response
 from dialog import Dialog, DialogManager
 from leg import Leg, SipLeg, create_uninvited_leg
-from call import Call
+from call import Call, ProxiedMediaChannel
 from sdp import Sdp
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
+import mp
 
 #local_addr = Addr("localhost", 5060)
 a_addr = Addr("a.net", 5060)
@@ -55,6 +56,7 @@ a=rtpmap:99 h263-1998/90000
 """)
 
 mgw_addr = ("localhost", 20000)
+mgc_addr = ("localhost", 20001)
 
 
 def sleep(secs, method):
@@ -334,8 +336,9 @@ class SwitchB(Switch):
 logging.basicConfig(level=logging.DEBUG)
 metapoll = Metapoll()
 
-mgw = mp.ContextManager(metapoll, mgw_ddr)
-mgc = mp.Controller(metapoll, mgw_addr)
+mgw = mp.ContextManager(metapoll, mgw_addr)
+mgc = mp.Controller(metapoll, mgc_addr)
+ProxiedMediaChannel.set_mgc(mgc)
 
 switch_a = SwitchA(metapoll, a_addr, "A-NET")
 switch_b = SwitchB(metapoll, b_addr, "B-NET")

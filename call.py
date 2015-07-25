@@ -19,16 +19,79 @@ class ProxiedMediaLeg(object):
         
 
 class ProxiedMediaChannel(object):
-    def __init__(self, legs):
-        self.context_id = None
-        self.legs = legs
+    mgc = None
+
+
+    @classmethod
+    def set_mgc(cls, mgc):
+        cls.mgc = mgc
+        
+    
+    def __init__(self):
+        sid, addrs = self.mgc.allocate_media(2)  # TODO: deallocate, too
+
+        self.is_created = False
+        self.context_sid = sid
+        self.legs = [ ProxiedMediaLeg(addrs[0]), ProxiedMediaLeg(addrs[1]) ]
         self.pending_addr = None
         self.pending_formats = None
 
 
+    def process_offer(self, li, oc):
+        self.pending_addr = oc.addr
+        self.pending_formats = extract_formats(oc)
+
+
+    def process_answer(self, li, ac):
+        lj = 1 - li
+        
+        offering_leg = self.legs[lj]
+        answering_leg = self.legs[li]
+
+        answer_addr = ac.addr
+        answer_formats = extract_formats(ac)
+        
+        offer_addr = self.pending_addr
+        offer_formats = self.pending_formats
+
+        self.pending_addr = None
+        self.pending_formats = None
+        
+        answering_leg.remote_addr = answer_addr
+        answering_leg.send_formats = answer_formats
+        answering_leg.recv_formats = offer_formats
+        
+        offering_leg.remote_addr = offer_addr
+        offering_leg.send_formats = offer_formats
+        offering_leg.recv_formats = answer_formats
+
+        def leg_params(i):
+            leg = self.legs[i]
+            
+            return {
+                'type': 'rtp',
+                'local_addr': leg.local_addr,
+                'remote_addr': leg.remote_addr,
+                'send_formats': leg.send_formats,
+                'recv_formats': leg.recv_formats
+            }
+        
+        params = {
+            'type': 'proxy',
+            'legs': {
+                '0': leg_params(0),
+                '1': leg_params(1)
+            }
+        }
+        
+        if not self.is_created:
+            self.mgc.create_context(self.context_sid, params, WeakMethod(self.process_mgw_message))
+        else:
+            self.mgc.modify_context(self.context_sid, params)
+
+
 class Call(object):
-    def __init__(self, mgc, route):
-        self.mgc = mgc
+    def __init__(self, route):
         self.route = route
         self.legs = {}
         self.media_channels = []
@@ -47,93 +110,33 @@ class Call(object):
             sdp.channels[i].addr = local_addr
         
         
-    def process_mgw_message(self, params, context_id):
-        print("MGW %s message %s" % (context_id, params))
+    def process_mgw_message(self, params, context_sid):
+        print("MGW %s message %s" % (context_sid, params))
         
         
     def create_media_channel():
-        addr0 = ("localhost", 30000)
-        addr1 = ("localhost", 30001)
-            
-        legs = [ ProxiedMediaLeg(addr1), ProxiedMediaLeg(addr2) ]
-        return ProxiedMediaChannel(legs)
-        
-        
-    def process_media_offer(mc, oc):
-        mc.pending_addr = oc.addr
-        mc.pending_formats = extract_formats(oc)
-
-
-    def process_media_answer(mc, ac):
-        offering_leg = mc.legs[lj]
-        answering_leg = mc.legs[li]
-
-        answer_addr = ac.addr
-        answer_formats = extract_formats(ac)
-        
-        offer_addr = mc.pending_addr
-        offer_formats = mc.pending_formats
-
-        mc.pending_addr = None
-        mc.pending_formats = None
-        
-        answering_leg.remote_addr = answer_addr
-        answering_leg.send_formats = answer_formats
-        answering_leg.recv_formats = offer_formats
-        
-        offering_leg.remote_addr = offer_addr
-        offering_leg.send_formats = offer_formats
-        offering_leg.recv_formats = answer_formats
-
-        if not mc.context_id:
-            mc.context_id = generate_context_id()
-
-        def leg_params(li):
-            leg = mc.legs[li]
-            
-            return {
-                'type': 'rtp',
-                'local_addr': leg.local_addr,
-                'remote_addr': leg.remote_addr,
-                'send_formats': leg.send_formats,
-                'recv_formats': leg.recv_formats
-            }
-        
-        params = {
-            'type': 'proxy',
-            'legs': {
-                '0': leg_params(0),
-                '1': leg_params(1)
-            }
-        }
-        
-        callback = WeakMethod(self.process_mgw_message, mc.context_id)
-        self.mgc.create_context(mc.context_id, params, callback=callback)
+        return ProxiedMediaChannel()
         
         
     def process_offer(self, li, offer):
-        lj = 1 - li
-        
         for i in range(len(self.media_channels), len(offer.channels)):
-            self.media_channels[i] = create_media_channel()
+            self.media_channels[i] = self.create_media_channel()
         
         for i in range(len(offer.channels)):
             mc = self.media_channels[i]
             oc = offer.channels[i]
             
-            self.process_media_offer(mc, oc)
+            mc.process_offer(li, oc)
         
         self.mangle_session(li, offer)
             
         
     def process_answer(self, li, answer):
-        lj = 1 - li
-        
         for i in range(len(answer.channels)):
             mc = self.media_channels[i]
             ac = answer.channels[i]
 
-            self.process_media_answer(mc, ac)
+            mc.process_media_answer(li, ac)
 
         self.mangle_session(li, answer)
         
