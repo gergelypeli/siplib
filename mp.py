@@ -240,173 +240,99 @@ class ContextManager(object):
     def __init__(self, metapoll, mgw_addr):
         self.contexts_by_name = {}
         self.metapoll = metapoll
-        self.msgp = msgp.Msgp(metapoll, mgw_addr, WeakMethod(self.request_handler))
-        #self.handlers_by_fd = {}
-        self.controller_addr = None
+        self.jlp_server = jlp.JlpServer(metapoll, mgw_addr, WeakMethod(self.process_message))
 
         
-    def register(self, fd, handler):
-        self.metapoll.register_reader(fd, handler)
-        #self.handlers_by_fd[fd] = handler
-        #self.poll.register(fd, select.POLLIN)
-    
-    
-    def unregister(self, fd):
-        self.metapoll.register_reader(fd, None)
-        #self.handlers_by_fd.pop(fd)
-        #self.poll.unregister(fd)
+    def process_message(self, params):
+        for context_id, context_params in params.get("contexts", {}):
+            context = self.contexts_by_name.get(context_id)
 
-    
-    def request_handler(self, mid, message):
-        try:
-            params = parse_msg(message)
-            response = self.process_request(params)
-            sid, seq = mid
-            addr, none = sid
-            self.controller_addr = addr
-        except Error:
-            response = dict(response="invalid")
-        
-        message = print_msg(response)
-        self.msgp.send_response(mid, message)
-        
-        
-    def process_request(self, params):
-        try:
-            response = collections.OrderedDict()
-            
-            name = params.pop("ctx", None)
-            if not name:
-                raise Error("No ctx parameter!")
-            
-            response["ctx"] = name
-            
-            request = params.pop("request", None)
-            if not request:
-                raise Error("No request parameter!")
-        
-            context = self.contexts_by_name.get(name, None)
-        
-            if request == "create":
+            if not context_params:
                 if context:
-                    raise Error("Context already exists!")
-                
-                self.contexts_by_name[name] = Context(name, params, weakref.proxy(self))
-            elif request == "delete":
-                if not context:
-                    raise Error("Context does not exist!")
-                
-                self.contexts_by_name.pop(name)
-            elif request == "modify":
-                if not context:
-                    raise Error("Context does not exist!")
-                
-                index = params.pop("leg", None)
-                if not index:
-                    raise Error("No leg parameter!")
-                
-                index = int(index)
-                
-                context.set_leg(index, params)
+                    self.contexts_by_name.pop(context_id)
             else:
-                raise Error("Invalid request!")
-        except Error as e:
-            response["response"] = "error"
-        else:
-            response["response"] = "ok"
-            
-        return response
+                if not context:
+                    context = Context(name, params, weakref.proxy(self))
+                    self.contexts_by_name[name] = context
+                    
+                for li, leg_params in context_params.get("legs", {}):
+                    context.set_leg(li, leg_params)
 
 
-    def detected(self, ctx, leg, addr):
-        request = collections.OrderedDict()
-        request["ctx"] = ctx
-        request["request"] = "detected"
-        request["leg"] = leg
-        request["remote_host"] = addr[0]
-        request["remote_port"] = addr[1]
+    def detected(self, ctx, leg, remote_addr):
+        params = {
+            'contexts': {
+                ctx: {
+                    'legs': {
+                        leg: {
+                            'event': 'detected',
+                            'remote_addr': addr
+                        }
+                    }
+                }
+            }
+        }
         
-        message = print_msg(request)
-        sid = (self.controller_addr, None)
-        self.msgp.send_request(sid, message)
+        self.jlp_server.send_message(params)
 
 
 class Controller(object):
     def __init__(self, metapoll, mgw_addr):
         self.mgw_addr = mgw_addr
-        self.local_addr = ("", 0)
         self.context_callbacks = {}
         
         self.metapoll = metapoll
-        self.msgp = msgp.Msgp(metapoll, self.local_addr, WeakMethod(self.recv_request))
+        self.jlp_client = jlp.JlpClient(metapoll, mgw_addr, WeakMethod(self.process_message))
         
         
-    def send_request(self, params, callback):
-        msg = print_msg(params)
-        sid = (self.mgw_addr, None)
-        self.msgp.send_request(sid, msg, callback=callback)
-        
-        
-    def recv_request(self, mid, message):
-        params = parse_msg(message)
-        name = params["ctx"]
-        cc = self.context_callbacks.get(name)
-        if cc:
-            cc(mid, params)
-        
-        
-    def create_context(self, name, callback=None, context_callback=None):
-        self.context_callbacks[name] = context_callback
-        
-        params = collections.OrderedDict()
-        params["ctx"] = name
-        params["request"] = "create"
-        #params["recv_formats"] = print_formats(recv_formats)
-        self.send_request(params, callback)
-        
-        
-    def modify_context(self, name, leg, type=None,
-            local_host=None, local_port=None, remote_host=None,
-            recv_formats=None, send_formats=None, callback=None):
-        params = collections.OrderedDict()
-        params["ctx"] = name
-        params["request"] = "modify"
-        params["leg"] = leg
-        
-        if type:
-            params["type"] = type
-
-        if local_host:
-            params["local_host"] = local_host
-
-        if local_port:
-            params["local_port"] = local_port
-
-        if remote_host:
-            params["remote_host"] = remote_host
+    def set_context_callback(self, context_id, callback):
+        if callback:
+            self.context_callbacks[context_id] = callback
+        else
+            self.context_callbacks.pop(context_id)
             
-        if recv_formats:
-            params["recv_formats"] = print_formats(recv_formats)
-
-        if send_formats:
-            params["send_formats"] = print_formats(send_formats)
-            
-        self.send_request(params, callback)
-
-
-    def delete_context(self, name, callback=None):
-        params = collections.OrderedDict()
-        params["ctx"] = name
-        params["request"] = "delete"
-        self.send_request(params, callback)
         
+    def send_message(self, params):
+        self.jlp_client.send_message(params)
+        
+        
+    def process_message(self, params):
+        for context_id, context_params in params.get("contexts", {}):
+            callback = self.context_callbacks.get(context_id)
+            if callback:
+                callback(context_params)
+        
+        
+    def create_context(self, name, params, callback=None):
+        self.context_callbacks[name] = callback
+        self.send_message({ 'contexts': { name: params } })
+
+
+    def modify_context(self, name, params):
+        self.send_message({ 'contexts': { name: params } })
+
+
+    def delete_context(self, name):
         self.context_callbacks.pop(name)
+        self.send_message({ 'contexts': { name: None } })
 
 
-    def loop(self, timeout=None):
-        while self.poll.poll(timeout):
-            self.msgp.recv()
-            timeout = 0
+    def create_context_leg(self, name, li, params):
+        self.send_message({ 'contexts': { name: { 'legs': { li: params } } } })
+        
+
+    def modify_context_leg(self, name, li, params):
+        self.send_message({ 'contexts': { name: { 'legs': { li: params } } } })
+
+
+    def delete_context_leg(self, name, li):
+        self.send_message({ 'contexts': { name: { 'legs': { li: None } } } })
+        
+
+    #def loop(self, timeout=None):
+    #    while self.poll.poll(timeout):
+    #        self.msgp.recv()
+    #        timeout = 0
             
 
 class Rtp(object):
