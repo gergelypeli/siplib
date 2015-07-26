@@ -32,12 +32,12 @@ def set_payload_type(packet, pt):
     return packet[0:1] + chr(ord(packet[1]) & 0x80 | pt & 0x7f) + packet[2:]
 
 
-def parse_formats(fmts):
-    return { int(k): v for k, v in [ kv.split("=", 1) for kv in fmts.split(",") ] }
+#def parse_formats(fmts):
+#    return { int(k): v for k, v in [ kv.split("=", 1) for kv in fmts.split(",") ] }
 
 
-def print_formats(fmts):
-    return ",".join("%d=%s" % (k, v) for k, v in fmts.items())
+#def print_formats(fmts):
+#    return ",".join("%d=%s" % (k, v) for k, v in fmts.items())
     
     
 def revdict(d):
@@ -51,6 +51,13 @@ def parse_msg(msg):
 def print_msg(params):
     return " ".join("%s:%s" % (k, v) for k, v in params.items()) + "\n"
     
+    
+def prid(sid):
+    addr, label = sid
+    host, port = addr
+    
+    return "%s:%d@%s" % (host, port, label)
+
     
 #class Connection(object):
 #    def __init__(self, addr):
@@ -74,7 +81,7 @@ class Leg(object):
         self.send_pts_by_format = None
         self.recv_formats_by_pt = None
         
-        self.name = "%s/%d" % (self.context.name, self.index)
+        self.name = "%s/%d" % (prid(self.context.sid), self.index)
         print("Created %s leg %s" % (type, self.name))
         
         
@@ -84,10 +91,10 @@ class Leg(object):
         
     def set(self, params):
         if "send_formats" in params:
-            self.send_pts_by_format = revdict(parse_formats(params["send_formats"]))
+            self.send_pts_by_format = revdict(params["send_formats"])
             
         if "recv_formats" in params:
-            self.recv_formats_by_pt = parse_formats(params["recv_formats"])
+            self.recv_formats_by_pt = params["recv_formats"]
 
 
     def recv_format(self, packet):
@@ -183,11 +190,11 @@ class Context(object):
         self.manager = manager
         self.legs = []
         self.sid = sid
-        print("Created context %s" % (self.sid,))
+        print("Created context %s" % prid(self.sid))
         
         
     def __del__(self):
-        print("Deleted context %s" % (self.sid,))
+        print("Deleted context %s" % prid(self.sid))
         
         
     def set_leg(self, li, params):
@@ -227,7 +234,7 @@ class Context(object):
         except IndexError:
             raise Error("No outgoing leg!")
 
-        print("Forwarding in %s a %s from %d to %d" % (self.sid, format, li, lj))
+        print("Forwarding in %s a %s from %d to %d" % (prid(self.sid), format, li, lj))
         
         leg.send_format(format, packet)
 
@@ -236,10 +243,10 @@ class ContextManager(object):
     def __init__(self, metapoll, mgw_addr):
         self.contexts_by_sid = {}
         self.metapoll = metapoll
-        self.msgp = msgp.JsonMsgp(metapoll, mgw_addr, WeakMethod(self.process_message))
+        self.msgp = msgp.JsonMsgp(metapoll, mgw_addr, WeakMethod(self.process_request))
 
         
-    def process_message(self, sid, seq, target, params):
+    def process_request(self, sid, seq, params, target):
         context = self.contexts_by_sid.get(sid)
 
         if not params:
@@ -250,10 +257,13 @@ class ContextManager(object):
                 context = Context(sid, params, weakref.proxy(self))
                 self.contexts_by_sid[sid] = context
                 
-            for li, leg_params in params.get("legs", {}):
-                context.set_leg(li, leg_params)
+            for li, leg_params in params.get("legs", {}).items():
+                context.set_leg(int(li), leg_params)
                 
         self.msgp.send_message(sid, seq, "ok")
+        
+        if sid not in self.contexts_by_sid:
+            self.msgp.remove_stream(sid)
 
 
     def detected(self, sid, li, remote_addr):
@@ -264,39 +274,41 @@ class ContextManager(object):
 class Controller(object):
     def __init__(self, metapoll, mgc_addr):
         self.mgc_addr = mgc_addr
-        self.context_callbacks = {}
+        self.request_handlers = {}
         
         self.metapoll = metapoll
-        self.msgp = msgp.JsonMsgp(metapoll, mgc_addr, WeakMethod(self.process_message))
+        self.msgp = msgp.JsonMsgp(metapoll, mgc_addr, WeakMethod(self.process_request))
         
         
-    def send_message(self, sid, target, params):
-        self.msgp.send_message(sid, target, params)
+    def send_message(self, sid, target, params, response_handler):
+        self.msgp.send_message(sid, target, params, response_handler=response_handler)
         
         
-    def process_message(self, sid, seq, target, params):
-        callback = self.context_callbacks.get(sid)
+    def process_request(self, sid, seq, params, target):
+        request_handler = self.request_handlers.get(sid)
 
-        if callback:
-            callback(seq, target, params)
+        if request_handler:
+            request_handler(sid, seq, params, target)
         
         
-    def create_context(self, sid, params, callback=None):
-        self.context_callbacks[sid] = callback
-        self.send_message(sid, "create", params)
-
-
-    def modify_context(self, sid, params):
-        self.send_message(sid, "modify", params)
+    def create_context(self, sid, params, response_handler=None, request_handler=None):
+        self.request_handlers[sid] = request_handler
+        self.msgp.add_stream(sid)
+        self.send_message(sid, "create", params, response_handler)
 
 
-    def delete_context(self, sid):
-        self.context_callbacks.pop(sid)
-        self.send_message(sid, "delete", None)
+    def modify_context(self, sid, params, response_handler=None):
+        self.send_message(sid, "modify", params, response_handler)
+
+
+    def delete_context(self, sid, response_handler=None):
+        self.request_handlers.pop(sid)
+        self.send_message(sid, "delete", None, response_handler)
+        self.msgp.remove_stream(sid)
         
         
     def allocate_media(self, leg_count):
-        raise NotImplemented()
+        raise NotImplementedError()
 
 
 class Rtp(object):

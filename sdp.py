@@ -5,6 +5,13 @@ import datetime
 import re
 from pprint import pprint
 
+STATIC_PAYLOAD_TYPES = {
+    0: ("PCMU", 8000),
+    3: ("GSM",  8000),
+    8: ("PCMA", 8000),
+    9: ("G722", 8000)
+}
+
 class Error(Exception): pass
 
 last_session_id = 0
@@ -112,9 +119,11 @@ class Origin(collections.namedtuple("Origin", "username session_id session_versi
 
 class RtpFormat(object):
     def __init__(self, pt):
+        encoding, clock = STATIC_PAYLOAD_TYPES.get(pt, (None, None))
+        
         self.payload_type = pt
-        self.encoding = None
-        self.clock = None
+        self.encoding = encoding
+        self.clock = clock
         self.encp = None
         self.fmtp = None
 

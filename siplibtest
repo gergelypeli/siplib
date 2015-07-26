@@ -16,6 +16,7 @@ from call import Call, ProxiedMediaChannel
 from sdp import Sdp
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
+from util import resolve
 import mp
 
 #local_addr = Addr("localhost", 5060)
@@ -55,8 +56,11 @@ m=video 51372 RTP/AVP 99
 a=rtpmap:99 h263-1998/90000
 """)
 
-mgw_addr = ("localhost", 20000)
-mgc_addr = ("localhost", 20001)
+MGW_HOST = "localhost"
+MGC_HOST = "localhost"
+mgw_addr = (MGW_HOST, 20000)
+mgc_addr = (MGC_HOST, 20001)
+#mgc2_addr = (MGC2_HOST, 20002)  # FIXME: Oops, both switches use the same MGC and MGW!
 
 
 def sleep(secs, method):
@@ -189,6 +193,22 @@ class TestAuthority(Authority):
             
     def identify(self, params):
         return self.myuser
+
+
+class TestController(mp.Controller):
+    next_ctx = 1
+    next_port = 30000
+    
+    def allocate_media(self, leg_count):
+        # Must use unique MGW addresses for Msgp
+        sid = (resolve(mgw_addr), "ctx-%d" % self.next_ctx)  # TODO: make Sid class!
+        # Must use IP4 addresses or FQDN in SDP, so let's go with IP4
+        addrs = [ resolve((MGW_HOST, self.next_port + i)) for i in range(leg_count) ]
+        
+        self.next_ctx += 1
+        self.next_port += leg_count
+        
+        return sid, addrs
         
 
 class Switch(object):
@@ -209,6 +229,8 @@ class Switch(object):
             WeakMethod(self.transport.get_hop),
             WeakMethod(self.authority.provide_auth)
         )
+
+        self.calls = []
 
         metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
 
@@ -239,16 +261,27 @@ class Switch(object):
             print("No such registered SIP contact: %s" % (to_uri,))
             return None
         
+        
+    def start_call(self, incoming_leg):
+        call = Call(WeakMethod(self.route_call), WeakMethod(self.finish_call))
+        call.add_leg(0, incoming_leg)
+        self.calls.append(call)
+    
 
-    def route(self, ctx):
+    def route_call(self, ctx):
         return self.route_to_registered_sip_contact(ctx)
+        
+        
+    def finish_call(self, call):
+        print("Finishing call")
+        self.calls.remove(call)
         
 
     def accept_invite(self, params):
         incoming_dialog = Dialog(Weak(self.dialog_manager))
         incoming_leg = SipLeg(incoming_dialog)
-        self.call = Call(WeakMethod(self.route))
-        self.call.add_leg(0, incoming_leg)
+        self.start_call(incoming_leg)
+        
         return WeakMethod(incoming_dialog.recv_request)
 
 
@@ -302,8 +335,8 @@ class SwitchA(Switch):
         print("Dialing begins.")
 
         incoming_leg = CallerLeg()
-        self.call = Call(WeakMethod(self.route))
-        self.call.add_leg(0, incoming_leg)
+        self.start_call(incoming_leg)
+        
         incoming_leg.dial()
     
 
@@ -317,7 +350,7 @@ class SwitchB(Switch):
         metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
 
 
-    def route(self, ctx):
+    def route_call(self, ctx):
         to_uri = ctx["to"].uri
         
         if to_uri.user == "callee":
@@ -337,7 +370,7 @@ logging.basicConfig(level=logging.DEBUG)
 metapoll = Metapoll()
 
 mgw = mp.ContextManager(metapoll, mgw_addr)
-mgc = mp.Controller(metapoll, mgc_addr)
+mgc = TestController(metapoll, mgc_addr)
 ProxiedMediaChannel.set_mgc(mgc)
 
 switch_a = SwitchA(metapoll, a_addr, "A-NET")
@@ -350,4 +383,4 @@ while True:
     try:
         metapoll.do_poll()
     except KeyboardInterrupt:
-        break
+        raise  #break

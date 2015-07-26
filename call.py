@@ -12,7 +12,7 @@ def extract_formats(c):
 
 class ProxiedMediaLeg(object):
     def __init__(self, local_addr):
-        self.local_addr = None
+        self.local_addr = local_addr
         self.remote_addr = None
         self.send_formats = None
         self.recv_formats = None
@@ -20,7 +20,6 @@ class ProxiedMediaLeg(object):
 
 class ProxiedMediaChannel(object):
     mgc = None
-
 
     @classmethod
     def set_mgc(cls, mgc):
@@ -36,6 +35,17 @@ class ProxiedMediaChannel(object):
         self.pending_addr = None
         self.pending_formats = None
 
+        
+    def process_mgw_request(self, sid, seq, params, target):
+        print("Huh, MGW %s sent a %s message!" % (sid, target))
+        
+        
+    def process_mgw_response(self, sid, seq, params, purpose):
+        if params == "ok":
+            print("Huh, MGW %s is OK for %s!" % (sid, purpose))
+        else:
+            print("Oops, MGW %s error for %s!" % (sid, purpose))
+        
 
     def process_offer(self, li, oc):
         self.pending_addr = oc.addr
@@ -69,7 +79,7 @@ class ProxiedMediaChannel(object):
             leg = self.legs[i]
             
             return {
-                'type': 'rtp',
+                'type': 'net',
                 'local_addr': leg.local_addr,
                 'remote_addr': leg.remote_addr,
                 'send_formats': leg.send_formats,
@@ -85,14 +95,24 @@ class ProxiedMediaChannel(object):
         }
         
         if not self.is_created:
-            self.mgc.create_context(self.context_sid, params, WeakMethod(self.process_mgw_message))
+            request_handler = WeakMethod(self.process_mgw_request)
+            response_handler = WeakMethod(self.process_mgw_response, "cctx")
+            self.mgc.create_context(self.context_sid, params, response_handler=response_handler, request_handler=request_handler)
+            self.is_created = True
         else:
-            self.mgc.modify_context(self.context_sid, params)
+            response_handler = WeakMethod(self.process_mgw_response, "mctx")
+            self.mgc.modify_context(self.context_sid, params, response_handler=response_handler)
+
+
+    def finish(self):
+        if self.is_created:
+            self.mgc.delete_context(self.context_sid)
 
 
 class Call(object):
-    def __init__(self, route):
+    def __init__(self, route, finish):
         self.route = route
+        self.finish = finish
         self.legs = {}
         self.media_channels = []
         
@@ -107,20 +127,17 @@ class Call(object):
         
         for i in range(len(sdp.channels)):
             local_addr = self.media_channels[i].legs[lj].local_addr
+            print("Mangling leg %d channel %d with %s" % (lj, i, local_addr))
             sdp.channels[i].addr = local_addr
         
         
-    def process_mgw_message(self, params, context_sid):
-        print("MGW %s message %s" % (context_sid, params))
-        
-        
-    def create_media_channel():
+    def create_media_channel(self):
         return ProxiedMediaChannel()
         
         
     def process_offer(self, li, offer):
         for i in range(len(self.media_channels), len(offer.channels)):
-            self.media_channels[i] = self.create_media_channel()
+            self.media_channels.append(self.create_media_channel())
         
         for i in range(len(offer.channels)):
             mc = self.media_channels[i]
@@ -136,7 +153,8 @@ class Call(object):
             mc = self.media_channels[i]
             ac = answer.channels[i]
 
-            mc.process_media_answer(li, ac)
+            mc.process_answer(li, ac)
+            # TODO: if rejected, remove pending channels!
 
         self.mangle_session(li, answer)
         
@@ -158,7 +176,21 @@ class Call(object):
             else:
                 print("Routing failed!")  # TODO: reject!
         
+        offer = action.get("offer")
+        if offer:
+            self.process_offer(li, offer)
+
+        answer = action.get("answer")
+        if answer:
+            self.process_answer(li, answer)
+        
         self.legs[lj].do(action)
+        
+        if type == "hangup":
+            for mc in self.media_channels:
+                mc.finish()
+
+            self.finish(self)
         
     
 # The incoming leg must have a context initialized from the INVITE, then
