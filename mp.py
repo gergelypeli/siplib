@@ -186,9 +186,9 @@ class EchoLeg(Leg):
 
 
 class Context(object):
-    def __init__(self, label, owner_addr, params, manager):
+    def __init__(self, label, manager):
         self.label = label
-        self.owner_addr = owner_addr
+        self.owner_addr = None
         self.manager = manager
         self.legs = []
         print("Created context %s" % self.label)
@@ -221,7 +221,20 @@ class Context(object):
             self.legs[li] = leg
         
         self.legs[li].set(params)
-        
+
+
+    def process_request(self, sid, seq, params, target):
+        if target == "modify":
+            # Just in case of a MGC failover
+            self.owner_addr = sid[0]
+            
+            for li, leg_params in params.get("legs", {}).items():
+                self.set_leg(int(li), leg_params)
+        elif target == "delete":
+            self.manager.remove_context(self.label)
+        else:
+            raise Error("Unknown context operation '%s'!" % target)
+            
         
     def detected(self, li, remote_addr):
         sid = (self.owner_addr, self.label)
@@ -247,28 +260,40 @@ class ContextManager(object):
         self.metapoll = metapoll
         self.msgp = msgp.JsonMsgp(metapoll, mgw_addr, WeakMethod(self.process_request))
 
+
+    def add_context(self, label, type):
+        if label in self.contexts_by_label:
+            raise Error("Context already exists!")
+        
+        if type == "proxy":
+            context = Context(label, weakref.proxy(self))
+        else:
+            raise Error("Invalid context type %s!" % type)
+            
+        self.contexts_by_label[label] = context
+        return context
+
+
+    def remove_context(self, label):
+        self.contexts_by_label.pop(label)
+        
         
     def process_request(self, sid, seq, params, target):
-        owner_addr, label = sid
-        context = self.contexts_by_label.get(label)
-
-        if not params:
-            if context:
-                self.contexts_by_label.pop(label)
+        try:
+            if target == "create":
+                owner_addr, label = sid
+                context = self.add_context(label, params["type"])
+            
+                self.msgp.add_stream(sid, WeakMethod(context.process_request))
+                context.process_request(sid, seq, params, "modify")  # fake modification
+            else:
+                raise Error("Invalid target %s!" % target)
+        except Exception as e:
+            print("Context error: %s" % e)
+            self.msgp.send_message(sid, seq, "error")
         else:
-            if not context:
-                context = Context(label, owner_addr, params, weakref.proxy(self))
-                self.contexts_by_label[label] = context
-                self.msgp.add_stream(sid)
-                
-            for li, leg_params in params.get("legs", {}).items():
-                context.set_leg(int(li), leg_params)
-                
-        self.msgp.send_message(sid, seq, "ok")
+            self.msgp.send_message(sid, seq, "ok")
         
-        if label not in self.contexts_by_label:
-            self.msgp.remove_stream(sid)
-
 
     def detected(self, sid, li, remote_addr):
         params = { 'legs': { li: { 'remote_addr': remote_addr } } }
@@ -278,7 +303,6 @@ class ContextManager(object):
 class Controller(object):
     def __init__(self, metapoll, mgc_addr):
         self.mgc_addr = mgc_addr
-        self.request_handlers = {}
         
         self.metapoll = metapoll
         self.msgp = msgp.JsonMsgp(metapoll, mgc_addr, WeakMethod(self.process_request))
@@ -289,17 +313,11 @@ class Controller(object):
         
         
     def process_request(self, sid, seq, params, target):
-        request_handler = self.request_handlers.get(sid)
-
-        if request_handler:
-            request_handler(sid, seq, params, target)
-            
-        # This side never accepts unsolicited streams
+        print("Unsolicited request from the MGW!")
         
         
     def create_context(self, sid, params, response_handler=None, request_handler=None):
-        self.request_handlers[sid] = request_handler
-        self.msgp.add_stream(sid)
+        self.msgp.add_stream(sid, request_handler)
         self.send_message(sid, "create", params, response_handler)
 
 
@@ -308,7 +326,6 @@ class Controller(object):
 
 
     def delete_context(self, sid, response_handler=None):
-        self.request_handlers.pop(sid)
         self.send_message(sid, "delete", None, response_handler)
         self.msgp.remove_stream(sid)
         

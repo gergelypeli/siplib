@@ -5,6 +5,9 @@ import json
 from async import WeakMethod
 
 
+class Error(Exception): pass
+
+
 class Message(object):
     def __init__(self, target, body, response_handler, ack_timeout, response_timeout):
         now = datetime.datetime.now()
@@ -19,12 +22,13 @@ class Message(object):
 
 class Stream(object):
     def __init__(self):
-        self.is_unopened = False
+        self.is_unconfirmed = False
         self.is_closed = False
         self.last_sent_seq = 0
         self.last_received_seq = 0
         self.sent_messages_by_seq = {}
         self.pending_ack_seqs = set()
+        self.request_handler = None
         
         
 def prid(sid, seq=None):
@@ -115,22 +119,25 @@ class Msgp(object):
     def transmit_nope(self, sid):
         raddr, label = sid
         
-        print("MSGP transmitting nope %s" % prid(sid, seq))
+        print("MSGP transmitting nope %s" % prid(sid))
         packet = b"@%s ^%s\n" % (label, "nope")
 
         self.socket.sendto(packet, raddr)
 
 
-    def add_stream(self, sid):
+    def add_stream(self, sid, request_handler=None):
         s = self.get_stream(sid)
         if s:
-            if s.is_unopened:
+            if s.is_unconfirmed:
                 print("Accepting stream %s" % prid(sid))
-                s.is_unopened = False
+                s.is_unconfirmed = False
             else:
                 raise Error("Stream already added!")
         else:
-            self.streams_by_id[sid] = Stream()
+            s = Stream()
+            self.streams_by_id[sid] = s
+            
+        s.request_handler = request_handler
 
 
     def remove_stream(self, sid):
@@ -154,8 +161,9 @@ class Msgp(object):
             raise Error("No such stream!")
         elif s.is_closed:
             raise Error("Stream is closed!")
-        elif s.is_unopened:
-            raise Error("Stream not opened!")
+
+        # Note: it is allowed to send a message on an unconfirmed stream, such as
+        # an error message, but we'll close it right afterwards
         
         msg = Message(
             target, self.encode_body(body), response_handler,
@@ -191,7 +199,7 @@ class Msgp(object):
             if seq == 1 and tseq is None:
                 self.add_stream(sid)
                 s = self.get_stream(sid)
-                s.is_unopened = True  # will be removed unless confirmed
+                s.is_unconfirmed = True  # will be removed unless confirmed
             else:
                 print("MSGP message for unknown stream: %s!" % prid(sid))
                 self.transmit_nope(sid)
@@ -234,13 +242,14 @@ class Msgp(object):
                         msg.response_handler(sid, seq, self.decode_body(body))
             else:
                 # Process as a request
-                self.request_handler(sid, seq, self.decode_body(body), target)
+                request_handler = s.request_handler or self.request_handler
+                request_handler(sid, seq, self.decode_body(body), target)
                 
-            if s.is_unopened:
+            if s.is_unconfirmed:
                 # Stream still not confirmed, reject
-                print("MSGP removing rejected stream %s" % prid(sid))
+                print("MSGP rejecting stream %s" % prid(sid))
                 self.streams_by_id.pop(sid)
-                self.transmit_nope(sid)
+                # Don't send unsolicited nope-s
             elif seq in s.pending_ack_seqs:
                 s.pending_ack_seqs.remove(seq)
                 print("MSGP needs explicit ACK %s" % prid(sid, seq))
@@ -251,6 +260,10 @@ class Msgp(object):
             if target == "nope":
                 print("Stream rejected by peer %s" % prid(sid))
                 self.remove_stream(sid)
+                
+                # Report as a request
+                request_handler = s.request_handler or self.request_handler
+                request_handler(sid, None, None, "nope")
             else:
                 print("Unknown service message %s from %s" % (target, prid(sid)))
 
