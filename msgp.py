@@ -19,6 +19,7 @@ class Message(object):
 
 class Stream(object):
     def __init__(self):
+        self.is_unopened = False
         self.is_closed = False
         self.last_sent_seq = 0
         self.last_received_seq = 0
@@ -107,12 +108,29 @@ class Msgp(object):
         
         print("MSGP transmitting ack %s" % prid(sid, seq))
         packet = b"@%s ^%s\n" % (label, seq)
-            
+
+        self.socket.sendto(packet, raddr)
+
+
+    def transmit_nope(self, sid):
+        raddr, label = sid
+        
+        print("MSGP transmitting nope %s" % prid(sid, seq))
+        packet = b"@%s ^%s\n" % (label, "nope")
+
         self.socket.sendto(packet, raddr)
 
 
     def add_stream(self, sid):
-        self.streams_by_id[sid] = Stream()
+        s = self.get_stream(sid)
+        if s:
+            if s.is_unopened:
+                print("Accepting stream %s" % prid(sid))
+                s.is_unopened = False
+            else:
+                raise Error("Stream already added!")
+        else:
+            self.streams_by_id[sid] = Stream()
 
 
     def remove_stream(self, sid):
@@ -136,6 +154,8 @@ class Msgp(object):
             raise Error("No such stream!")
         elif s.is_closed:
             raise Error("Stream is closed!")
+        elif s.is_unopened:
+            raise Error("Stream not opened!")
         
         msg = Message(
             target, self.encode_body(body), response_handler,
@@ -171,8 +191,10 @@ class Msgp(object):
             if seq == 1 and tseq is None:
                 self.add_stream(sid)
                 s = self.get_stream(sid)
+                s.is_unopened = True  # will be removed unless confirmed
             else:
                 print("MSGP message for unknown stream: %s!" % prid(sid))
+                self.transmit_nope(sid)
                 return
 
         if tseq is not None:
@@ -214,10 +236,23 @@ class Msgp(object):
                 # Process as a request
                 self.request_handler(sid, seq, self.decode_body(body), target)
                 
-            if seq in s.pending_ack_seqs:
+            if s.is_unopened:
+                # Stream still not confirmed, reject
+                print("MSGP removing rejected stream %s" % prid(sid))
+                self.streams_by_id.pop(sid)
+                self.transmit_nope(sid)
+            elif seq in s.pending_ack_seqs:
                 s.pending_ack_seqs.remove(seq)
                 print("MSGP needs explicit ACK %s" % prid(sid, seq))
                 self.transmit_ack(sid, seq)
+        elif tseq is None:
+            # Or the service message
+            
+            if target == "nope":
+                print("Stream rejected by peer %s" % prid(sid))
+                self.remove_stream(sid)
+            else:
+                print("Unknown service message %s from %s" % (target, prid(sid)))
 
 
     def recved(self):

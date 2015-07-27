@@ -259,6 +259,7 @@ class ContextManager(object):
             if not context:
                 context = Context(label, owner_addr, params, weakref.proxy(self))
                 self.contexts_by_label[label] = context
+                self.msgp.add_stream(sid)
                 
             for li, leg_params in params.get("legs", {}).items():
                 context.set_leg(int(li), leg_params)
@@ -292,6 +293,8 @@ class Controller(object):
 
         if request_handler:
             request_handler(sid, seq, params, target)
+            
+        # This side never accepts unsolicited streams
         
         
     def create_context(self, sid, params, response_handler=None, request_handler=None):
