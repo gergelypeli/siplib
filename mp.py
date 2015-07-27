@@ -81,7 +81,7 @@ class Leg(object):
         self.send_pts_by_format = None
         self.recv_formats_by_pt = None
         
-        self.name = "%s/%d" % (prid(self.context.sid), self.index)
+        self.name = "%s/%d" % (self.context.label, self.index)
         print("Created %s leg %s" % (type, self.name))
         
         
@@ -186,15 +186,16 @@ class EchoLeg(Leg):
 
 
 class Context(object):
-    def __init__(self, sid, params, manager):
+    def __init__(self, label, owner_addr, params, manager):
+        self.label = label
+        self.owner_addr = owner_addr
         self.manager = manager
         self.legs = []
-        self.sid = sid
-        print("Created context %s" % prid(self.sid))
+        print("Created context %s" % self.label)
         
         
     def __del__(self):
-        print("Deleted context %s" % prid(self.sid))
+        print("Deleted context %s" % self.label)
         
         
     def set_leg(self, li, params):
@@ -223,7 +224,8 @@ class Context(object):
         
         
     def detected(self, li, remote_addr):
-        self.manager.detected(self.sid, li, remote_addr)
+        sid = (self.owner_addr, self.label)
+        self.manager.detected(sid, li, remote_addr)
         
     
     def forward(self, li, format, packet):
@@ -234,35 +236,36 @@ class Context(object):
         except IndexError:
             raise Error("No outgoing leg!")
 
-        print("Forwarding in %s a %s from %d to %d" % (prid(self.sid), format, li, lj))
+        print("Forwarding in %s a %s from %d to %d" % (self.label, format, li, lj))
         
         leg.send_format(format, packet)
 
 
 class ContextManager(object):
     def __init__(self, metapoll, mgw_addr):
-        self.contexts_by_sid = {}
+        self.contexts_by_label = {}
         self.metapoll = metapoll
         self.msgp = msgp.JsonMsgp(metapoll, mgw_addr, WeakMethod(self.process_request))
 
         
     def process_request(self, sid, seq, params, target):
-        context = self.contexts_by_sid.get(sid)
+        owner_addr, label = sid
+        context = self.contexts_by_label.get(label)
 
         if not params:
             if context:
-                self.contexts_by_sid.pop(sid)
+                self.contexts_by_label.pop(label)
         else:
             if not context:
-                context = Context(sid, params, weakref.proxy(self))
-                self.contexts_by_sid[sid] = context
+                context = Context(label, owner_addr, params, weakref.proxy(self))
+                self.contexts_by_label[label] = context
                 
             for li, leg_params in params.get("legs", {}).items():
                 context.set_leg(int(li), leg_params)
                 
         self.msgp.send_message(sid, seq, "ok")
         
-        if sid not in self.contexts_by_sid:
+        if label not in self.contexts_by_label:
             self.msgp.remove_stream(sid)
 
 
