@@ -186,9 +186,9 @@ class EchoLeg(Leg):
 
 
 class Context(object):
-    def __init__(self, label, manager):
+    def __init__(self, label, owner_addr, manager):
         self.label = label
-        self.owner_addr = None
+        self.owner_addr = owner_addr
         self.manager = manager
         self.legs = []
         print("Created context %s" % self.label)
@@ -225,9 +225,6 @@ class Context(object):
 
     def process_request(self, sid, seq, params, target):
         if target == "modify":
-            # Just in case of a MGC failover
-            self.owner_addr = sid[0]
-            
             for li, leg_params in params.get("legs", {}).items():
                 self.set_leg(int(li), leg_params)
         elif target == "delete":
@@ -261,12 +258,12 @@ class ContextManager(object):
         self.msgp = msgp.JsonMsgp(metapoll, mgw_addr, WeakMethod(self.process_request))
 
 
-    def add_context(self, label, type):
+    def add_context(self, label, owner_addr, type):
         if label in self.contexts_by_label:
             raise Error("Context already exists!")
         
         if type == "proxy":
-            context = Context(label, weakref.proxy(self))
+            context = Context(label, owner_addr, weakref.proxy(self))
         else:
             raise Error("Invalid context type %s!" % type)
             
@@ -275,17 +272,27 @@ class ContextManager(object):
 
 
     def remove_context(self, label):
-        self.contexts_by_label.pop(label)
+        context = self.contexts_by_label.pop(label)
+        
+        old_sid = (context.owner_addr, context.label)
+        self.msgp.remove_stream(old_sid)
         
         
     def process_request(self, sid, seq, params, target):
         try:
-            if target == "create":
-                owner_addr, label = sid
-                context = self.add_context(label, params["type"])
+            owner_addr, label = sid
             
+            if target == "create":
+                context = self.add_context(label, owner_addr, params["type"])
                 self.msgp.add_stream(sid, WeakMethod(context.process_request))
                 context.process_request(sid, seq, params, "modify")  # fake modification
+            elif target == "take":
+                context = self.contexts_by_label.get(label)
+                old_sid = (context.owner_addr, context.label)
+                self.msgp.remove_stream(old_sid)
+                
+                self.msgp.add_stream(sid, WeakMethod(context.process_request))
+                context.owner_addr = owner_addr
             else:
                 raise Error("Invalid target %s!" % target)
         except Exception as e:
