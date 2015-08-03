@@ -6,18 +6,19 @@ from weakref import proxy as Weak
 from datetime import timedelta, datetime
 import logging
 
-from async import Metapoll, WeakMethod
+from async import Metapoll, WeakMethod, Weak
 
 from format import Addr, Uri, Nameaddr, Status, Via, Hop, print_structured_message, parse_structured_message
 from transactions import TransactionManager, make_virtual_response, make_simple_response
 from dialog import Dialog, DialogManager
 from leg import Leg, SipLeg, create_uninvited_leg
-from call import Call, ProxiedMediaChannel, ProxiedMediaLeg
+from call import Call
 from sdp import Sdp
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
 from util import resolve
-import mp
+from mgw import ContextManager
+from mgc import Controller, ProxiedMediaChannel, ProxiedMediaLeg, EchoedMediaLeg
 
 #local_addr = Addr("localhost", 5060)
 a_addr = Addr("a.net", 5060)
@@ -102,6 +103,10 @@ class CalleeLeg(Leg):
         return offer
 
 
+    def make_media_leg(self, sdp_channel):
+        return EchoedMediaLeg()
+
+
 class CallerLeg(Leg):
     def dial(self):
         self.ctx["from"] = Nameaddr(caller_uri, caller_name)
@@ -120,7 +125,7 @@ class CallerLeg(Leg):
         self.leg.do(dict(type="hangup"))
 
 
-class Transport(object):
+class TestTransport(object):
     def __init__(self, local_addr, reception):
         self.reception = reception
         self.transmission = None
@@ -196,7 +201,7 @@ class TestAuthority(Authority):
         return self.myuser
 
 
-class TestController(mp.Controller):
+class TestController(Controller):
     next_ctx = 1
     next_port = 30000
     
@@ -220,7 +225,7 @@ class TestController(mp.Controller):
 class Switch(object):
     def __init__(self, metapoll, local_addr, mgc_addr, realm):
         self.metapoll = metapoll
-        self.transport = Transport(local_addr, WeakMethod(self.reception))
+        self.transport = TestTransport(local_addr, WeakMethod(self.reception))
         self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
         self.record_manager = RecordManager(WeakMethod(self.transaction_manager.send_message))
         self.authority = TestAuthority(realm, Weak(self.record_manager))  # TODO: domain2realm!
@@ -376,10 +381,10 @@ class SwitchB(Switch):
 logging.basicConfig(level=logging.DEBUG)
 metapoll = Metapoll()
 
-mgw = mp.ContextManager(metapoll, mgw_addr)
+mgw = ContextManager(metapoll, mgw_addr)
 
-switch_a = SwitchA(metapoll, a_addr, mgc1_addr, "A-NET")
-switch_b = SwitchB(metapoll, b_addr, mgc2_addr, "B-NET")
+switch_a = SwitchA(Weak(metapoll), a_addr, mgc1_addr, "A-NET")
+switch_b = SwitchB(Weak(metapoll), b_addr, mgc2_addr, "B-NET")
 
 switch_a.transport.set_peer(switch_b.transport)
 switch_b.transport.set_peer(switch_a.transport)

@@ -307,40 +307,6 @@ class ContextManager(object):
         self.msgp.send_message(sid, "detected", params)
 
 
-class Controller(object):
-    def __init__(self, metapoll, mgc_addr):
-        self.mgc_addr = mgc_addr
-        
-        self.metapoll = metapoll
-        self.msgp = msgp.JsonMsgp(metapoll, mgc_addr, WeakMethod(self.process_request))
-        
-        
-    def send_message(self, sid, target, params, response_handler):
-        self.msgp.send_message(sid, target, params, response_handler=response_handler)
-        
-        
-    def process_request(self, sid, seq, params, target):
-        print("Unsolicited request from the MGW!")
-        
-        
-    def create_context(self, sid, params, response_handler=None, request_handler=None):
-        self.msgp.add_stream(sid, request_handler)
-        self.send_message(sid, "create", params, response_handler)
-
-
-    def modify_context(self, sid, params, response_handler=None):
-        self.send_message(sid, "modify", params, response_handler)
-
-
-    def delete_context(self, sid, response_handler=None):
-        self.send_message(sid, "delete", None, response_handler)
-        self.msgp.remove_stream(sid)
-        
-        
-    def make_media_channel(self, media_legs):
-        raise NotImplementedError()
-
-
 class Rtp(object):
     def __init__(self, metapoll, local_addr, remote_addr, receiving_callback):
         self.metapoll = metapoll

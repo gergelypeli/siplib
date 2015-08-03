@@ -1,10 +1,11 @@
 #! /usr/bin/python
 
-import mp
+import async
+import mgw
 
 controller_addr = ("localhost", 10000)
-metapoll = Metapoll()
-cm = ContextManager(metapoll, controller_addr)
+metapoll = async.Metapoll()
+cm = mgw.ContextManager(metapoll, controller_addr)
 
 while True:
     metapoll.do_poll()

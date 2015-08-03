@@ -3,7 +3,7 @@ from __future__ import print_function, unicode_literals, absolute_import
 from pprint import pprint, pformat
 import uuid
 import datetime
-from weakref import proxy as Weak
+from async import Weak
 
 import format
 from format import Addr, Uri, Nameaddr, Via, Status

@@ -11,7 +11,7 @@ import os
 
 __all__ = [
     'lookup_host_alias',
-    'WeakMethod', 'Metapoll',
+    'WeakMethod', 'Weak', 'Metapoll',
     'Listener', 'TcpListener', 'UnixListener',
     'Reconnector', 'TcpReconnector',
     'Message', 'Connection'
@@ -30,6 +30,10 @@ def lookup_host_alias(host):
         pass
 
     return None
+
+
+def Weak(x):
+    return weakref.proxy(x)
 
 
 class WeakMethod(object):
