@@ -16,22 +16,24 @@ class ProxiedMediaLeg(object):
         self.remote_addr = None
         self.send_formats = None
         self.recv_formats = None
+
+
+    def get_params(self):
+        return {
+            'type': 'net',
+            'local_addr': self.local_addr,
+            'remote_addr': self.remote_addr,
+            'send_formats': self.send_formats,
+            'recv_formats': self.recv_formats
+        }
         
 
 class ProxiedMediaChannel(object):
-    mgc = None
-
-    @classmethod
-    def set_mgc(cls, mgc):
-        cls.mgc = mgc
-        
-    
-    def __init__(self):
-        sid, addrs = self.mgc.allocate_media(2)  # TODO: deallocate, too
-
-        self.is_created = False
+    def __init__(self, mgc, sid, media_legs):
+        self.mgc = mgc
         self.context_sid = sid
-        self.legs = [ ProxiedMediaLeg(addrs[0]), ProxiedMediaLeg(addrs[1]) ]
+        self.legs = media_legs
+        self.is_created = False
         self.pending_addr = None
         self.pending_formats = None
 
@@ -75,22 +77,11 @@ class ProxiedMediaChannel(object):
         offering_leg.send_formats = offer_formats
         offering_leg.recv_formats = answer_formats
 
-        def leg_params(i):
-            leg = self.legs[i]
-            
-            return {
-                'type': 'net',
-                'local_addr': leg.local_addr,
-                'remote_addr': leg.remote_addr,
-                'send_formats': leg.send_formats,
-                'recv_formats': leg.recv_formats
-            }
-        
         params = {
             'type': 'proxy',
             'legs': {
-                '0': leg_params(0),
-                '1': leg_params(1)
+                '0': self.legs[0].get_params(),
+                '1': self.legs[1].get_params()
             }
         }
         
@@ -110,7 +101,8 @@ class ProxiedMediaChannel(object):
 
 
 class Call(object):
-    def __init__(self, route, finish):
+    def __init__(self, mgc, route, finish):
+        self.mgc = mgc
         self.route = route
         self.finish = finish
         self.legs = {}
@@ -131,13 +123,15 @@ class Call(object):
             sdp.channels[i].addr = local_addr
         
         
-    def create_media_channel(self):
-        return ProxiedMediaChannel()
+    def create_media_channel(self, i):
+        media_legs = [ self.legs[li].make_media_leg(i) for li in range(len(self.legs)) ]
+        
+        return self.mgc.make_media_channel(media_legs)
         
         
     def process_offer(self, li, offer):
         for i in range(len(self.media_channels), len(offer.channels)):
-            self.media_channels.append(self.create_media_channel())
+            self.media_channels.append(self.create_media_channel(i))
         
         for i in range(len(offer.channels)):
             mc = self.media_channels[i]

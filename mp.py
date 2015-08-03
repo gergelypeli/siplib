@@ -337,7 +337,7 @@ class Controller(object):
         self.msgp.remove_stream(sid)
         
         
-    def allocate_media(self, leg_count):
+    def make_media_channel(self, media_legs):
         raise NotImplementedError()
 
 

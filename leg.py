@@ -12,6 +12,10 @@ class Leg(object):
         self.ctx = {}
     
     
+    def make_media_leg(self, sdp_channel):
+        return None  # The Call may decide what to use
+        
+    
     def set_report(self, report):
         self.report = report
         

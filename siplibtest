@@ -12,7 +12,7 @@ from format import Addr, Uri, Nameaddr, Status, Via, Hop, print_structured_messa
 from transactions import TransactionManager, make_virtual_response, make_simple_response
 from dialog import Dialog, DialogManager
 from leg import Leg, SipLeg, create_uninvited_leg
-from call import Call, ProxiedMediaChannel
+from call import Call, ProxiedMediaChannel, ProxiedMediaLeg
 from sdp import Sdp
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
@@ -57,10 +57,11 @@ a=rtpmap:99 h263-1998/90000
 """)
 
 MGW_HOST = "localhost"
-MGC_HOST = "localhost"
+MGC1_HOST = "localhost"
+MGC2_HOST = "localhost"
 mgw_addr = (MGW_HOST, 20000)
-mgc_addr = (MGC_HOST, 20001)
-#mgc2_addr = (MGC2_HOST, 20002)  # FIXME: Oops, both switches use the same MGC and MGW!
+mgc1_addr = (MGC1_HOST, 20001)
+mgc2_addr = (MGC2_HOST, 20002)
 
 
 def sleep(secs, method):
@@ -199,20 +200,25 @@ class TestController(mp.Controller):
     next_ctx = 1
     next_port = 30000
     
-    def allocate_media(self, leg_count):
+    def make_media_channel(self, media_legs):
         # Must use unique MGW addresses for Msgp
-        sid = (resolve(mgw_addr), "ctx-%d" % self.next_ctx)  # TODO: make Sid class!
-        # Must use IP4 addresses or FQDN in SDP, so let's go with IP4
-        addrs = [ resolve((MGW_HOST, self.next_port + i)) for i in range(leg_count) ]
-        
+        key = chr(self.mgc_addr[1] % 10 + 96)
+        context_id = "ctx-%s-%d" % (key, self.next_ctx)
+        sid = (resolve(mgw_addr), context_id)  # TODO: make Sid class!
         self.next_ctx += 1
-        self.next_port += leg_count
         
-        return sid, addrs
+        # Must use IP4 addresses or FQDN in SDP, so let's go with IP4
+        for i in range(len(media_legs)):
+            if not media_legs[i]:
+                addr = (MGW_HOST, self.next_port)
+                self.next_port += 1
+                media_legs[i] = ProxiedMediaLeg(resolve(addr))
+        
+        return ProxiedMediaChannel(Weak(self), sid, media_legs)
         
 
 class Switch(object):
-    def __init__(self, metapoll, local_addr, realm):
+    def __init__(self, metapoll, local_addr, mgc_addr, realm):
         self.metapoll = metapoll
         self.transport = Transport(local_addr, WeakMethod(self.reception))
         self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
@@ -229,6 +235,7 @@ class Switch(object):
             WeakMethod(self.transport.get_hop),
             WeakMethod(self.authority.provide_auth)
         )
+        self.mgc = TestController(metapoll, mgc_addr)
 
         self.calls = []
 
@@ -263,7 +270,7 @@ class Switch(object):
         
         
     def start_call(self, incoming_leg):
-        call = Call(WeakMethod(self.route_call), WeakMethod(self.finish_call))
+        call = Call(Weak(self.mgc), WeakMethod(self.route_call), WeakMethod(self.finish_call))
         call.add_leg(0, incoming_leg)
         self.calls.append(call)
     
@@ -356,7 +363,7 @@ class SwitchB(Switch):
         if to_uri.user == "callee":
             return CalleeLeg()
             
-        return super(SwitchB, self).route(ctx)
+        return super(SwitchB, self).route_call(ctx)
         
         
     def test_registering(self):
@@ -370,11 +377,9 @@ logging.basicConfig(level=logging.DEBUG)
 metapoll = Metapoll()
 
 mgw = mp.ContextManager(metapoll, mgw_addr)
-mgc = TestController(metapoll, mgc_addr)
-ProxiedMediaChannel.set_mgc(mgc)
 
-switch_a = SwitchA(metapoll, a_addr, "A-NET")
-switch_b = SwitchB(metapoll, b_addr, "B-NET")
+switch_a = SwitchA(metapoll, a_addr, mgc1_addr, "A-NET")
+switch_b = SwitchB(metapoll, b_addr, mgc2_addr, "B-NET")
 
 switch_a.transport.set_peer(switch_b.transport)
 switch_b.transport.set_peer(switch_a.transport)
