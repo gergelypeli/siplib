@@ -141,7 +141,7 @@ class RecordManager(object):
             
         record = self.records_by_uri.get(uri)
         if record:
-            print("Found record: %s" % (uri,))
+            print("Have record: %s" % (uri,))
         else:
             print("Created record: %s" % (uri,))
             record = Record(Weak(self), uri)
@@ -163,13 +163,23 @@ class RecordManager(object):
     def lookup_contact_uris(self, record_uri):
         record = self.records_by_uri.get(record_uri)
         
-        return record.get_contact_uris() if record else []
+        if record:
+            print("Found contact URIs: %s" % (record_uri,))
+            return record.get_contact_uris()
+        else:
+            print("Not found contact URIs: %s" % (record_uri,))
+            return []
 
 
     def lookup_contact_hops(self, record_uri):
         record = self.records_by_uri.get(record_uri)
         
-        return record.get_contact_hops() if record else []
+        if record:
+            print("Found contact hops: %s" % (record_uri,))
+            return record.get_contact_hops()
+        else:
+            print("Not found contact hops: %s" % (record_uri,))
+            return []
 
 
 class Registration(object):

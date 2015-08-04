@@ -323,7 +323,7 @@ class Dialog(object):
 
 
     def send_response(self, user_params, related_params=None):
-        print("Will send response: %s" % str(user_params))
+        #print("Will send response: %s" % str(user_params))
         params = self.make_response(user_params, related_params)
         self.dialog_manager.transmit(params, related_params)
         

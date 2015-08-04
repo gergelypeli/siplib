@@ -5,6 +5,8 @@ import hashlib
 
 from format import Auth, WwwAuth
 
+# ha1 = md5("authname:realm:password")
+
 
 def generate_nonce():
     return uuid.uuid4().hex[:8]

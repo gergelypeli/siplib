@@ -16,20 +16,9 @@ Status = collections.namedtuple("Status", [ "code", "reason" ])
 Via = collections.namedtuple("Via", [ "addr", "branch" ])  # TODO: improve!
 
 
-class Hop(object):
-    def __init__(self, local_addr=None, remote_addr=None, iface=None):
-        self.local_addr = local_addr
-        self.remote_addr = remote_addr
-        self.iface = iface
-        
-    def __repr__(self):
-        return "Hop(local_addr=%r, remote_addr=%r, iface=%r)" % (
-            self.local_addr, self.remote_addr, self.iface
-        )
-        
-    
+class Hop(collections.namedtuple("Hop", [ "local_addr", "remote_addr", "interface" ])):
     def __str__(self):
-        return "%s:%d >-(%s)-> %s:%d" % (self.local_addr + (self.iface,) + self.remote_addr)
+        return "%s:%d >-(%s)-> %s:%d" % (self.local_addr + (self.interface,) + self.remote_addr)
 
 
 def must_match(pattern, s):
@@ -188,7 +177,7 @@ class Uri(collections.namedtuple("Uri", "addr user schema params")):
             host, port = parts[0].split(':', 1)
             port = int(port)
         else:
-            host = part[0]
+            host = parts[0]
             port = None
         
         params = parse_parts(parts[1:])

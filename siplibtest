@@ -5,7 +5,7 @@ from pprint import pprint
 from weakref import proxy as Weak
 from datetime import timedelta, datetime
 import logging
-
+import socket
 from async import Metapoll, WeakMethod, Weak
 
 from format import Addr, Uri, Nameaddr, Status, Via, Hop, print_structured_message, parse_structured_message
@@ -20,9 +20,9 @@ from util import resolve
 from mgw import ContextManager
 from mgc import Controller, ProxiedMediaChannel, ProxiedMediaLeg, EchoedMediaLeg
 
-#local_addr = Addr("localhost", 5060)
-a_addr = Addr("a.net", 5060)
-b_addr = Addr("b.net", 5060)
+HOST = "otthon"
+a_addr = Addr(HOST, 5060)
+b_addr = Addr(HOST, 5062)
 
 a_registrar = Uri(a_addr)
 
@@ -38,9 +38,10 @@ callee_nameaddr = Nameaddr(callee_uri, callee_name)
 
 caller_cred = ("CALLER_AUTHNAME", "CALLER_HA1")
 callee_cred = ("CALLEE_AUTHNAME", "CALLEE_HA1")
+phone_cred = ("phone", "29947c88227ea55104f09dbdd5e6c48e")  # md5(phone:A-NET:secret)
 
-caller_audio_addr = ("localhost", 10000)
-caller_video_addr = ("localhost", 10001)
+caller_audio_addr = (HOST, 10000)
+caller_video_addr = (HOST, 10001)
 
 caller_sdp = Sdp.parse("""
 v=0
@@ -129,17 +130,15 @@ class TestTransport(object):
     def __init__(self, local_addr, reception):
         self.reception = reception
         self.transmission = None
-        self.hop = Hop(local_addr=local_addr, remote_addr=None, iface="virt")
+        self.hop = Hop(local_addr=local_addr, remote_addr=None, interface="virt")
         
         
     def set_peer(self, peer):
         self.transmission = WeakMethod(peer.process)
-        self.hop = Hop(local_addr=self.hop.local_addr, remote_addr=peer.hop.local_addr, iface=self.hop.iface)
+        self.hop = Hop(local_addr=self.hop.local_addr, remote_addr=peer.hop.local_addr, interface=self.hop.interface)
         
         
     def get_hop(self, uri):
-        # FIXME: cheating!
-        #return Hop(local_addr=("a", 10000), remote_addr=("b", 20000), iface="eth0")
         return self.hop
         
         
@@ -152,7 +151,6 @@ class TestTransport(object):
         print("Transport sending by %s:" % (self.hop,))
         print("\n" + "\n".join("  %s" % line for line in sip.split("\n")))
         
-        #poh = Hop(local_addr=hop.remote_addr, remote_addr=hop.local_addr, iface=hop.iface)
         metapoll.register_timeout(timedelta(), self.transmission.rebind(sip))
 
 
@@ -161,6 +159,46 @@ class TestTransport(object):
         #print(s)
         msg = parse_structured_message(sip)
         msg["hop"] = self.hop
+        self.reception(msg)
+
+
+class UdpTransport(object):
+    def __init__(self, metapoll, local_addr, reception):
+        self.metapoll = metapoll
+        self.local_addr = local_addr
+        self.reception = reception
+        
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.bind(self.local_addr)
+
+        self.metapoll.register_reader(self.socket, WeakMethod(self.recved))
+        
+        
+    def get_hop(self, uri):
+        return Hop(local_addr=self.local_addr, remote_addr=uri.addr, interface="eth0")
+        
+        
+    def send(self, msg):
+        hop = msg["hop"]
+        
+        if hop.local_addr != self.local_addr:
+            print("This transport can't send this!")
+            return
+        
+        sip = print_structured_message(msg)
+        print("Transport sending from %s:" % (self.local_addr,))
+        print("\n" + "\n".join("  %s" % line for line in sip.split("\n")))
+        
+        self.socket.sendto(sip, hop.remote_addr)
+
+
+    def recved(self):
+        sip, raddr = self.socket.recvfrom(65535)
+        #print("Transport receiving:")
+        #print(s)
+        
+        msg = parse_structured_message(sip)
+        msg["hop"] = Hop(local_addr=self.local_addr, remote_addr=raddr, interface="eth0")
         self.reception(msg)
 
 
@@ -185,8 +223,9 @@ class TestAuthority(Authority):
         method = params["method"]
         from_uri = params["from"].uri
         hop = params["hop"]
+        contact_hops = self.record_manager.lookup_contact_hops(from_uri)
         
-        if method != "REGISTER" and hop in self.record_manager.lookup_contact_hops(from_uri):
+        if method != "REGISTER" and hop in contact_hops:
             print("Trusting registered user '%s'" % (from_uri,))
             return True
         
@@ -225,7 +264,7 @@ class TestController(Controller):
 class Switch(object):
     def __init__(self, metapoll, local_addr, mgc_addr, realm):
         self.metapoll = metapoll
-        self.transport = TestTransport(local_addr, WeakMethod(self.reception))
+        self.transport = UdpTransport(metapoll, local_addr, WeakMethod(self.reception))
         self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
         self.record_manager = RecordManager(WeakMethod(self.transaction_manager.send_message))
         self.authority = TestAuthority(realm, Weak(self.record_manager))  # TODO: domain2realm!
@@ -339,9 +378,18 @@ class SwitchA(Switch):
         
         self.authority.setuser(*caller_cred)
         self.authority.adduser(*callee_cred)
+        self.authority.adduser(*phone_cred)
 
-        metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_dialing))
+        #metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_dialing))
         
+        
+    def route_call(self, ctx):
+        # For the phone call only
+        if ctx["to"].uri.user == "555":
+            self.ctx["to"] = Nameaddr(callee_uri)
+            
+        return super(SwitchA, self).route_call(ctx)
+            
         
     def test_dialing(self):
         print("Dialing begins.")
@@ -359,7 +407,7 @@ class SwitchB(Switch):
         self.authority.setuser(*callee_cred)
         self.authority.adduser(*caller_cred)
 
-        metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
+        #metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
 
 
     def route_call(self, ctx):
@@ -375,7 +423,6 @@ class SwitchB(Switch):
         print("Registering begins.")
 
         self.registration_manager.start_registration(a_registrar, callee_uri, callee_uri)
-        #sleep(1, self.testing1)
     
 
 logging.basicConfig(level=logging.DEBUG)
@@ -386,8 +433,8 @@ mgw = ContextManager(metapoll, mgw_addr)
 switch_a = SwitchA(Weak(metapoll), a_addr, mgc1_addr, "A-NET")
 switch_b = SwitchB(Weak(metapoll), b_addr, mgc2_addr, "B-NET")
 
-switch_a.transport.set_peer(switch_b.transport)
-switch_b.transport.set_peer(switch_a.transport)
+#switch_a.transport.set_peer(switch_b.transport)
+#switch_b.transport.set_peer(switch_a.transport)
 
 while True:
     try:

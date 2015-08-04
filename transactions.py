@@ -416,7 +416,7 @@ class InviteServerTransaction(PlainServerTransaction):
 
 
     def process_ack(self):
-        print("InviteServer ACKed!")
+        #print("InviteServer ACKed.")
         
         if self.state == self.TRANSMITTING:
             self.change_state(self.LINGERING)
