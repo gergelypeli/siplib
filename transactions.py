@@ -186,6 +186,17 @@ class Transaction(object):
             self.retransmit_interval = min(self.retransmit_interval * 2, self.T2)
 
 
+    def maintain(self, now):
+        if self.expiration_deadline and self.expiration_deadline <= now:
+            self.expired()
+            return False
+            
+        if self.retransmit_deadline and self.retransmit_deadline <= now:
+            self.retransmit()
+            
+        return True
+
+
     def send(self, msg):
         pass
 
@@ -380,7 +391,7 @@ class InviteServerTransaction(PlainServerTransaction):
         if self.state == self.WAITING:
             if not self.incoming_via:
                 self.incoming_via = request["via"]
-                self.send_trying(request)
+                self.trying_response = make_simple_response(request, Status(100, "Trying"))
                 self.report_request(request)
         elif self.state == self.PROVISIONING:
             self.retransmit()
@@ -400,9 +411,11 @@ class InviteServerTransaction(PlainServerTransaction):
             self.transmit(response)
 
 
-    def send_trying(self, request):
-        response = make_simple_response(request, Status(100, "Trying"))
-        self.send(response)
+    def maintain(self, now):
+        if self.state == self.WAITING:
+            self.send(self.trying_response)
+            
+        return super(InviteServerTransaction, self).maintain(now)
         
 
     def expired(self):
@@ -453,11 +466,10 @@ class TransactionManager(object):
 
     def maintain_transactions(self, now, transactions):
         for tr_id, tr in list(transactions.items()):
-            if tr.expiration_deadline and tr.expiration_deadline <= now:
-                tr.expired()
+            keep = tr.maintain(now)
+            
+            if not keep:
                 transactions.pop(tr_id)
-            elif tr.retransmit_deadline and tr.retransmit_deadline <= now:
-                tr.retransmit()
 
 
     def maintenance(self):

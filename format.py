@@ -195,7 +195,7 @@ class Nameaddr(collections.namedtuple("Nameaddr", "uri name params")):
         # be interpreted as header parameters. So enclose them always just to be safe.
 
         uri = self.uri.print()
-        name = '"%s"' if self.name and " " in self.name else self.name
+        name = '"%s"' % self.name if self.name and " " in self.name else self.name
         first_part = ["%s <%s>" % (name, uri) if name else "<%s>" % uri]
         last_parts = print_params(self.params)
         full = ";".join(first_part + last_parts)

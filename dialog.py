@@ -261,7 +261,7 @@ class Dialog(object):
         peer_contact = first(params["contact"])
 
         if from_nameaddr != self.local_nameaddr:
-            raise Error("Mismatching recipient!")
+            raise Error("Mismatching recipient, from %s, local %s!" % (from_nameaddr, self.local_nameaddr))
 
         if self.is_established():
             if call_id != self.call_id:

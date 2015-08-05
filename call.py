@@ -66,10 +66,12 @@ class Call(object):
             action["ctx"] = dst_ctx
             
             outgoing_leg = self.route(dst_ctx)
-            if (outgoing_leg):
-                self.add_leg(1, outgoing_leg)
-            else:
+            if not outgoing_leg:
                 print("Routing failed!")  # TODO: reject!
+                self.finish(self)
+                return
+
+            self.add_leg(1, outgoing_leg)
         
         offer = action.get("offer")
         if offer:

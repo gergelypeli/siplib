@@ -70,6 +70,10 @@ def sleep(secs, method):
     metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
 
 
+def indented(text, indent="  "):
+    return "\n" + "\n".join(indent + line for line in text.split("\n"))
+
+
 class CalleeLeg(Leg):
     def __init__(self):
         super(CalleeLeg, self).__init__()
@@ -186,19 +190,20 @@ class UdpTransport(object):
             return
         
         sip = print_structured_message(msg)
-        print("Transport sending from %s:" % (self.local_addr,))
-        print("\n" + "\n".join("  %s" % line for line in sip.split("\n")))
+        print("Transport sending from %s to %s:" % (hop.local_addr, hop.remote_addr))
+        print(indented(sip))
         
         self.socket.sendto(sip, hop.remote_addr)
 
 
     def recved(self):
         sip, raddr = self.socket.recvfrom(65535)
-        #print("Transport receiving:")
-        #print(s)
+        hop = Hop(local_addr=self.local_addr, remote_addr=Addr(*raddr), interface="eth0")
+        print("Transport receiving from %s to %s:" % (hop.remote_addr, hop.local_addr))
+        print(indented(sip))
         
         msg = parse_structured_message(sip)
-        msg["hop"] = Hop(local_addr=self.local_addr, remote_addr=raddr, interface="eth0")
+        msg["hop"] = hop
         self.reception(msg)
 
 
@@ -380,13 +385,13 @@ class SwitchA(Switch):
         self.authority.adduser(*callee_cred)
         self.authority.adduser(*phone_cred)
 
-        #metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_dialing))
+        metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_dialing))
         
         
     def route_call(self, ctx):
         # For the phone call only
         if ctx["to"].uri.user == "555":
-            self.ctx["to"] = Nameaddr(callee_uri)
+            ctx["to"] = Nameaddr(callee_uri)
             
         return super(SwitchA, self).route_call(ctx)
             
@@ -407,7 +412,7 @@ class SwitchB(Switch):
         self.authority.setuser(*callee_cred)
         self.authority.adduser(*caller_cred)
 
-        #metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
+        metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
 
 
     def route_call(self, ctx):
