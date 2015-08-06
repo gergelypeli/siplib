@@ -6,6 +6,8 @@ from sdp import Sdp
 
 # TODO: use attributes instead for these
 META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "sdp", "hop", "user_params", "authname" ]
+LIST_HEADER_FIELDS = [ "via", "route", "record_route", "contact" ]
+
 
 class FormatError(Exception):
     pass
@@ -240,7 +242,7 @@ def print_message(initial_line, params, body):
         else:
             header_lines.append("%s: %s" % (field, v))
 
-    lines = [initial_line] + header_lines + ["", body]
+    lines = [ initial_line ] + header_lines + [ "", body ]
     return "\r\n".join(lines)
 
 
@@ -248,13 +250,7 @@ def parse_message(msg):
     lines = msg.split("\r\n")
     initial_line = lines.pop(0)
     body = ""
-
-    params = {
-        "via": [],
-        "route": [],
-        "record_route": [],
-        "contact": []
-    }
+    params = { field: [] for field in LIST_HEADER_FIELDS }  # TODO: auth related?
 
     while lines:
         line = lines.pop(0)
@@ -308,6 +304,8 @@ def print_structured_message(params):
     sdp = params.get("sdp")
     if sdp:
         body = sdp.print()
+        p["content_type"] = "application/sdp"
+        p["content_length"] = len(body)
 
     return print_message(initial_line, p, body)
 

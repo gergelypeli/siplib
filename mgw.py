@@ -90,21 +90,32 @@ class Leg(object):
             
         
     def set(self, params):
+        print("Setting leg: %s" % (params,))
+        
+        def intkeys(x):
+            return { int(k): v for k, v in x.items() }
+            
         if "send_formats" in params:
-            self.send_pts_by_format = revdict(params["send_formats"])
+            self.send_pts_by_format = revdict(intkeys(params["send_formats"]))
+            
+        print("send_formats: %s" % (self.send_pts_by_format,))
             
         if "recv_formats" in params:
-            self.recv_formats_by_pt = params["recv_formats"]
+            self.recv_formats_by_pt = intkeys(params["recv_formats"])
 
 
-    def recv_format(self, packet):
+    def recv(self, packet):
         pt = get_payload_type(packet)
         
         try:
             format = self.recv_formats_by_pt[pt]
         except KeyError:
-            raise Error("Ignoring unknown payload type %d" % pt)
-            
+            print("Ignoring received unknown payload type %d" % pt)
+        else:
+            self.recv_format(format, packet)
+
+
+    def recv_format(self, format, packet):
         self.context.forward(self.index, format, packet)
 
 
@@ -113,14 +124,12 @@ class Leg(object):
         
             
     def send_format(self, format, packet):
-        if not self.send_pts_by_format:
-            return
-            
-        pt = self.send_pts_by_format.get(format)
-        if not pt:
-            return
-            
-        self.send(set_payload_type(packet, pt))
+        try:
+            pt = self.send_pts_by_format[format]  # pt can be 0, which is false...
+        except TypeError, KeyError:
+            print("Ignoring sent unknown payload format %s" % format)
+        else:
+            self.send(set_payload_type(packet, pt))
 
 
 class NetLeg(Leg):
@@ -129,42 +138,51 @@ class NetLeg(Leg):
         self.local_addr = None
         self.remote_addr = None
         self.socket = None
+        self.metapoll = context.manager.metapoll
         
         
     def __del__(self):
-        if self.socket and self.context:
-            self.context.manager.unregister(self.socket.fileno())
+        if self.socket:
+            self.metapoll.register_reader(self.socket, None)
             
         
     def set(self, params):
         super(NetLeg, self).set(params)
-            
-        if "local_host" in params and "local_port" in params:
+
+        if "local_addr" in params:
             try:
-                self.local_addr = (params["local_host"], int(params["local_port"]))
+                if self.socket:
+                    self.metapoll.register_reader(self.socket, None)
+                    
+                self.local_addr = tuple(params["local_addr"])
                 self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 self.socket.bind(self.local_addr)
-                self.context.manager.register(self.socket.fileno(), WeakMethod(self.recv))
+                self.metapoll.register_reader(self.socket, WeakMethod(self.recved))
             except Exception as e:
-                raise Error("Couldn't set leg: %s" % e)
-        elif "local_host" in params or "local_port" in params:
-            raise Error("Local params error!")
+                raise Error("Couldn't set up net leg: %s" % e)
             
-        if "remote_host" in params:
-            self.remote_addr = (params["remote_host"], None)
+        if "remote_addr" in params:
+            self.remote_addr = tuple(params["remote_addr"])
     
     
-    def recv(self):
+    def recved(self):
         print("Receiving on %s" % self.name)
         packet, addr = self.socket.recvfrom(65535)
-        if self.remote_addr and self.remote_addr[0] != addr[0]:
-            return
         
-        if not self.remote_addr or not self.remote_addr[1]:
+        if self.remote_addr:
+            remote_host, remote_port = self.remote_addr
+            
+            if remote_host and remote_host != addr[0]:
+                return
+                
+            if remote_port and remote_port != addr[1]:
+                return
+        
+        if addr != self.remote_addr:
             self.context.detected(self.index, addr)
             self.remote_addr = addr
             
-        self.recv_format(packet)
+        self.recv(packet)
     
     
     def send(self, packet):
@@ -180,9 +198,10 @@ class EchoLeg(Leg):
         super(EchoLeg, self).__init__("echo", index, context)
 
 
-    def send(self, packet):
-        print("Echoing on %s" % self.name)
-        self.recv_format(packet)
+    def send_format(self, format, packet):
+        # We don't care about payload types
+        print("Echoing %s packet on %s" % (format, self.name))
+        self.recv_format(format, packet)
 
 
 class Context(object):

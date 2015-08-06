@@ -9,7 +9,7 @@ import format
 from format import Addr, Uri, Nameaddr, Via, Status
 from sdp import generate_session_id, Origin
 from async import WeakMethod
-
+from util import resolve
 
 MAXFWD = 50
 
@@ -79,7 +79,7 @@ class Dialog(object):
 
         self.local_sdp_session_id = Origin.generate_session_id()
         self.local_sdp_session_version = 0
-        self.local_sdp_session_host = self.dialog_manager.get_local_addr()[0]
+        self.local_sdp_session_host = resolve(self.dialog_manager.get_local_addr())[0]
         self.remote_sdp_session_version = None
 
 
