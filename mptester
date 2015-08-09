@@ -1,6 +1,7 @@
 #! /usr/bin/python
 
 import mp
+import util
 from async import Metapoll, WeakMethod
 import datetime
 from coroutine import coroutine
@@ -38,8 +39,8 @@ dst_rcv = receiving_generator("xxx")
 
 ctl = mp.Controller(metapoll, (HOST, 10000))
 
-src = mp.Rtp(metapoll, (HOST, 20001), (HOST, 10001), WeakMethod(src_rcv.send))
-dst = mp.Rtp(metapoll, (HOST, 20002), (HOST, 10002), WeakMethod(dst_rcv.send))
+src = util.Rtp(metapoll, (HOST, 20001), (HOST, 10001), WeakMethod(src_rcv.send))
+dst = util.Rtp(metapoll, (HOST, 20002), (HOST, 10002), WeakMethod(dst_rcv.send))
 
 def context_callback(mid, params):
     print("Got context event: %r" % params)

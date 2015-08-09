@@ -19,13 +19,13 @@ class Call(object):
         lj = 1 - li
         
         for i in range(len(sdp.channels)):
-            local_addr = self.media_channels[i].legs[lj].local_addr
+            local_addr = self.media_channels[i].legs[lj].get_local_addr()
             print("Mangling leg %d channel %d with %s" % (lj, i, local_addr))
             sdp.channels[i].addr = local_addr
         
         
     def create_media_channel(self, i):
-        media_legs = [ self.legs[li].make_media_leg(i) for li in range(len(self.legs)) ]
+        media_legs = { li: self.legs[li].make_media_leg(i) for li in range(len(self.legs)) }
         
         return self.mgc.make_media_channel(media_legs)
         
@@ -60,6 +60,12 @@ class Call(object):
         type = action["type"]
         print("Got %s from leg %d." % (type, li))
         
+        if type == "refresh":
+            for mc in self.media_channels:
+                mc.refresh_context()
+                
+            return
+        
         if type == "dial":
             src_ctx = action["ctx"]
             dst_ctx = src_ctx.copy()
@@ -87,6 +93,7 @@ class Call(object):
             for mc in self.media_channels:
                 mc.finish()
 
+            # TODO: we should wait for full completion before notifying!
             self.finish(self)
         
     

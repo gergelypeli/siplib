@@ -97,7 +97,13 @@ class CalleeLeg(Leg):
     def answering(self):
         answer = self.make_answer(self.offer)
         self.report(dict(type="accept", answer=answer))
-        #sleep(1, self.hanging)
+        sleep(5, self.fading)
+        
+        
+    def fading(self):
+        self.media_leg.change(volume=0, fade=5)
+        self.report(dict(type="refresh"))
+        sleep(5, self.hanging)
         
     
     def hanging(self):
@@ -259,11 +265,11 @@ class TestController(Controller):
         self.next_ctx += 1
         
         # Must use IP4 addresses or FQDN in SDP, so let's go with IP4
-        for i in range(len(media_legs)):
-            if not media_legs[i]:
+        for li, leg in media_legs.items():
+            if not leg:
                 addr = (MEDIA_HOST, self.next_port)
                 self.next_port += 1
-                media_legs[i] = ProxiedMediaLeg(resolve(addr))
+                media_legs[li] = ProxiedMediaLeg(resolve(addr))
         
         return ProxiedMediaChannel(Weak(self), sid, media_legs)
         
@@ -331,8 +337,13 @@ class Switch(object):
         
         
     def finish_call(self, call):
-        print("Finishing call")
-        self.calls.remove(call)
+        # TODO: Call should be smarter!
+        
+        def ugly_delayed_finish():
+            print("Finishing call")
+            self.calls.remove(call)
+            
+        self.metapoll.register_timeout(timedelta(seconds=1), ugly_delayed_finish)
         
 
     def accept_invite(self, params):

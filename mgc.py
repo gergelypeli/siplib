@@ -42,59 +42,47 @@ def extract_formats(c):
 
 
 class MediaLeg(object):
-    def __init__(self):
-        self.local_addr = None  # TODO: too general!
-        self.remote_addr = None
-        self.send_formats = None
-        self.recv_formats = None
+    def __init__(self, type):
+        self.changes = { "type": type }
+
+
+    def change(self, **kwargs):
+        self.changes.update(kwargs)
+        
+        
+    def get_changes(self):
+        changes = self.changes
+        self.changes = {}
+        return changes
+        
+        
+    def get_local_addr(self):
+        return None
 
 
 class EchoedMediaLeg(MediaLeg):
-    def get_params(self):
-        return {
-            'type': 'echo'
-        }
-
+    def __init__(self):
+        super(EchoedMediaLeg, self).__init__("echo")
+        
 
 class PlayerMediaLeg(MediaLeg):
     def __init__(self, format, filename, volume=1, fade=0):
-        super(PlayerMediaLeg, self).__init__()
+        super(PlayerMediaLeg, self).__init__("player")
 
-        self.format = format
-        self.filename = filename
-        self.volume = volume
-        self.fade = fade
-        
-        
-    def get_params(self):
-        fade = self.fade
-        self.fade = 0
-        
-        return {
-            'type': 'player',
-            'format': self.format,
-            'filename': self.filename,
-            'volume': self.volume,
-            'fade': fade
-        }
-        
+        self.change(format=format, filename=filename, volume=volume, fade=fade)
+
 
 class ProxiedMediaLeg(MediaLeg):
     def __init__(self, local_addr):
-        super(ProxiedMediaLeg, self).__init__()
+        super(ProxiedMediaLeg, self).__init__("net")
         
         self.local_addr = local_addr
-
-
-    def get_params(self):
-        return {
-            'type': 'net',
-            'local_addr': self.local_addr,
-            'remote_addr': self.remote_addr,
-            'send_formats': self.send_formats,
-            'recv_formats': self.recv_formats
-        }
+        self.change(local_addr=local_addr)
         
+        
+    def get_local_addr(self):
+        return self.local_addr
+
 
 class ProxiedMediaChannel(object):
     def __init__(self, mgc, sid, media_legs):
@@ -116,6 +104,23 @@ class ProxiedMediaChannel(object):
         else:
             print("Oops, MGW %s error for %s!" % (sid, purpose))
         
+        
+    def refresh_context(self):
+        # TODO: implement leg deletion
+        params = {
+            'type': 'proxy',
+            'legs': { li: leg.get_changes() for li, leg in self.legs.items() }
+        }
+        
+        if not self.is_created:
+            request_handler = WeakMethod(self.process_mgw_request)
+            response_handler = WeakMethod(self.process_mgw_response, "cctx")
+            self.mgc.create_context(self.context_sid, params, response_handler=response_handler, request_handler=request_handler)
+            self.is_created = True
+        else:
+            response_handler = WeakMethod(self.process_mgw_response, "mctx")
+            self.mgc.modify_context(self.context_sid, params, response_handler=response_handler)
+    
 
     def process_offer(self, li, oc):
         self.pending_addr = oc.addr
@@ -137,30 +142,18 @@ class ProxiedMediaChannel(object):
         self.pending_addr = None
         self.pending_formats = None
         
-        answering_leg.remote_addr = answer_addr
-        answering_leg.send_formats = answer_formats
-        answering_leg.recv_formats = offer_formats
-        
-        offering_leg.remote_addr = offer_addr
-        offering_leg.send_formats = offer_formats
-        offering_leg.recv_formats = answer_formats
+        answering_leg.change(
+            remote_addr=answer_addr,
+            send_formats=answer_formats,
+            recv_formats=offer_formats
+        )
+        offering_leg.change(
+            remote_addr=offer_addr,
+            send_formats=offer_formats,
+            recv_formats=answer_formats
+        )
 
-        params = {
-            'type': 'proxy',
-            'legs': {
-                '0': self.legs[0].get_params(),
-                '1': self.legs[1].get_params()
-            }
-        }
-        
-        if not self.is_created:
-            request_handler = WeakMethod(self.process_mgw_request)
-            response_handler = WeakMethod(self.process_mgw_response, "cctx")
-            self.mgc.create_context(self.context_sid, params, response_handler=response_handler, request_handler=request_handler)
-            self.is_created = True
-        else:
-            response_handler = WeakMethod(self.process_mgw_response, "mctx")
-            self.mgc.modify_context(self.context_sid, params, response_handler=response_handler)
+        self.refresh_context()
 
 
     def finish(self):

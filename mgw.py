@@ -324,7 +324,7 @@ class PlayerLeg(Leg):
             self.format = tuple(params["format"])
             
             if self.rtp_player:
-                self.rtp_player.set_format(format)
+                self.rtp_player.set_format(self.format)
                 
         if "filename" in params:
             samples = read_wav(params["filename"])
@@ -353,15 +353,13 @@ class Context(object):
         while li >= len(self.legs):
             self.legs.append(None)
 
-        if not params:
+        if params is None:
             self.legs[li] = None
             return
 
         type = params.pop("type", None)
-        if not type:
-            raise Error("No leg type!")
 
-        if not self.legs[li] or self.legs[li].type != type:
+        if not self.legs[li] or (type and type != self.legs[li].type):
             if type == "net":
                 leg = NetLeg(li, weakref.proxy(self))
             elif type == "echo":
@@ -369,21 +367,17 @@ class Context(object):
             elif type == "player":
                 leg = PlayerLeg(li, weakref.proxy(self))
             else:
-                raise Error("Invalid leg type %r!" % type)
+                raise Error("Invalid leg type '%s'!" % type)
                 
             self.legs[li] = leg
         
         self.legs[li].set(params)
 
 
-    def process_request(self, sid, seq, params, target):
-        if target == "modify":
-            for li, leg_params in params.get("legs", {}).items():
-                self.set_leg(int(li), leg_params)
-        elif target == "delete":
-            self.manager.remove_context(self.label)
-        else:
-            raise Error("Unknown context operation '%s'!" % target)
+    def modify(self, params):
+        # TODO: implement leg deletion
+        for li, leg_params in params.get("legs", {}).items():
+            self.set_leg(int(li), leg_params)
             
         
     def detected(self, li, remote_addr):
@@ -424,6 +418,11 @@ class ContextManager(object):
         return context
 
 
+    def modify_context(self, label, params):
+        context = self.contexts_by_label.get(label)
+        context.modify(params)
+
+
     def remove_context(self, label):
         context = self.contexts_by_label.pop(label)
         
@@ -436,15 +435,19 @@ class ContextManager(object):
             owner_addr, label = sid
             
             if target == "create":
-                context = self.add_context(label, owner_addr, params["type"])
-                self.msgp.add_stream(sid, WeakMethod(context.process_request))
-                context.process_request(sid, seq, params, "modify")  # fake modification
+                self.add_context(label, owner_addr, params["type"])
+                self.msgp.add_stream(sid)
+                self.modify_context(label, params)  # fake modification
+            elif target == "modify":
+                self.modify_context(label, params)
+            elif target == "delete":
+                self.remove_context(label)
             elif target == "take":
                 context = self.contexts_by_label.get(label)
                 old_sid = (context.owner_addr, context.label)
                 self.msgp.remove_stream(old_sid)
                 
-                self.msgp.add_stream(sid, WeakMethod(context.process_request))
+                self.msgp.add_stream(sid)
                 context.owner_addr = owner_addr
             else:
                 raise Error("Invalid target %s!" % target)
@@ -458,104 +461,4 @@ class ContextManager(object):
     def detected(self, sid, li, remote_addr):
         params = { 'legs': { li: { 'remote_addr': remote_addr } } }
         self.msgp.send_message(sid, "detected", params)
-
-
-class Rtp(object):
-    def __init__(self, metapoll, local_addr, remote_addr, receiving_callback):
-        self.metapoll = metapoll
-        self.remote_addr = remote_addr
-        self.receiving_callback = receiving_callback
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.socket.bind(local_addr)
-        self.metapoll.register_reader(self.socket, WeakMethod(self.recv))
-        
-        self.ssrc = 0
-        self.seq = 0
-        self.timestamp = 0
-        
-        
-    def send(self, type, payload):
-        version = 2
-        padding = 0
-        extension = 0
-        csrc_count = 0
-        marker = 0
-        self.seq += 1
-        self.timestamp += 8000
-        
-        data = (
-            chr(version << 6 | padding << 5 | extension << 4 | csrc_count) +
-            chr(marker << 7 | type) +
-            struct.pack('!H', self.seq) +
-            struct.pack('!I', self.timestamp) +
-            struct.pack('!I', self.ssrc) +
-            payload
-        )
-        
-        self.socket.sendto(data, self.remote_addr)
-        
-        
-    def recv(self):
-        data, addr = self.socket.recvfrom(65535)
-        if addr != self.remote_addr:
-            return
-            
-        type = ord(data[1]) & 0x7f
-        payload = data[12:]
-        
-        if self.receiving_callback:
-            self.receiving_callback(type, payload)
-
-
-class Packet(collections.namedtuple("Packet", [ "seq", "position", "format", "payload" ])):
-    pass
-
-
-class UnbufferedRtpOutput(object):
-    def __init__(self, send_pts_by_format):
-        self.send_pts_by_format = send_pts_by_format
-        
-        self.ssrc = 0  # should be random
-        self.base_seq = 0  # too
-        self.base_timestamp = 0  # too
-        
-        
-    def make(self, packet):
-        try:
-            payload_type = self.send_pts_by_format[packet.format]
-        except KeyError:
-            return None
-            
-        seq = (self.base_seq + packet.seq) % 65536
-        timestamp = self.base_timestamp + int(packet.position.total_seconds() * packet.format[1])
-
-        return build_rtp(self.ssrc, seq, timestamp, payload_type, packet.payload)
-        
-        
-class UnbufferedRtpInput(object):
-    def __init__(self, recv_formats_by_pt):
-        self.recv_formats_by_pt = recv_formats_by_pt
-        
-        self.ssrc = None
-        self.base_seq = None
-        self.base_timestamp = None
-        
-        
-    def take(self, packet):
-        ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
-        
-        try:
-            format = self.recv_formats_by_pt[payload_type]
-        except KeyError:
-            return None
-        
-        if ssrc != self.ssrc:
-            self.ssrc = ssrc
-            self.base_seq = seq
-            self.base_timestamp = timestamp
-        
-        s = seq - self.base_seq
-        p = datetime.timedelta(seconds=(timestamp - self.base_timestamp) / float(format[1]))
-        
-        return Packet(s, p, format, payload)
 

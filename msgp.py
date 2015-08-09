@@ -121,14 +121,16 @@ class Msgp(object):
         self.socket.sendto(packet, raddr)
 
 
-    def pop_message(self, sid, seq):
-        s = self.get_stream(sid)
-        
-        msg = s.sent_messages_by_seq.pop(seq, None)
-        
-        if not s.sent_messages_by_seq and s.is_closed:
+    def check_closed_stream(self, sid, s):
+        if s.is_closed and not s.sent_messages_by_seq and not s.pending_ack_seqs:
             print("MSGP finally removing closed stream %s" % prid(sid))
             self.streams_by_id.pop(sid)
+
+
+    def pop_sent_message(self, sid, seq):
+        s = self.get_stream(sid)
+        msg = s.sent_messages_by_seq.pop(seq, None)
+        self.check_closed_stream(sid, s)
             
         return msg
             
@@ -149,7 +151,7 @@ class Msgp(object):
                 msg.retransmit_deadline = None
             else:
                 # Clean up, don't wait for unexpected response
-                self.pop_message(sid, seq)
+                self.pop_sent_message(sid, seq)
         else:
             # Report ack timeout as a fake request, cancel response handling
             print("MSGP gave up waiting for ack for %s" % prid(sid, seq))
@@ -157,11 +159,11 @@ class Msgp(object):
             request_handler = s.request_handler or self.request_handler
             request_handler(sid, None, self.decode_body(msg.body), msg.target)
                 
-            self.pop_message(sid, seq)
+            self.pop_sent_message(sid, seq)
 
 
     def message_responded(self, sid, seq, source, body):
-        msg = self.pop_message(sid, seq)
+        msg = self.pop_sent_message(sid, seq)
         if not msg:
             return  # probably a duplicate response
 
@@ -196,16 +198,19 @@ class Msgp(object):
 
     def remove_stream(self, sid):
         s = self.get_stream(sid)
-        
         if not s:
             return
             
-        if not s.sent_messages_by_seq:
+        # A little grace period is given to closed streams before removing them.
+        # If outgoing messages are not ACK-ed, we'll wait for those ACK-s first.
+        # If an incoming message is not ACK-ed yet, we'll wait until it's either
+        # implicitly, or explicitely ACK-ed.
+        if not s.sent_messages_by_seq and not s.pending_ack_seqs:
             # Remove stream now
             print("MSGP removing closed stream %s" % prid(sid))
             self.streams_by_id.pop(sid)
         else:
-            # Remove stream once our requests are all completed
+            # Remove stream once pending messages are ACK-ed
             print("MSGP will remove closed stream %s" % prid(sid))
             s.is_closed = True
         
@@ -215,7 +220,9 @@ class Msgp(object):
         if not s:
             raise Error("No such stream!")
         elif s.is_closed:
-            raise Error("Stream is closed!")
+            # Let the user send responses to unacked requests after closing
+            if not s.pending_ack_seqs:
+                raise Error("Stream is closed!")
 
         # Note: it is allowed to send a message on an unconfirmed stream, such as
         # an error message, but we'll close it right afterwards
@@ -236,6 +243,7 @@ class Msgp(object):
         if tseq:
             # Don't send explicit ACKs as this response suffices
             s.pending_ack_seqs.remove(tseq)
+            self.check_closed_stream(sid, s)
 
 
     def process_message(self, raddr, label, source, target, body):
@@ -293,6 +301,8 @@ class Msgp(object):
                 s.pending_ack_seqs.remove(sseq)
                 print("MSGP sending explicit ACK %s" % prid(sid, sseq))
                 self.transmit_ack(sid, sseq)
+                self.check_closed_stream(sid, s)
+
         elif source == "ack":
             for mseq in s.sent_messages_by_seq.keys():
                 if mseq <= tseq:
