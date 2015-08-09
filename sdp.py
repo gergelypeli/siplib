@@ -207,7 +207,7 @@ class Channel(object):
         if key == "m":
             type, port, proto, formats = value.split(None, 3)
             if proto != "RTP/AVP":
-                raise Error("Media with not RTP protocol: %r" % s)
+                raise Error("Media with not RTP protocol: '%s'" % proto)
             
             self.type = type
             self.addr = (self.addr[0], int(port))
@@ -327,7 +327,7 @@ class Sdp(EmptySdp):
                 
             try:
                 key, value = line.split("=", 1)
-            except Exception as e:
+            except Exception:
                 raise Error("Invalid SDP line: %r" % line)
         
             if key == "m":

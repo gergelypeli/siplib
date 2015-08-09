@@ -148,8 +148,9 @@ class Metapoll(object):
         t = self.timeout_handlers_by_key.pop(key, None)
 
         if t:
-            deadline, handler, delta = t
-            now = datetime.datetime.now()
+            pass
+            #deadline, handler, delta = t
+            #now = datetime.datetime.now()
             #logging.debug("Unregistering a timeout of %s as %s" % (deadline - now, key))
 
 

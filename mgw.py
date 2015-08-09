@@ -17,6 +17,9 @@ import weakref
 import collections
 import time
 import struct
+import datetime
+import wave
+import g711
 import msgp
 from async import WeakMethod, Metapoll
 
@@ -25,61 +28,152 @@ class Error(Exception): pass
 
 
 def get_payload_type(packet):
-    return ord(packet[1]) & 0x7f
+    return packet[1] & 0x7f
     
     
 def set_payload_type(packet, pt):
-    return packet[0:1] + chr(ord(packet[1]) & 0x80 | pt & 0x7f) + packet[2:]
+    packet[1] = packet[1] & 0x80 | pt & 0x7f
 
 
-#def parse_formats(fmts):
-#    return { int(k): v for k, v in [ kv.split("=", 1) for kv in fmts.split(",") ] }
+def read_wav(filename):
+    f = wave.open(filename, "rb")
+    x = f.readframes(f.getnframes())
+    f.close()
+    
+    return bytearray(x)  # TODO: Py3k!
 
 
-#def print_formats(fmts):
-#    return ",".join("%d=%s" % (k, v) for k, v in fmts.items())
+def amplify_wav(samples, volume):
+    BYTES_PER_SAMPLE = 2
     
-    
-def revdict(d):
-    return { v: k for k, v in d.items() }
+    for i in range(len(samples) / BYTES_PER_SAMPLE):
+        offset = i * BYTES_PER_SAMPLE
+        old = struct.unpack_from("<h", samples, offset)[0]
+        struct.pack_into('<h', samples, offset, int(volume * old))
 
 
-def parse_msg(msg):
-    return { k: v for k, v in [ kv.split(":", 1) for kv in msg.split() ] }
+def build_rtp(ssrc, seq, timestamp, payload_type, payload):
+    version = 2
+    padding = 0
+    extension = 0
+    csrc_count = 0
+    marker = 0
     
+    packet = bytearray(12 + len(payload))
+    packet[0] = version << 6 | padding << 5 | extension << 4 | csrc_count
+    packet[1] = marker << 7 | payload_type & 0x7f
+    struct.pack_into('!H', packet, 2, seq)
+    struct.pack_into('!I', packet, 4, timestamp)
+    struct.pack_into('!I', packet, 8, ssrc)
+    packet[12:] = payload
     
-def print_msg(params):
-    return " ".join("%s:%s" % (k, v) for k, v in params.items()) + "\n"
-    
-    
+    return packet
+
+
+def parse_rtp(packet):
+    payload_type = ord(packet[1]) & 0x7f
+    seq = struct.unpack_from("!H", packet, 2)[0]
+    timestamp = struct.unpack_from("!I", packet, 4)[0]
+    ssrc = struct.unpack_from("!I", packet, 8)[0]
+    payload = packet[12:]
+
+    return ssrc, seq, timestamp, payload_type, payload
+
+
 def prid(sid):
     addr, label = sid
     host, port = addr
     
     return "%s:%d@%s" % (host, port, label)
 
+
+class RtpPlayer(object):
+    PTIME = 20
+    PLAY_INFO = {
+        ("PCMU", 8000): (1,),
+        ("PCMA", 8000): (1,)
+    }
+    BYTES_PER_SAMPLE = 2
     
-#class Connection(object):
-#    def __init__(self, addr):
-#        self.addr = addr
+    def __init__(self, metapoll, format, data, handler, volume=1, fade=0):
+        self.metapoll = metapoll
+        self.data = data  # mono 16 bit LSB LPCM
+        self.handler = handler
         
-#        self.reconnect()
+        self.ssrc = 0  # should be random
+        self.base_seq = 0  # too
+        self.base_timestamp = 0  # too
+        
+        self.offset = 0
+        self.next_seq = 0
+        self.volume = 0
+        self.format = None
+        
+        self.set_format(format)
+        self.set_volume(volume, fade)
+        
+        if data:
+            ptime = datetime.timedelta(milliseconds=self.PTIME)
+            self.handle = self.metapoll.register_timeout(ptime, WeakMethod(self.play), repeat=True)
         
         
-#    def reconnect(self):
-#        pass
-        
-#    def send(self, msg):
-#        self.socket
+    def __del__(self):
+        if self.handle:
+            self.metapoll.unregister_timeout(self.handle)
 
 
+    def set_volume(self, volume, fade):
+        self.fade_steps = int(fade * 1000 / self.PTIME) + 1
+        self.fade_step = (volume - self.volume) / self.fade_steps
+        
+
+    def set_format(self, format):
+        if format not in self.PLAY_INFO:
+            raise Error("Unknown format for playing: %s" % format)
+            
+        self.format = format
+        
+        
+    def play(self):
+        seq = self.next_seq
+        self.next_seq += 1
+        
+        encoding, clock = self.format
+        bytes_per_sample, = self.PLAY_INFO[self.format]
+        
+        samples_per_packet = clock * self.PTIME / 1000
+        timestamp = seq * samples_per_packet
+        
+        new_offset = self.offset + samples_per_packet * self.BYTES_PER_SAMPLE
+        samples = self.data[self.offset:new_offset]
+        self.offset = new_offset
+        
+        if self.fade_steps:
+            self.fade_steps -= 1
+            self.volume += self.fade_step
+        
+        amplify_wav(samples, self.volume)
+        
+        if encoding == "PCMA":
+            payload = g711.encode_pcma(samples)
+        elif encoding == "PCMU":
+            payload = g711.encode_pcmu(samples)
+        else:
+            raise Error("WTF?")
+            
+        packet = build_rtp(self.ssrc, self.base_seq + seq, self.base_timestamp + timestamp, 127, payload)
+        self.handler(self.format, packet)
+        
+        if self.offset >= len(self.data):
+            self.metapoll.unregister_timeout(self.handle)
+            self.handle = None
+
+    
 class Leg(object):
     def __init__(self, type, index, context):
         self.type = type
         self.index = index
         self.context = context
-        self.send_pts_by_format = None
-        self.recv_formats_by_pt = None
         
         self.name = "%s/%d" % (self.context.label, self.index)
         print("Created %s leg %s" % (type, self.name))
@@ -90,46 +184,15 @@ class Leg(object):
             
         
     def set(self, params):
-        print("Setting leg: %s" % (params,))
+        pass
         
-        def intkeys(x):
-            return { int(k): v for k, v in x.items() }
-            
-        if "send_formats" in params:
-            self.send_pts_by_format = revdict(intkeys(params["send_formats"]))
-            
-        print("send_formats: %s" % (self.send_pts_by_format,))
-            
-        if "recv_formats" in params:
-            self.recv_formats_by_pt = intkeys(params["recv_formats"])
-
-
-    def recv(self, packet):
-        pt = get_payload_type(packet)
-        
-        try:
-            format = self.recv_formats_by_pt[pt]
-        except KeyError:
-            print("Ignoring received unknown payload type %d" % pt)
-        else:
-            self.recv_format(format, packet)
-
 
     def recv_format(self, format, packet):
         self.context.forward(self.index, format, packet)
 
 
-    def send(self, packet):
-        raise NotImplementedError()
-        
-            
     def send_format(self, format, packet):
-        try:
-            pt = self.send_pts_by_format[format]  # pt can be 0, which is false...
-        except TypeError, KeyError:
-            print("Ignoring sent unknown payload format %s" % format)
-        else:
-            self.send(set_payload_type(packet, pt))
+        raise NotImplementedError()
 
 
 class NetLeg(Leg):
@@ -139,6 +202,8 @@ class NetLeg(Leg):
         self.remote_addr = None
         self.socket = None
         self.metapoll = context.manager.metapoll
+        self.send_pts_by_format = None
+        self.recv_formats_by_pt = None
         
         
     def __del__(self):
@@ -148,6 +213,16 @@ class NetLeg(Leg):
         
     def set(self, params):
         super(NetLeg, self).set(params)
+
+        #print("Setting leg: %s" % (params,))
+        
+        if "send_formats" in params:
+            self.send_pts_by_format = { tuple(v): int(k) for k, v in params["send_formats"].items() }
+            
+        #print("send_formats: %s" % (self.send_pts_by_format,))
+            
+        if "recv_formats" in params:
+            self.recv_formats_by_pt = { int(k): tuple(v) for k, v in params["recv_formats"].items() }
 
         if "local_addr" in params:
             try:
@@ -166,8 +241,9 @@ class NetLeg(Leg):
     
     
     def recved(self):
-        print("Receiving on %s" % self.name)
+        #print("Receiving on %s" % self.name)
         packet, addr = self.socket.recvfrom(65535)
+        packet = bytearray(packet)  # TODO: use Py3
         
         if self.remote_addr:
             remote_host, remote_port = self.remote_addr
@@ -182,14 +258,29 @@ class NetLeg(Leg):
             self.context.detected(self.index, addr)
             self.remote_addr = addr
             
-        self.recv(packet)
+        pt = get_payload_type(packet)
+        
+        try:
+            format = self.recv_formats_by_pt[pt]
+        except KeyError:
+            print("Ignoring received unknown payload type %d" % pt)
+        else:
+            self.recv_format(format, packet)
     
-    
-    def send(self, packet):
+
+    def send_format(self, format, packet):
+        try:
+            pt = self.send_pts_by_format[format]  # pt can be 0, which is false...
+        except (TypeError, KeyError):
+            print("Ignoring sent unknown payload format %s" % (format,))
+            return
+            
+        set_payload_type(packet, pt)
+        
         if not self.remote_addr or not self.remote_addr[1]:
             return
             
-        print("Sending on %s" % self.name)
+        #print("Sending on %s" % self.name)
         self.socket.sendto(packet, self.remote_addr)
 
 
@@ -202,6 +293,47 @@ class EchoLeg(Leg):
         # We don't care about payload types
         print("Echoing %s packet on %s" % (format, self.name))
         self.recv_format(format, packet)
+
+
+class PlayerLeg(Leg):
+    def __init__(self, index, context):
+        super(PlayerLeg, self).__init__("player", index, context)
+        
+        self.metapoll = context.manager.metapoll
+        self.rtp_player = None
+        self.format = None
+        self.volume = 1
+
+
+    def set(self, params):
+        super(PlayerLeg, self).set(params)
+
+        # This is temporary, don't remember it across calls
+        fade = 0
+
+        if "fade" in params:
+            fade = params["fade"]
+
+        if "volume" in params:
+            self.volume = params["volume"]
+            
+            if self.rtp_player:
+                self.rtp_player.set_volume(self.volume, fade)
+
+        if "format" in params:
+            self.format = tuple(params["format"])
+            
+            if self.rtp_player:
+                self.rtp_player.set_format(format)
+                
+        if "filename" in params:
+            samples = read_wav(params["filename"])
+            
+            self.rtp_player = RtpPlayer(self.metapoll, self.format, samples, WeakMethod(self.recv_format), self.volume, fade)
+
+
+    def send_format(self, format, packet):
+        pass
 
 
 class Context(object):
@@ -234,6 +366,8 @@ class Context(object):
                 leg = NetLeg(li, weakref.proxy(self))
             elif type == "echo":
                 leg = EchoLeg(li, weakref.proxy(self))
+            elif type == "player":
+                leg = PlayerLeg(li, weakref.proxy(self))
             else:
                 raise Error("Invalid leg type %r!" % type)
                 
@@ -265,7 +399,7 @@ class Context(object):
         except IndexError:
             raise Error("No outgoing leg!")
 
-        print("Forwarding in %s a %s from %d to %d" % (self.label, format, li, lj))
+        #print("Forwarding in %s a %s from %d to %d" % (self.label, format, li, lj))
         
         leg.send_format(format, packet)
 
@@ -371,3 +505,57 @@ class Rtp(object):
         
         if self.receiving_callback:
             self.receiving_callback(type, payload)
+
+
+class Packet(collections.namedtuple("Packet", [ "seq", "position", "format", "payload" ])):
+    pass
+
+
+class UnbufferedRtpOutput(object):
+    def __init__(self, send_pts_by_format):
+        self.send_pts_by_format = send_pts_by_format
+        
+        self.ssrc = 0  # should be random
+        self.base_seq = 0  # too
+        self.base_timestamp = 0  # too
+        
+        
+    def make(self, packet):
+        try:
+            payload_type = self.send_pts_by_format[packet.format]
+        except KeyError:
+            return None
+            
+        seq = (self.base_seq + packet.seq) % 65536
+        timestamp = self.base_timestamp + int(packet.position.total_seconds() * packet.format[1])
+
+        return build_rtp(self.ssrc, seq, timestamp, payload_type, packet.payload)
+        
+        
+class UnbufferedRtpInput(object):
+    def __init__(self, recv_formats_by_pt):
+        self.recv_formats_by_pt = recv_formats_by_pt
+        
+        self.ssrc = None
+        self.base_seq = None
+        self.base_timestamp = None
+        
+        
+    def take(self, packet):
+        ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
+        
+        try:
+            format = self.recv_formats_by_pt[payload_type]
+        except KeyError:
+            return None
+        
+        if ssrc != self.ssrc:
+            self.ssrc = ssrc
+            self.base_seq = seq
+            self.base_timestamp = timestamp
+        
+        s = seq - self.base_seq
+        p = datetime.timedelta(seconds=(timestamp - self.base_timestamp) / float(format[1]))
+        
+        return Packet(s, p, format, payload)
+

@@ -28,7 +28,7 @@ def must_match(pattern, s):
     if m:
         return m.groups()
     else:
-        raise Error("Not matched %r!" % pattern)
+        raise Exception("Not matched %r!" % pattern)
 
 
 def parse_digest_params(value):

@@ -38,17 +38,12 @@ class Controller(object):
 
 
 def extract_formats(c):
-    formats = {}
-    
-    for r in c.formats:
-        formats[r.payload_type] = "%s/%s" % (r.encoding, r.clock)
-        
-    return formats
+    return { r.payload_type: (r.encoding, r.clock) for r in c.formats }
 
 
 class MediaLeg(object):
     def __init__(self):
-        self.local_addr = None
+        self.local_addr = None  # TODO: too general!
         self.remote_addr = None
         self.send_formats = None
         self.recv_formats = None
@@ -58,6 +53,29 @@ class EchoedMediaLeg(MediaLeg):
     def get_params(self):
         return {
             'type': 'echo'
+        }
+
+
+class PlayerMediaLeg(MediaLeg):
+    def __init__(self, format, filename, volume=1, fade=0):
+        super(PlayerMediaLeg, self).__init__()
+
+        self.format = format
+        self.filename = filename
+        self.volume = volume
+        self.fade = fade
+        
+        
+    def get_params(self):
+        fade = self.fade
+        self.fade = 0
+        
+        return {
+            'type': 'player',
+            'format': self.format,
+            'filename': self.filename,
+            'volume': self.volume,
+            'fade': fade
         }
         
 

@@ -1,15 +1,13 @@
 #! /usr/bin/python
 
 from __future__ import print_function, unicode_literals
-from pprint import pprint
-from weakref import proxy as Weak
-from datetime import timedelta, datetime
+from datetime import timedelta
 import logging
 import socket
 from async import Metapoll, WeakMethod, Weak
 
-from format import Addr, Uri, Nameaddr, Status, Via, Hop, print_structured_message, parse_structured_message
-from transactions import TransactionManager, make_virtual_response, make_simple_response
+from format import Addr, Uri, Nameaddr, Status, Hop, print_structured_message, parse_structured_message
+from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
 from leg import Leg, SipLeg, create_uninvited_leg
 from call import Call
@@ -18,7 +16,7 @@ from authority import Authority
 from registrar import RegistrationManager, RecordManager
 from util import resolve
 from mgw import ContextManager
-from mgc import Controller, ProxiedMediaChannel, ProxiedMediaLeg, EchoedMediaLeg
+from mgc import Controller, ProxiedMediaChannel, ProxiedMediaLeg, EchoedMediaLeg, PlayerMediaLeg
 
 HOST = "otthon"
 a_addr = Addr(HOST, 5060)
@@ -79,7 +77,8 @@ class CalleeLeg(Leg):
     def __init__(self):
         super(CalleeLeg, self).__init__()
         
-        #self.rtp_socket = socket.socket()
+        self.media_leg = None
+        
         
     def do(self, action):
         if action["type"] == "dial":
@@ -100,7 +99,7 @@ class CalleeLeg(Leg):
         self.report(dict(type="accept", answer=answer))
         #sleep(1, self.hanging)
         
-        
+    
     def hanging(self):
         self.report(dict(type="hangup"))
 
@@ -110,8 +109,10 @@ class CalleeLeg(Leg):
 
 
     def make_media_leg(self, sdp_channel):
-        return EchoedMediaLeg()
-
+        #return EchoedMediaLeg()
+        self.media_leg = PlayerMediaLeg(("PCMA", 8000), "playback.wav", volume=0.2, fade=5)
+        return self.media_leg
+        
 
 class CallerLeg(Leg):
     def dial(self):
