@@ -133,6 +133,10 @@ class Metapoll(object):
         """
         #logging.debug("Registering a timeout of %s as %s" % (timeout, self.next_timeout_key))
 
+        # OK, number timeout values are also accepted
+        if isinstance(timeout, (int, float)):
+            timeout = datetime.timedelta(seconds=timeout)
+
         now = datetime.datetime.now()
         delta = timeout if repeat else None
         self.timeout_handlers_by_key[self.next_timeout_key] = (now + timeout, handler, delta)
@@ -195,7 +199,7 @@ class Metapoll(object):
             now = datetime.datetime.now()
 
             # It is allowed for handlers to unregister each other
-            for key in self.timeout_handlers_by_key.keys():
+            for key in list(self.timeout_handlers_by_key.keys()):
                 info = self.timeout_handlers_by_key.get(key)
                 if not info:
                     continue

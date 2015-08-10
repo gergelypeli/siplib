@@ -2,6 +2,7 @@
 
 from __future__ import print_function, unicode_literals
 import functools
+import datetime
 import weakref
 import sys
 
@@ -40,6 +41,9 @@ def coroutine(func):
     return lambda *args, **kwargs: Coroutine(func, args, kwargs)
 
 
+    
+        
+
 @coroutine
 def G(self, a):
     print("Kezdodik %r: %r" % (self, a))
@@ -70,3 +74,5 @@ def proba():
     print("Hm?")
 
 #proba()
+
+

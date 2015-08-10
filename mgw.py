@@ -358,8 +358,8 @@ class Context(object):
             return
 
         type = params.pop("type", None)
-
-        if not self.legs[li] or (type and type != self.legs[li].type):
+        if type:
+            # Create new leg if type specified, even if we already have one
             if type == "net":
                 leg = NetLeg(li, weakref.proxy(self))
             elif type == "echo":
@@ -370,6 +370,9 @@ class Context(object):
                 raise Error("Invalid leg type '%s'!" % type)
                 
             self.legs[li] = leg
+        else:
+            if not self.legs[li]:
+                raise Error("No type for new leg!")
         
         self.legs[li].set(params)
 
