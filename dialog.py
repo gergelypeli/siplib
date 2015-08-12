@@ -148,7 +148,7 @@ class Dialog(object):
     def take_sdp(self, params):
         sdp = params.get("sdp")
         if sdp:
-            if sdp.origin.session_version <= self.remote_sdp_session_version:
+            if self.remote_sdp_session_version is not None and sdp.origin.session_version <= self.remote_sdp_session_version:
                 params["sdp"] = None
                 return
                 

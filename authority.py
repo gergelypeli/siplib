@@ -13,7 +13,7 @@ def generate_nonce():
 
 
 def md5(x):
-    return hashlib.md5(x).hexdigest()
+    return hashlib.md5(x.encode()).hexdigest()
     
 
 def digest(method, uri, ha1, nonce, qop=None, cnonce=None, nc=None):

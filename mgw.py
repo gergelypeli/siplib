@@ -46,7 +46,7 @@ def read_wav(filename):
 def amplify_wav(samples, volume):
     BYTES_PER_SAMPLE = 2
     
-    for i in range(len(samples) / BYTES_PER_SAMPLE):
+    for i in range(int(len(samples) / BYTES_PER_SAMPLE)):
         offset = i * BYTES_PER_SAMPLE
         old = struct.unpack_from("<h", samples, offset)[0]
         struct.pack_into('<h', samples, offset, int(volume * old))
@@ -141,7 +141,7 @@ class RtpPlayer(object):
         encoding, clock = self.format
         bytes_per_sample, = self.PLAY_INFO[self.format]
         
-        samples_per_packet = clock * self.PTIME / 1000
+        samples_per_packet = int(clock * self.PTIME / 1000)
         timestamp = seq * samples_per_packet
         
         new_offset = self.offset + samples_per_packet * self.BYTES_PER_SAMPLE
@@ -281,6 +281,7 @@ class NetLeg(Leg):
             return
             
         #print("Sending on %s" % self.name)
+        # packet should be a bytearray here
         self.socket.sendto(packet, self.remote_addr)
 
 

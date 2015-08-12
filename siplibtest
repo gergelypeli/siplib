@@ -201,11 +201,14 @@ class UdpTransport(object):
         print("Transport sending from %s to %s:" % (hop.local_addr, hop.remote_addr))
         print(indented(sip))
         
+        sip = sip.encode()
         self.socket.sendto(sip, hop.remote_addr)
 
 
     def recved(self):
         sip, raddr = self.socket.recvfrom(65535)
+        sip = sip.decode()
+        
         hop = Hop(local_addr=self.local_addr, remote_addr=Addr(*raddr), interface="eth0")
         print("Transport receiving from %s to %s:" % (hop.remote_addr, hop.local_addr))
         print(indented(sip))

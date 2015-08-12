@@ -91,7 +91,7 @@ class Msgp(object):
         what = "response" if msg.target.isdigit() else "request"
         print("MSGP transmitting %s %s" % (what, prid(sid, sseq)))
 
-        header = b"@%s #%d ^%s" % (label, sseq, msg.target)
+        header = "@%s #%d ^%s" % (label, sseq, msg.target)
         
         if msg.body is not None:
             header += " +%d" % len(msg.body)
@@ -99,7 +99,9 @@ class Msgp(object):
         else:
             packet = header + "\n"
 
+        packet = packet.encode()
         self.socket.sendto(packet, raddr)
+        
         msg.retransmit_deadline += self.retransmit_interval
 
 
@@ -107,8 +109,9 @@ class Msgp(object):
         raddr, label = sid
         
         print("MSGP transmitting ack %s" % prid(sid, sseq))
-        packet = b"@%s #ack ^%s\n" % (label, sseq)
+        packet = "@%s #ack ^%s\n" % (label, sseq)
 
+        packet = packet.encode()
         self.socket.sendto(packet, raddr)
 
 
@@ -116,8 +119,9 @@ class Msgp(object):
         raddr, label = sid
         
         print("MSGP transmitting nak %s" % prid(sid))
-        packet = b"@%s #nak ^%s\n" % (label, sseq)
+        packet = "@%s #nak ^%s\n" % (label, sseq)
 
+        packet = packet.encode()
         self.socket.sendto(packet, raddr)
 
 
@@ -304,11 +308,11 @@ class Msgp(object):
                 self.check_closed_stream(sid, s)
 
         elif source == "ack":
-            for mseq in s.sent_messages_by_seq.keys():
+            for mseq in list(s.sent_messages_by_seq.keys()):
                 if mseq <= tseq:
                     self.message_stopped(sid, mseq, True)
         elif source == "nak":
-            for mseq in s.sent_messages_by_seq.keys():  # TODO: sorted?
+            for mseq in list(s.sent_messages_by_seq.keys()):  # TODO: sorted?
                 if mseq >= tseq:
                     self.message_stopped(sid, mseq, False)
         else:
@@ -317,6 +321,7 @@ class Msgp(object):
 
     def recved(self):
         rest, raddr = self.socket.recvfrom(65535)
+        rest = rest.decode()
         
         while rest:
             header, rest = rest.split("\n", 1)

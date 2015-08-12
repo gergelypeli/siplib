@@ -2163,7 +2163,7 @@ def decode_pcma_sample(u8):
 
 
 def encode_pcmu(x):
-    n = len(x) / 2
+    n = int(len(x) / 2)
     y = bytearray(n)
     
     for i in range(n):
@@ -2173,7 +2173,7 @@ def encode_pcmu(x):
 
 
 def encode_pcma(x):
-    n = len(x) / 2
+    n = int(len(x) / 2)
     y = bytearray(n)
     
     for i in range(n):
