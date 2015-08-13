@@ -17,6 +17,7 @@ from registrar import RegistrationManager, RecordManager
 from util import resolve
 from mgw import ContextManager
 from mgc import Controller, ProxiedMediaChannel, ProxiedMediaLeg, EchoedMediaLeg, PlayerMediaLeg
+from planner import Planner
 
 HOST = "otthon"
 a_addr = Addr(HOST, 5060)
@@ -78,37 +79,37 @@ class CalleeLeg(Leg):
         super(CalleeLeg, self).__init__()
         
         self.media_leg = None
+        self.planner = Planner(metapoll, self.plan)
         
         
     def do(self, action):
-        if action["type"] == "dial":
-            self.offer = action.get("offer")
-            print("Got offer:\n%s" % repr(self.offer))
-            sleep(1, self.ringing)
-        elif action["type"] == "hangup":
-            print("The caller hung up.")
+        self.planner.resume(("action", action))
 
+
+    def plan(self, planner):
+        print("Callee created.")
         
-    def ringing(self):
+        action = yield from planner.expect("action")
+        assert action["type"] == "dial"
+        self.offer = action.get("offer")
+        print("Got offer:\n%s" % repr(self.offer))
+        
+        yield from planner.sleep(1)
         self.report(dict(type="ring"))
-        sleep(1, self.answering)
-
-
-    def answering(self):
+        
+        yield from planner.sleep(1)
         answer = self.make_answer(self.offer)
         self.report(dict(type="accept", answer=answer))
-        sleep(5, self.fading)
         
-        
-    def fading(self):
+        yield from planner.sleep(5)
         self.media_leg.change(volume=0, fade=5)
         self.report(dict(type="refresh"))
-        sleep(5, self.hanging)
         
-    
-    def hanging(self):
+        yield from planner.sleep(5)
         self.report(dict(type="hangup"))
 
+        print("Callee done.")
+        
 
     def make_answer(self, offer):
         return offer
