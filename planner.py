@@ -1,6 +1,11 @@
 # This needs at least Python 3.3 because of yield from!
 
 from async import Metapoll, Weak, WeakMethod
+import collections
+
+
+PlannedEvent = collections.namedtuple("PlannedEvent", [ "tag", "event" ])
+PlannedEvent.__new__.__defaults__ = (None,)
 
 
 class Planner(object):
@@ -15,6 +20,9 @@ class Planner(object):
 
 
     def __del__(self):
+        if self.generator:
+            self.generator.close()
+        
         if self.timeout_handle:
             self.metapoll.unregister_timeout(self.timeout_handle)
                     
@@ -23,26 +31,29 @@ class Planner(object):
         # self is actually a weak self, because this function is called from within the plan
 
         if timeout is not None:
-            self.timeout_handle = self.metapoll.register_timeout(timeout, lambda: self.resume(("timeout", None)))
+            self.timeout_handle = self.metapoll.register_timeout(timeout, lambda: self.resume(PlannedEvent("timeout")))
 
         print("Suspending plan.")
-        resumed_value = yield
+        planned_event = yield
         print("Resuming plan.")
         
-        return resumed_value
+        return planned_event
         
         
-    def expect(self, type, timeout=None):
-        event, details = yield from self.poll(timeout=timeout)
-        assert event == type
-        return details
+    def expect(self, tag, timeout=None):
+        planned_event = yield from self.poll(timeout=timeout)
+        
+        if planned_event.tag != tag:
+            raise Exception("Expected %s, got %s!" % (tag, planned_event.tag))
+
+        return planned_event.event
     
         
-    def sleep(self, timeout=None):
+    def sleep(self, timeout):
         yield from self.expect("timeout", timeout=timeout)
         
         
-    def resume(self, resumed_value):
+    def resume(self, planned_event):
         try:
             if self.timeout_handle:
                 self.metapoll.unregister_timeout(self.timeout_handle)
@@ -50,7 +61,7 @@ class Planner(object):
                 
             # This just returns if the plan is suspended again, or
             # raises StopIteration if it ended.
-            self.generator.send(resumed_value)
+            self.generator.send(planned_event)
         except StopIteration:
             print("Terminated plan.")
             self.generator = None

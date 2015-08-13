@@ -1,4 +1,4 @@
-#! /usr/bin/python
+#! /usr/bin/python3
 
 from __future__ import print_function, unicode_literals
 from datetime import timedelta
@@ -7,6 +7,7 @@ import socket
 from async import Metapoll, WeakMethod, Weak
 
 from format import Addr, Uri, Nameaddr, Status, Hop, print_structured_message, parse_structured_message
+from transport import UdpTransport
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
 from leg import Leg, SipLeg, create_uninvited_leg
@@ -17,7 +18,7 @@ from registrar import RegistrationManager, RecordManager
 from util import resolve
 from mgw import ContextManager
 from mgc import Controller, ProxiedMediaChannel, ProxiedMediaLeg, EchoedMediaLeg, PlayerMediaLeg
-from planner import Planner
+from planner import Planner, PlannedEvent
 
 HOST = "otthon"
 a_addr = Addr(HOST, 5060)
@@ -70,27 +71,42 @@ def sleep(secs, method):
     metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
 
 
-def indented(text, indent="  "):
-    return "\n" + "\n".join(indent + line for line in text.split("\n"))
+class PlannedLeg(Leg):
+    class LegPlanner(Planner):
+        def expect_action(self, action_type, timeout=None):
+            action = yield from self.expect("action", timeout=timeout)
+            
+            if action["type"] != action_type:
+                raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
+                
+            return action
+            
+            
+    def __init__(self):
+        super(PlannedLeg, self).__init__()
+        
+        self.planner = self.LegPlanner(metapoll, self.plan)
+    
 
+    def do(self, action):
+        self.planner.resume(PlannedEvent("action", action))
 
-class CalleeLeg(Leg):
+    
+    def plan(self, planner):
+        raise NotImplementedError()
+        
+
+class CalleeLeg(PlannedLeg):
     def __init__(self):
         super(CalleeLeg, self).__init__()
         
         self.media_leg = None
-        self.planner = Planner(metapoll, self.plan)
         
         
-    def do(self, action):
-        self.planner.resume(("action", action))
-
-
     def plan(self, planner):
         print("Callee created.")
         
-        action = yield from planner.expect("action")
-        assert action["type"] == "dial"
+        action = yield from planner.expect_action("dial")
         self.offer = action.get("offer")
         print("Got offer:\n%s" % repr(self.offer))
         
@@ -121,102 +137,24 @@ class CalleeLeg(Leg):
         return self.media_leg
         
 
-class CallerLeg(Leg):
-    def dial(self):
+class CallerLeg(PlannedLeg):
+    def plan(self, planner):
+        print("Caller created")
+        
+        yield from planner.sleep(0)
         self.ctx["from"] = Nameaddr(caller_uri, caller_name)
         self.ctx["to"] = Nameaddr(callee_uri)
         self.report(dict(type="dial", ctx=self.ctx, offer=caller_sdp))
-        #self.sleep(3, self.hanging)
 
+        action = yield from planner.expect_action("accept")
+        print("Accepted with SDP:\n%s" % repr(action.get("answer")))
 
-    def do(self, action):
-        if action["type"] == "accept":
-            print("Accepted with SDP:\n%s" % repr(action.get("answer")))
-            #self.sleep(1, self.hanging)
-
-            
-    def hanging(self):
-        self.leg.do(dict(type="hangup"))
-
-
-class TestTransport(object):
-    def __init__(self, local_addr, reception):
-        self.reception = reception
-        self.transmission = None
-        self.hop = Hop(local_addr=local_addr, remote_addr=None, interface="virt")
+        action = yield from planner.expect("action")
+        assert action["type"] == "hangup"
         
-        
-    def set_peer(self, peer):
-        self.transmission = WeakMethod(peer.process)
-        self.hop = Hop(local_addr=self.hop.local_addr, remote_addr=peer.hop.local_addr, interface=self.hop.interface)
-        
-        
-    def get_hop(self, uri):
-        return self.hop
-        
-        
-    def send(self, msg):
-        if msg["hop"] != self.hop:
-            print("This transport can't send this!")
-            return
-        
-        sip = print_structured_message(msg)
-        print("Transport sending by %s:" % (self.hop,))
-        print("\n" + "\n".join("  %s" % line for line in sip.split("\n")))
-        
-        metapoll.register_timeout(timedelta(), self.transmission.rebind(sip))
-
-
-    def process(self, sip):
-        #print("Transport receiving:")
-        #print(s)
-        msg = parse_structured_message(sip)
-        msg["hop"] = self.hop
-        self.reception(msg)
-
-
-class UdpTransport(object):
-    def __init__(self, metapoll, local_addr, reception):
-        self.metapoll = metapoll
-        self.local_addr = local_addr
-        self.reception = reception
-        
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.socket.bind(self.local_addr)
-
-        self.metapoll.register_reader(self.socket, WeakMethod(self.recved))
-        
-        
-    def get_hop(self, uri):
-        return Hop(local_addr=self.local_addr, remote_addr=uri.addr, interface="eth0")
-        
-        
-    def send(self, msg):
-        hop = msg["hop"]
-        
-        if hop.local_addr != self.local_addr:
-            print("This transport can't send this!")
-            return
-        
-        sip = print_structured_message(msg)
-        print("Transport sending from %s to %s:" % (hop.local_addr, hop.remote_addr))
-        print(indented(sip))
-        
-        sip = sip.encode()
-        self.socket.sendto(sip, hop.remote_addr)
-
-
-    def recved(self):
-        sip, raddr = self.socket.recvfrom(65535)
-        sip = sip.decode()
-        
-        hop = Hop(local_addr=self.local_addr, remote_addr=Addr(*raddr), interface="eth0")
-        print("Transport receiving from %s to %s:" % (hop.remote_addr, hop.local_addr))
-        print(indented(sip))
-        
-        msg = parse_structured_message(sip)
-        msg["hop"] = hop
-        self.reception(msg)
+        print("Caller done.")
+        #yield from planner.sleep(3)
+        #self.leg.do(dict(type="hangup"))
 
 
 class TestAuthority(Authority):
@@ -271,7 +209,7 @@ class TestController(Controller):
         # Must use IP4 addresses or FQDN in SDP, so let's go with IP4
         for li, leg in media_legs.items():
             if not leg:
-                addr = (MEDIA_HOST, self.next_port)
+                addr = Addr(MEDIA_HOST, self.next_port)
                 self.next_port += 1
                 media_legs[li] = ProxiedMediaLeg(resolve(addr))
         
@@ -420,7 +358,7 @@ class SwitchA(Switch):
         incoming_leg = CallerLeg()
         self.start_call(incoming_leg)
         
-        incoming_leg.dial()
+        #incoming_leg.dial()
     
 
 class SwitchB(Switch):

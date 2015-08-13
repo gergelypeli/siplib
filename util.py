@@ -1,8 +1,9 @@
+from format import Addr
 import socket
 
 
 def resolve(addr):
-    return (socket.gethostbyname(addr[0]), addr[1])
+    return Addr(socket.gethostbyname(addr[0]), addr[1])
 
 
 class Rtp(object):
