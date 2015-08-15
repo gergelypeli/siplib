@@ -3,7 +3,6 @@ import weakref
 import select
 import socket
 import errno
-import random
 import datetime
 import logging
 import os

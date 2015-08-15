@@ -1,5 +1,7 @@
-from format import Addr
 import socket
+import struct
+from format import Addr
+from async import WeakMethod
 
 
 def resolve(addr):

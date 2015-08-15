@@ -1,12 +1,11 @@
 from __future__ import print_function, unicode_literals, absolute_import
 
-from pprint import pprint, pformat
+#from pprint import pprint, pformat
 import uuid
 import datetime
 from async import Weak
 
-import format
-from format import Addr, Uri, Nameaddr, Via, Status
+from format import Via, Status, make_simple_response, make_ack, make_virtual_response, make_timeout_nak, make_timeout_response, is_virtual_response
 
 # tr id: (branch, method)
 
@@ -67,65 +66,7 @@ def identify(params):
 def generate_branch():
     return uuid.uuid4().hex[:8]
 
-
-def make_virtual_response():
-    return dict(status=Status(0, "Virtual"))
     
-    
-def is_virtual_response(msg):
-    return msg["status"].code == 0
-    
-    
-def make_simple_response(request, status, others=None):
-    tag = "ROTFLMAO" if status.code > 100 else None
-    
-    params = {
-        "is_response": True,
-        "method": request["method"],
-        "status": status,
-        "from": request["from"],
-        "to": request["to"].tagged(tag),
-        "call_id": request["call_id"],
-        "cseq": request["cseq"],
-        "hop": request["hop"]
-    }
-    
-    if others:
-        params.update(others)
-        
-    return params
-
-
-def make_ack(request, tag):
-    return {
-        'is_response': False,
-        'method': "ACK",
-        'uri': request["uri"],
-        'from': request["from"],
-        'to': request["to"].tagged(tag),
-        'call_id': request["call_id"],
-        'cseq': request["cseq"],
-        'route': request.get("route"),
-        'hop': request["hop"]
-    }
-
-
-def make_timeout_response(request):
-    return make_simple_response(request, Status(408, "Request Timeout"))
-
-
-def make_timeout_nak(response):
-    return {
-        "is_response": False,
-        "method": "NAK",
-        "from": response["from"],
-        "to": response["to"],
-        "call_id": response["call_id"],
-        "cseq": response["cseq"],
-        "hop": None
-    }
-    
-
 class Transaction(object):
     WAITING = "WAITING"
     PROVISIONING = "PROVISIONING"

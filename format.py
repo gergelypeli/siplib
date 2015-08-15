@@ -372,3 +372,60 @@ def parse_structured_message(msg):
 
     return p
 
+
+def make_simple_response(request, status, others=None):
+    tag = "ROTFLMAO" if status.code > 100 else None
+    
+    params = {
+        "is_response": True,
+        "method": request["method"],
+        "status": status,
+        "from": request["from"],
+        "to": request["to"].tagged(tag),
+        "call_id": request["call_id"],
+        "cseq": request["cseq"],
+        "hop": request["hop"]
+    }
+    
+    if others:
+        params.update(others)
+        
+    return params
+
+
+def make_ack(request, tag):
+    return {
+        'is_response': False,
+        'method': "ACK",
+        'uri': request["uri"],
+        'from': request["from"],
+        'to': request["to"].tagged(tag),
+        'call_id': request["call_id"],
+        'cseq': request["cseq"],
+        'route': request.get("route"),
+        'hop': request["hop"]
+    }
+
+
+def make_timeout_response(request):
+    return make_simple_response(request, Status(408, "Request Timeout"))
+
+
+def make_timeout_nak(response):
+    return {
+        "is_response": False,
+        "method": "NAK",
+        "from": response["from"],
+        "to": response["to"],
+        "call_id": response["call_id"],
+        "cseq": response["cseq"],
+        "hop": None
+    }
+
+
+def make_virtual_response():
+    return dict(status=Status(0, "Virtual"))
+    
+    
+def is_virtual_response(msg):
+    return msg["status"].code == 0

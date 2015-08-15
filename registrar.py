@@ -1,15 +1,11 @@
 from __future__ import print_function, unicode_literals, absolute_import
 
-from pprint import pprint, pformat
 import uuid
 import datetime
 import collections
-from weakref import proxy as Weak, WeakValueDictionary
 
-import format
-from format import Addr, Uri, Nameaddr, Via, Status
-from sdp import generate_session_id, Origin
-from async import WeakMethod
+from format import Nameaddr, Status
+from async import WeakMethod, Weak
 from transactions import make_simple_response
 
 MAXFWD = 50

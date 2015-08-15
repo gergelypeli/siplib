@@ -3,7 +3,7 @@ from __future__ import print_function, unicode_literals
 import collections
 import datetime
 import re
-from pprint import pprint
+#from pprint import pprint
 
 STATIC_PAYLOAD_TYPES = {
     0: ("PCMU", 8000),

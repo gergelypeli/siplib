@@ -1,13 +1,10 @@
 from __future__ import print_function, unicode_literals, absolute_import
 
-from pprint import pprint, pformat
 import uuid
-import datetime
-from weakref import proxy as Weak, WeakValueDictionary
+from weakref import WeakValueDictionary
 
-import format
-from format import Addr, Uri, Nameaddr, Via, Status
-from sdp import generate_session_id, Origin
+from format import Uri, Nameaddr
+from sdp import Origin
 from async import WeakMethod
 from util import resolve
 

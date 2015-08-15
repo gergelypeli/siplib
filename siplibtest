@@ -3,10 +3,9 @@
 from __future__ import print_function, unicode_literals
 from datetime import timedelta
 import logging
-import socket
 from async import Metapoll, WeakMethod, Weak
 
-from format import Addr, Uri, Nameaddr, Status, Hop, print_structured_message, parse_structured_message
+from format import Addr, Uri, Nameaddr, Status
 from transport import UdpTransport
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
@@ -17,7 +16,7 @@ from authority import Authority
 from registrar import RegistrationManager, RecordManager
 from util import resolve
 from mgw import ContextManager
-from mgc import Controller, ProxiedMediaChannel, ProxiedMediaLeg, EchoedMediaLeg, PlayerMediaLeg
+from mgc import Controller, ProxiedMediaChannel, ProxiedMediaLeg, PlayerMediaLeg
 from planner import Planner, PlannedEvent
 
 HOST = "otthon"

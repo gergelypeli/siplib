@@ -1,8 +1,6 @@
 
 from async import WeakMethod
-from format import Status
-from transactions import make_virtual_response
-from dialog import Dialog
+from format import Status, make_virtual_response
 
 class Error(Exception): pass
 

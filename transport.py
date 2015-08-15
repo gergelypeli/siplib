@@ -1,4 +1,5 @@
 import socket
+from datetime import timedelta
 from format import Hop, Addr, parse_structured_message, print_structured_message
 from async import WeakMethod
 
@@ -8,7 +9,8 @@ def indented(text, indent="  "):
 
 
 class TestTransport(object):
-    def __init__(self, local_addr, reception):
+    def __init__(self, metapoll, local_addr, reception):
+        self.metapoll
         self.reception = reception
         self.transmission = None
         self.hop = Hop(local_addr=local_addr, remote_addr=None, interface="virt")
@@ -32,7 +34,7 @@ class TestTransport(object):
         print("Transport sending by %s:" % (self.hop,))
         print("\n" + "\n".join("  %s" % line for line in sip.split("\n")))
         
-        metapoll.register_timeout(timedelta(), self.transmission.rebind(sip))
+        self.metapoll.register_timeout(timedelta(), self.transmission.rebind(sip))
 
 
     def process(self, sip):

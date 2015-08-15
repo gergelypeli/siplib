@@ -1,6 +1,6 @@
 # This needs at least Python 3.3 because of yield from!
 
-from async import Metapoll, Weak, WeakMethod
+from async import Metapoll, Weak
 import collections
 
 
@@ -89,3 +89,5 @@ def main():
 
     while True:
         metapoll.do_poll()
+        
+    del s

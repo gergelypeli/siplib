@@ -14,14 +14,12 @@ from __future__ import print_function, unicode_literals
 #import select
 import socket
 import weakref
-import collections
-import time
 import struct
 import datetime
 import wave
 import g711
 import msgp
-from async import WeakMethod, Metapoll
+from async import WeakMethod
 
 
 class Error(Exception): pass
