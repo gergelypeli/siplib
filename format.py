@@ -15,7 +15,20 @@ class FormatError(Exception):
 
 Addr = collections.namedtuple("Addr", [ "host", "port" ])
 Status = collections.namedtuple("Status", [ "code", "reason" ])
-Via = collections.namedtuple("Via", [ "addr", "branch" ])  # TODO: improve!
+
+
+class Via(collections.namedtuple("Via", [ "addr", "branch" ])):
+    def print(self):
+        return "SIP/2.0/UDP %s:%d;branch=z9hG4bK%s" % (self.addr + (self.branch,))
+
+
+    @classmethod
+    def parse(cls, value):
+        m = re.search("SIP/2.0/UDP ([^:;]+)(:(\\d+))?;branch=z9hG4bK([^;]+)", value)
+        if not m:
+            raise FormatError("Invalid Via!")
+        host, port, branch = m.group(1), int(m.group(3)) if m.group(3) else None, m.group(4)
+        return cls(Addr(host, port), branch)
 
 
 class Hop(collections.namedtuple("Hop", [ "local_addr", "remote_addr", "interface" ])):
@@ -291,12 +304,10 @@ def print_structured_message(params):
             pass
         elif field in ("from", "to", "www_authenticate", "authorization"):
             p[field] = params[field].print()
-        elif field in ("contact",):
-            p[field] = [ f.print() for f in params[field] ]
         elif field == "cseq":
-            p[field] = "%d %s" % (params[field], params["method"])  # ACK? CANCEL?
-        elif field == "via":
-            p[field] = ["SIP/2.0/UDP %s:%d;branch=z9hG4bK%s" % (a + (b,)) for a, b in params[field]]
+            p[field] = "%d %s" % (params[field], params["method"])
+        elif field in ("contact", "via"):
+            p[field] = [ f.print() for f in params[field] ]
         elif field not in META_HEADER_FIELDS:
             p[field] = params[field]
 
@@ -343,18 +354,11 @@ def parse_structured_message(msg):
             p[field] = int(cseq_num)
             if "method" in p:
                 if p["method"] != cseq_method:
-                    print("Mismatching method in cseq field!")
+                    raise FormatError("Mismatching method in cseq field!")
             else:
                 p["method"] = cseq_method.upper()  # Necessary for CANCEL responses
         elif field == "via":
-            def do_one(s):
-                m = re.search("SIP/2.0/UDP ([^:;]+)(:(\\d+))?;branch=z9hG4bK([^;]+)", s)
-                if not m:
-                    raise FormatError("Invalid Via!")
-                host, port, branch = m.group(1), int(m.group(3)) if m.group(3) else None, m.group(4)
-                return Via(Addr(host, port), branch)
-
-            p[field] = [ do_one(s) for s in params[field] ]
+            p[field] = [ Via.parse(s) for s in params[field] ]
         elif field not in META_HEADER_FIELDS:
             p[field] = params[field]
         else:
