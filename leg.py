@@ -1,6 +1,7 @@
 
 from async import WeakMethod
 from format import Status, make_virtual_response
+from planner import Planner, PlannedEvent
 
 class Error(Exception): pass
 
@@ -351,6 +352,32 @@ class SipLeg(Leg):
                 
         raise Error("Weirdness!")
 
+
+class PlannedLeg(Leg):
+    class LegPlanner(Planner):
+        def wait_action(self, action_type, timeout=None):
+            planned_event = yield from self.suspend(expect="action", timeout=timeout)
+            action = planned_event.event
+            
+            if action["type"] != action_type:
+                raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
+                
+            return action
+            
+            
+    def __init__(self, metapoll):
+        super(PlannedLeg, self).__init__()
+        
+        self.planner = self.LegPlanner(metapoll, self.plan)
+    
+
+    def do(self, action):
+        self.planner.resume(PlannedEvent("action", action))
+
+    
+    def plan(self, planner):
+        raise NotImplementedError()
+        
 
 def create_uninvited_leg(dialog_manager, invite_params):
     # TODO: real UninvitedLeg class

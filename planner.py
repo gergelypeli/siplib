@@ -14,6 +14,7 @@ class Planner(object):
         self.generator = generator_method.__func__(Weak(generator_method.__self__), Weak(self))
         self.finish_handler = finish_handler
         self.timeout_handle = None
+        self.event_queue = []
         
         print("Starting plan.")
         self.resume(None)
@@ -27,38 +28,46 @@ class Planner(object):
             self.metapoll.unregister_timeout(self.timeout_handle)
                     
         
-    def poll(self, timeout=None):
-        # self is actually a weak self, because this function is called from within the plan
+    def suspend(self, expect=None, timeout=None, strict=False):
+        for i, planned_event in enumerate(self.event_queue):
+            if not expect or expect == planned_event.tag:
+                print("Unqueueing planned event '%s'." % planned_event.tag)
+                return self.event_queue.pop(i)
+            
+        while True:
+            # self is actually a weak self, because this function is called from within the plan
+            if timeout is not None:
+                handler = lambda: self.resume(PlannedEvent("timeout"))
+                self.timeout_handle = self.metapoll.register_timeout(timeout, handler)
 
-        if timeout is not None:
-            self.timeout_handle = self.metapoll.register_timeout(timeout, lambda: self.resume(PlannedEvent("timeout")))
+            print("Suspending plan.")
+            planned_event = yield
+            print("Resuming plan.")
 
-        print("Suspending plan.")
-        planned_event = yield
-        print("Resuming plan.")
+            if timeout is not None:
+                self.metapoll.unregister_timeout(self.timeout_handle)
+                self.timeout_handle = None
         
-        return planned_event
-        
-        
-    def expect(self, tag, timeout=None):
-        planned_event = yield from self.poll(timeout=timeout)
-        
-        if planned_event.tag != tag:
-            raise Exception("Expected %s, got %s!" % (tag, planned_event.tag))
+            if not expect or expect == planned_event.tag:
+                print("Got planned event '%s'." % planned_event.tag)
+                return planned_event
 
-        return planned_event.event
-    
-        
+            if strict:
+                raise Exception("Expected planned event '%s', got '%s'!" % (expect, planned_event.tag))
+                
+            if planned_event.tag == "timeout":
+                raise Exception("Timeout before planned event '%s'!" % expect)
+                
+            print("Queueing planned event '%s'." % planned_event.tag)
+            self.event_queue.append(planned_event)
+
+
     def sleep(self, timeout):
-        yield from self.expect("timeout", timeout=timeout)
+        yield from self.suspend(expect="timeout", timeout=timeout)
         
         
     def resume(self, planned_event):
         try:
-            if self.timeout_handle:
-                self.metapoll.unregister_timeout(self.timeout_handle)
-                self.timeout_handle = None
-                
             # This just returns if the plan is suspended again, or
             # raises StopIteration if it ended.
             self.generator.send(planned_event)

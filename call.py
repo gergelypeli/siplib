@@ -1,11 +1,10 @@
 from async import WeakMethod
+from planner import Planner
 
 
 class Call(object):
-    def __init__(self, mgc, route, finish):
-        self.mgc = mgc
-        self.route = route
-        self.finish = finish
+    def __init__(self, switch):
+        self.switch = switch
         self.legs = {}
         self.media_channels = []
         
@@ -25,9 +24,10 @@ class Call(object):
         
         
     def create_media_channel(self, i):
+        print("Creating media channel %d." % i)
         media_legs = { li: self.legs[li].make_media_leg(i) for li in range(len(self.legs)) }
         
-        return self.mgc.make_media_channel(media_legs)
+        return self.switch.make_media_channel(media_legs)
         
         
     def process_offer(self, li, offer):
@@ -52,34 +52,47 @@ class Call(object):
             # TODO: if rejected, remove pending channels!
 
         self.mangle_session(li, answer)
-        
-        
-    def process(self, action, li):
-        lj = 1 - li
 
-        type = action["type"]
-        print("Got %s from leg %d." % (type, li))
+
+    def route_call(self, ctx):
+        to_uri = ctx["to"].uri
+        print("Checking registered SIP contact: %s" % (to_uri,))
+        contacts = self.switch.record_manager.lookup_contact_uris(to_uri)
+            
+        if contacts:
+            ctx["to"] = Nameaddr(contacts[0])  # warn if more
+            return self.switch.make_outgoing_sip_leg()
+        else:
+            print("No such registered SIP contact: %s" % (to_uri,))
+            raise Exception("Routing failed!")  # TODO: reject!
         
+
+    def dial_action(self, li, action):
+        lj = 1 - li
+        print("Dialing from leg %d." % li)
+
+        src_ctx = action["ctx"]
+        dst_ctx = src_ctx.copy()
+        action["ctx"] = dst_ctx
+
+        outgoing_leg = self.route_call(dst_ctx)
+        self.add_leg(lj, outgoing_leg)
+        
+        self.bridge_action(li, action)
+        #self.legs[lj].do(action)
+
+
+    def bridge_action(self, li, action):
+        lj = 1 - li
+        type = action["type"]
+        print("Bridging %s from leg %d." % (type, li))
+
         if type == "refresh":
             for mc in self.media_channels:
                 mc.refresh_context()
-                
             return
         
-        if type == "dial":
-            src_ctx = action["ctx"]
-            dst_ctx = src_ctx.copy()
-            action["ctx"] = dst_ctx
-            
-            outgoing_leg = self.route(dst_ctx)
-            if not outgoing_leg:
-                print("Routing failed!")  # TODO: reject!
-                self.finish(self)
-                return
-
-            self.add_leg(1, outgoing_leg)
-        
-        offer = action.get("offer")
+        offer = action.get("offer")  # OOPS: offer in dial not handled!!!
         if offer:
             self.process_offer(li, offer)
 
@@ -94,7 +107,17 @@ class Call(object):
                 mc.finish()
 
             # TODO: we should wait for full completion before notifying!
-            self.finish(self)
+            self.switch.finish_call(self)
+
+
+    def process(self, action, li):  # li is second arg because it is bound
+        type = action["type"]
+
+        if type == "dial":
+            self.dial_action(li, action)
+        else:
+            self.bridge_action(li, action)
+        
         
     
 # The incoming leg must have a context initialized from the INVITE, then
@@ -102,3 +125,43 @@ class Call(object):
 # context is initialized there. The outgoing leg uses its context to
 # reconstruct the dial.
 # Es ne kelljen a konstruktor-parametereket a legfelsobb szintig feltolni.
+
+
+class PlannedCall(Call):
+    class CallPlanner(Planner):
+        pass
+    #    def wait_action(self, expect, timeout=None):
+    #        planned_event = yield from self.suspend(expect="action", timeout=timeout)
+    #        action = planned_event.event
+            
+    #        if action["type"] != action_type:
+    #            raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
+                
+    #        return action
+            
+            
+    def __init__(self):
+        super(PlannedCall, self).__init__()
+        
+        self.planner = self.CallPlanner(metapoll, self.plan)
+    
+
+    def process(self, action, li):
+        self.planner.resume(PlannedEvent("action", (action, li)))
+
+
+    # Helper generator
+    def bridge_call(self, planner):
+        while True:
+            tag, event = yield from planner.suspend()
+            if tag == "action":
+                action, li = event
+                self.bridge_action(li, action)
+                
+                # TODO: this should be more intelligent
+                if action["type"] == "hangup":
+                    return
+    
+    
+    def plan(self, planner):
+        raise NotImplementedError()

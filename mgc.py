@@ -156,7 +156,7 @@ class ProxiedMediaChannel(object):
         self.refresh_context()
 
 
-    def finish(self):
+    def finish(self):  # TODO: get a callback?
         if self.is_created:
-            self.mgc.delete_context(self.context_sid)
+            self.mgc.delete_context(self.context_sid)  # TODO: wait for response!
 

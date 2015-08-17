@@ -9,7 +9,7 @@ from format import Addr, Uri, Nameaddr, Status
 from transport import UdpTransport
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
-from leg import Leg, SipLeg, create_uninvited_leg
+from leg import SipLeg, PlannedLeg, create_uninvited_leg
 from call import Call
 from sdp import Sdp
 from authority import Authority
@@ -17,7 +17,6 @@ from registrar import RegistrationManager, RecordManager
 from util import resolve
 from mgw import ContextManager
 from mgc import Controller, ProxiedMediaChannel, ProxiedMediaLeg, PlayerMediaLeg
-from planner import Planner, PlannedEvent
 
 HOST = "otthon"
 a_addr = Addr(HOST, 5060)
@@ -70,34 +69,9 @@ def sleep(secs, method):
     metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
 
 
-class PlannedLeg(Leg):
-    class LegPlanner(Planner):
-        def expect_action(self, action_type, timeout=None):
-            action = yield from self.expect("action", timeout=timeout)
-            
-            if action["type"] != action_type:
-                raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
-                
-            return action
-            
-            
-    def __init__(self):
-        super(PlannedLeg, self).__init__()
-        
-        self.planner = self.LegPlanner(metapoll, self.plan)
-    
-
-    def do(self, action):
-        self.planner.resume(PlannedEvent("action", action))
-
-    
-    def plan(self, planner):
-        raise NotImplementedError()
-        
-
 class CalleeLeg(PlannedLeg):
-    def __init__(self):
-        super(CalleeLeg, self).__init__()
+    def __init__(self, metapoll):
+        super(CalleeLeg, self).__init__(metapoll)
         
         self.media_leg = None
         
@@ -105,7 +79,7 @@ class CalleeLeg(PlannedLeg):
     def plan(self, planner):
         print("Callee created.")
         
-        action = yield from planner.expect_action("dial")
+        action = yield from planner.wait_action("dial")
         self.offer = action.get("offer")
         print("Got offer:\n%s" % repr(self.offer))
         
@@ -145,7 +119,7 @@ class CallerLeg(PlannedLeg):
         self.ctx["to"] = Nameaddr(callee_uri)
         self.report(dict(type="dial", ctx=self.ctx, offer=caller_sdp))
 
-        action = yield from planner.expect_action("accept")
+        action = yield from planner.wait_action("accept")
         print("Accepted with SDP:\n%s" % repr(action.get("answer")))
 
         action = yield from planner.expect("action")
@@ -216,6 +190,8 @@ class TestController(Controller):
         
 
 class Switch(object):
+    CallClass = Call
+
     def __init__(self, metapoll, local_addr, mgc_addr, realm):
         self.metapoll = metapoll
         self.transport = UdpTransport(metapoll, local_addr, WeakMethod(self.reception))
@@ -252,31 +228,23 @@ class Switch(object):
             self.transaction_manager.send_message(response, msg)
 
 
-    def route_to_registered_sip_contact(self, ctx):
-        to_uri = ctx["to"].uri
-        print("Checking registered SIP contact: %s" % (to_uri,))
-        contacts = self.record_manager.lookup_contact_uris(to_uri)
-            
-        if contacts:
-            ctx["to"] = Nameaddr(contacts[0])
-            outgoing_dialog = Dialog(Weak(self.dialog_manager))
-            outgoing_leg = SipLeg(outgoing_dialog)
-            return outgoing_leg
-        else:
-            print("No such registered SIP contact: %s" % (to_uri,))
-            return None
+    # Interface to Call
+    def make_media_channel(self, media_legs):
+        return self.mgc.make_media_channel(media_legs)
+        
+        
+    def make_outgoing_sip_leg(self):
+        outgoing_dialog = Dialog(Weak(self.dialog_manager))
+        outgoing_leg = SipLeg(outgoing_dialog)
+        return outgoing_leg
         
         
     def start_call(self, incoming_leg):
-        call = Call(Weak(self.mgc), WeakMethod(self.route_call), WeakMethod(self.finish_call))
+        call = self.CallClass(Weak(self))
         call.add_leg(0, incoming_leg)
         self.calls.append(call)
     
 
-    def route_call(self, ctx):
-        return self.route_to_registered_sip_contact(ctx)
-        
-        
     def finish_call(self, call):
         # TODO: Call should be smarter!
         
@@ -332,6 +300,16 @@ class Switch(object):
 
 
 class SwitchA(Switch):
+    class CallClass(Call):
+        def route_call(self, ctx):
+            # For the phone call only
+            if ctx["to"].uri.user == "555":
+                #ctx["to"] = Nameaddr(callee_uri)
+                return CalleeLeg(metapoll)  # TODO: Call has no metapoll yet
+            
+            return super(CallClass, self).route_call(ctx)
+            
+        
     def __init__(self, metapoll, *args):
         super(SwitchA, self).__init__(metapoll, *args)
         
@@ -341,15 +319,6 @@ class SwitchA(Switch):
 
         #metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_dialing))
         
-        
-    def route_call(self, ctx):
-        # For the phone call only
-        if ctx["to"].uri.user == "555":
-            #ctx["to"] = Nameaddr(callee_uri)
-            return CalleeLeg()
-            
-        return super(SwitchA, self).route_call(ctx)
-            
         
     def test_dialing(self):
         print("Dialing begins.")
@@ -361,6 +330,16 @@ class SwitchA(Switch):
     
 
 class SwitchB(Switch):
+    def CallClass(Call):
+        def route_call(self, ctx):
+            to_uri = ctx["to"].uri
+        
+            if to_uri.user == "callee":
+                return CalleeLeg(metapoll)  # TODO: Call has no metapoll yet
+            
+            return super(CallClass, self).route_call(ctx)
+
+
     def __init__(self, metapoll, *args):
         super(SwitchB, self).__init__(metapoll, *args)
         
@@ -370,15 +349,6 @@ class SwitchB(Switch):
         #metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
 
 
-    def route_call(self, ctx):
-        to_uri = ctx["to"].uri
-        
-        if to_uri.user == "callee":
-            return CalleeLeg()
-            
-        return super(SwitchB, self).route_call(ctx)
-        
-        
     def test_registering(self):
         print("Registering begins.")
 
