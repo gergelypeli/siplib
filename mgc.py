@@ -33,65 +33,53 @@ class Controller(object):
         self.msgp.remove_stream(sid)
         
         
-    def make_media_channel(self, media_legs):
+    def make_media_channel(self, left_info, right_info):
         raise NotImplementedError()
 
 
-def extract_formats(c):
-    return { r.payload_type: (r.encoding, r.clock) for r in c.formats }
-
-
 class MediaLeg(object):
-    def __init__(self, type):
-        self.changes = { "type": type }
+    # TODO: add MGW affinity field!
+    
+    def __init__(self, **kwargs):
+        self.committed = {}
+        self.current = kwargs
 
 
-    def change(self, **kwargs):
-        self.changes.update(kwargs)
+    def get(self, k, v=None):
+        return self.current.get(k, v)
+        
+
+    def update(self, **kwargs):
+        self.current.update(kwargs)
         
         
-    def get_changes(self):
-        changes = self.changes
-        self.changes = {}
+    def commit(self):
+        changes = { k: v for k, v in self.current.items() if v != self.committed.get(k) }
+        self.committed = self.current.copy()
         return changes
-        
-        
-    def get_local_addr(self):
-        return None
 
 
-class EchoedMediaLeg(MediaLeg):
-    def __init__(self):
-        super(EchoedMediaLeg, self).__init__("echo")
-        
-
-class PlayerMediaLeg(MediaLeg):
-    def __init__(self, format, filename, volume=1, fade=0):
-        super(PlayerMediaLeg, self).__init__("player")
-
-        self.change(format=format, filename=filename, volume=volume, fade=fade)
+#class EchoedMediaLeg(MediaLeg):
+#    def __init__(self):
+#        super(EchoedMediaLeg, self).__init__(type="echo")
 
 
-class ProxiedMediaLeg(MediaLeg):
-    def __init__(self, local_addr):
-        super(ProxiedMediaLeg, self).__init__("net")
-        
-        self.local_addr = local_addr
-        self.change(local_addr=local_addr)
-        
-        
-    def get_local_addr(self):
-        return self.local_addr
+#class PlayerMediaLeg(MediaLeg):
+#    def __init__(self, format, filename, volume=1, fade=0):
+#        super(PlayerMediaLeg, self).__init__(type="player", format=format, filename=filename, volume=volume, fade=fade)
+
+
+#class ProxiedMediaLeg(MediaLeg):
+#    def __init__(self, local_addr):
+#        super(ProxiedMediaLeg, self).__init__(type="net", local_addr=local_addr)
 
 
 class ProxiedMediaChannel(object):
-    def __init__(self, mgc, sid, media_legs):
+    def __init__(self, mgc, sid):
         self.mgc = mgc
         self.context_sid = sid
-        self.legs = media_legs
+        self.legs = { 0: MediaLeg(), 1: MediaLeg() }
         self.is_created = False
-        self.pending_addr = None
-        self.pending_formats = None
 
         
     def process_mgw_request(self, sid, seq, params, target):
@@ -105,11 +93,15 @@ class ProxiedMediaChannel(object):
             print("Oops, MGW %s error for %s!" % (sid, purpose))
         
         
-    def refresh_context(self):
+    def refresh_context(self, li, ri):
+        print("Refreshing context %s" % (self.context_sid,))
+        self.legs[0].update(**li)
+        self.legs[1].update(**ri)
+        
         # TODO: implement leg deletion
         params = {
             'type': 'proxy',
-            'legs': { li: leg.get_changes() for li, leg in self.legs.items() }
+            'legs': { li: leg.commit() for li, leg in self.legs.items() }
         }
         
         if not self.is_created:
@@ -121,40 +113,6 @@ class ProxiedMediaChannel(object):
             response_handler = WeakMethod(self.process_mgw_response, "mctx")
             self.mgc.modify_context(self.context_sid, params, response_handler=response_handler)
     
-
-    def process_offer(self, li, oc):
-        self.pending_addr = oc.addr
-        self.pending_formats = extract_formats(oc)
-
-
-    def process_answer(self, li, ac):
-        lj = 1 - li
-        
-        offering_leg = self.legs[lj]
-        answering_leg = self.legs[li]
-
-        answer_addr = ac.addr
-        answer_formats = extract_formats(ac)
-        
-        offer_addr = self.pending_addr
-        offer_formats = self.pending_formats
-
-        self.pending_addr = None
-        self.pending_formats = None
-        
-        answering_leg.change(
-            remote_addr=answer_addr,
-            send_formats=answer_formats,
-            recv_formats=offer_formats
-        )
-        offering_leg.change(
-            remote_addr=offer_addr,
-            send_formats=offer_formats,
-            recv_formats=answer_formats
-        )
-
-        self.refresh_context()
-
 
     def finish(self):  # TODO: get a callback?
         if self.is_created:

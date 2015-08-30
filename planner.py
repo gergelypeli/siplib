@@ -21,6 +21,7 @@ class Planner(object):
 
 
     def __del__(self):
+        # Not necessary, self.generator.__del__ does the same
         if self.generator:
             self.generator.close()
         
@@ -67,10 +68,16 @@ class Planner(object):
         
         
     def resume(self, planned_event):
+        if not self.generator:
+            raise Exception("Plan already finished!")
+    
         try:
-            # This just returns if the plan is suspended again, or
-            # raises StopIteration if it ended.
-            self.generator.send(planned_event)
+            if isinstance(planned_event, Exception):
+                self.generator.throw(planned_event)
+            else:
+                # This just returns if the plan is suspended again, or
+                # raises StopIteration if it ended.
+                self.generator.send(planned_event)
         except StopIteration:
             print("Terminated plan.")
             self.generator = None

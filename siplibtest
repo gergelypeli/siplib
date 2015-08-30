@@ -10,13 +10,13 @@ from transport import UdpTransport
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
 from leg import SipLeg, PlannedLeg, create_uninvited_leg
-from call import Call
+from call import Call, Routing
 from sdp import Sdp
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
 from util import resolve
 from mgw import ContextManager
-from mgc import Controller, ProxiedMediaChannel, ProxiedMediaLeg, PlayerMediaLeg
+from mgc import Controller, ProxiedMediaChannel
 
 HOST = "otthon"
 a_addr = Addr(HOST, 5060)
@@ -70,11 +70,11 @@ def sleep(secs, method):
 
 
 class CalleeLeg(PlannedLeg):
-    def __init__(self, metapoll):
-        super(CalleeLeg, self).__init__(metapoll)
+    def __init__(self, call, metapoll):
+        super(CalleeLeg, self).__init__(call, metapoll)
         
-        self.media_leg = None
-        
+        #self.media_leg = None
+        self.hack = False
         
     def plan(self, planner):
         print("Callee created.")
@@ -91,8 +91,9 @@ class CalleeLeg(PlannedLeg):
         self.report(dict(type="accept", answer=answer))
         
         yield from planner.sleep(5)
-        self.media_leg.change(volume=0, fade=5)
-        self.report(dict(type="refresh"))
+        #self.media_leg.change(volume=0, fade=5)
+        self.hack = True
+        self.refresh()
         
         yield from planner.sleep(5)
         self.report(dict(type="hangup"))
@@ -104,10 +105,23 @@ class CalleeLeg(PlannedLeg):
         return offer
 
 
-    def make_media_leg(self, sdp_channel):
-        #return EchoedMediaLeg()
-        self.media_leg = PlayerMediaLeg(("PCMA", 8000), "playback.wav", volume=0.2, fade=5)
-        return self.media_leg
+#    def make_media_leg(self, sdp_channel):
+#        #return EchoedMediaLeg()
+#        self.media_leg = PlayerMediaLeg(("PCMA", 8000), "playback.wav", volume=0.2, fade=5)
+#        return self.media_leg
+
+
+    def get_media_infos(self):
+        # TODO: nasty hack, because the whole get_media_info is not a good idea
+        if not self.hack:
+            return [
+                dict(type="player", format=("PCMA", 8000), filename="playback.wav", volume=0.2, fade=5)
+            ]
+        else:
+            print("Sending hacked media")
+            return [
+                dict(volume=0, fade=4)
+            ]
         
 
 class CallerLeg(PlannedLeg):
@@ -172,26 +186,61 @@ class TestController(Controller):
     next_ctx = 1
     next_port = 30000
     
-    def make_media_channel(self, media_legs):
+    def allocate_media_address(self, channel_index):
+        addr = Addr(MEDIA_HOST, self.next_port)
+        self.next_port += 1
+
+        # Must use IP4 addresses or FQDN in SDP, so let's go with IP4
+        return resolve(addr)
+    
+    
+    def make_media_channel(self):
         # Must use unique MGW addresses for Msgp
         key = chr(self.mgc_addr[1] % 10 + 96)
         context_id = "ctx-%s-%d" % (key, self.next_ctx)
-        sid = (resolve(mgw_addr), context_id)  # TODO: make Sid class!
+        sid = (resolve(mgw_addr), context_id)  # TODO: make Sid class?
         self.next_ctx += 1
         
-        # Must use IP4 addresses or FQDN in SDP, so let's go with IP4
-        for li, leg in media_legs.items():
-            if not leg:
-                addr = Addr(MEDIA_HOST, self.next_port)
-                self.next_port += 1
-                media_legs[li] = ProxiedMediaLeg(resolve(addr))
+        return ProxiedMediaChannel(Weak(self), sid)
         
-        return ProxiedMediaChannel(Weak(self), sid, media_legs)
         
+class TestRouting(Routing):
+    def __init__(self, switch, call, report, incoming_leg):
+        super(TestRouting, self).__init__(call, report, incoming_leg)
+        self.switch = switch
+        
+
+    def route_call(self, ctx):
+        to_uri = ctx["to"].uri
+        print("Checking registered SIP contact: %s" % (to_uri,))
+        contacts = self.switch.record_manager.lookup_contact_uris(to_uri)
+            
+        if contacts:
+            # TODO: do we care about the ctx in the outgoing leg?
+            ctx["to"] = Nameaddr(contacts[0])  # TODO: warn if more
+            outgoing_dialog = Dialog(Weak(self.switch.dialog_manager))
+            outgoing_leg = SipLeg(self.call, outgoing_dialog)
+            return outgoing_leg
+        else:
+            print("No such registered SIP contact: %s" % (to_uri,))
+            raise Exception("Routing failed!")  # TODO: reject!
+
+
+class TestCall(Call):
+    RoutingClass = TestRouting
+    
+    def __init__(self, switch, mgc, finish_handler):
+        super(TestCall, self).__init__(mgc, finish_handler)
+        self.switch = switch
+
+
+    def make_routing(self, incoming_leg):
+        return self.RoutingClass(self.switch, Weak(self), WeakMethod(self.routed), incoming_leg)
+    
 
 class Switch(object):
-    CallClass = Call
-
+    CallClass = TestCall
+    
     def __init__(self, metapoll, local_addr, mgc_addr, realm):
         self.metapoll = metapoll
         self.transport = UdpTransport(metapoll, local_addr, WeakMethod(self.reception))
@@ -211,7 +260,7 @@ class Switch(object):
         )
         self.mgc = TestController(metapoll, mgc_addr)
 
-        self.calls = []
+        self.calls = []  # TODO: make it a dict with call identifiers!
 
         metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
 
@@ -233,16 +282,19 @@ class Switch(object):
         return self.mgc.make_media_channel(media_legs)
         
         
-    def make_outgoing_sip_leg(self):
-        outgoing_dialog = Dialog(Weak(self.dialog_manager))
-        outgoing_leg = SipLeg(outgoing_dialog)
-        return outgoing_leg
+    def make_call(self):
+        return self.CallClass(Weak(self), Weak(self.mgc), WeakMethod(self.finish_call))
         
         
-    def start_call(self, incoming_leg):
-        call = self.CallClass(Weak(self))
-        call.add_leg(0, incoming_leg)
+    def start_call(self, params):  # TODO: params unused
+        call = self.make_call()
         self.calls.append(call)
+
+        incoming_dialog = Dialog(Weak(self.dialog_manager))
+        incoming_leg = SipLeg(call, incoming_dialog)
+        
+        call.start_routing(incoming_leg)
+        return WeakMethod(incoming_dialog.recv_request)
     
 
     def finish_call(self, call):
@@ -254,14 +306,6 @@ class Switch(object):
             
         self.metapoll.register_timeout(timedelta(seconds=1), ugly_delayed_finish)
         
-
-    def accept_invite(self, params):
-        incoming_dialog = Dialog(Weak(self.dialog_manager))
-        incoming_leg = SipLeg(incoming_dialog)
-        self.start_call(incoming_leg)
-        
-        return WeakMethod(incoming_dialog.recv_request)
-
 
     def process_request(self, params):
         if params["uri"].schema != "sip":
@@ -279,7 +323,7 @@ class Switch(object):
             return report
     
         if params["method"] == "INVITE" and "tag" not in params["to"].params:
-            return self.accept_invite(params)
+            return self.start_call(params)
     
         return WeakMethod(self.reject_request, Status(400, "Bad request"))
         
@@ -300,14 +344,16 @@ class Switch(object):
 
 
 class SwitchA(Switch):
-    class CallClass(Call):
-        def route_call(self, ctx):
-            # For the phone call only
-            if ctx["to"].uri.user == "555":
-                #ctx["to"] = Nameaddr(callee_uri)
-                return CalleeLeg(metapoll)  # TODO: Call has no metapoll yet
+    class CallClass(TestCall):
+        class RoutingClass(TestRouting):
+            def route_call(self, ctx):
+                # For the phone call only
+                if ctx["to"].uri.user == "555":
+                    print("Returning CalleeLeg for 555")
+                    #ctx["to"] = Nameaddr(callee_uri)
+                    return CalleeLeg(self.call, metapoll)  # TODO: Call has no metapoll yet
             
-            return super(CallClass, self).route_call(ctx)
+                return super(RoutingClass, self).route_call(ctx)
             
         
     def __init__(self, metapoll, *args):
@@ -323,21 +369,21 @@ class SwitchA(Switch):
     def test_dialing(self):
         print("Dialing begins.")
 
-        incoming_leg = CallerLeg()
-        self.start_call(incoming_leg)
+        #incoming_leg = CallerLeg()
+        #self.start_call(incoming_leg)
         
         #incoming_leg.dial()
     
 
 class SwitchB(Switch):
-    def CallClass(Call):
-        def route_call(self, ctx):
-            to_uri = ctx["to"].uri
-        
-            if to_uri.user == "callee":
-                return CalleeLeg(metapoll)  # TODO: Call has no metapoll yet
-            
-            return super(CallClass, self).route_call(ctx)
+    #def CallClass(Call):
+    #    def route_call(self, ctx):
+    #        to_uri = ctx["to"].uri
+    #    
+    #        if to_uri.user == "callee":
+    #            return CalleeLeg(metapoll)  # TODO: Call has no metapoll yet
+    #        
+    #        return super(CallClass, self).route_call(ctx)
 
 
     def __init__(self, metapoll, *args):

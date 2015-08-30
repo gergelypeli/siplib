@@ -1,75 +1,30 @@
-from async import WeakMethod
-from planner import Planner
+from async import WeakMethod, Weak
+#from planner import Planner
 
 
-class Call(object):
-    def __init__(self, switch):
-        self.switch = switch
+class Routing(object):
+    def __init__(self, call, report, incoming_leg):
+        # The report handler is for the finish and anchor events.
+        # Both may be forwarded by an owning internal leg,
+        # or be processed by the owning Call.
+        
+        self.call = call
+        self.report = report
         self.legs = {}
-        self.media_channels = []
-        
-        
+        self.add_leg(0, incoming_leg)
+
+
     def add_leg(self, li, leg):
         self.legs[li] = leg
         leg.set_report(WeakMethod(self.process, li))
-    
-    
-    def mangle_session(self, li, sdp):
-        lj = 1 - li
-        
-        for i in range(len(sdp.channels)):
-            local_addr = self.media_channels[i].legs[lj].get_local_addr()
-            print("Mangling leg %d channel %d with %s" % (lj, i, local_addr))
-            sdp.channels[i].addr = local_addr
-        
-        
-    def create_media_channel(self, i):
-        print("Creating media channel %d." % i)
-        media_legs = { li: self.legs[li].make_media_leg(i) for li in range(len(self.legs)) }
-        
-        return self.switch.make_media_channel(media_legs)
-        
-        
-    def process_offer(self, li, offer):
-        for i in range(len(self.media_channels), len(offer.channels)):
-            self.media_channels.append(self.create_media_channel(i))
-        
-        for i in range(len(offer.channels)):
-            mc = self.media_channels[i]
-            oc = offer.channels[i]
-            
-            mc.process_offer(li, oc)
-        
-        self.mangle_session(li, offer)
-            
-        
-    def process_answer(self, li, answer):
-        for i in range(len(answer.channels)):
-            mc = self.media_channels[i]
-            ac = answer.channels[i]
-
-            mc.process_answer(li, ac)
-            # TODO: if rejected, remove pending channels!
-
-        self.mangle_session(li, answer)
 
 
     def route_call(self, ctx):
-        to_uri = ctx["to"].uri
-        print("Checking registered SIP contact: %s" % (to_uri,))
-        contacts = self.switch.record_manager.lookup_contact_uris(to_uri)
-            
-        if contacts:
-            ctx["to"] = Nameaddr(contacts[0])  # warn if more
-            return self.switch.make_outgoing_sip_leg()
-        else:
-            print("No such registered SIP contact: %s" % (to_uri,))
-            raise Exception("Routing failed!")  # TODO: reject!
-        
+        return None
+
 
     def dial_action(self, li, action):
         lj = 1 - li
-        print("Dialing from leg %d." % li)
 
         src_ctx = action["ctx"]
         dst_ctx = src_ctx.copy()
@@ -78,90 +33,142 @@ class Call(object):
         outgoing_leg = self.route_call(dst_ctx)
         self.add_leg(lj, outgoing_leg)
         
-        self.bridge_action(li, action)
-        #self.legs[lj].do(action)
-
-
-    def bridge_action(self, li, action):
-        lj = 1 - li
-        type = action["type"]
-        print("Bridging %s from leg %d." % (type, li))
-
-        if type == "refresh":
-            for mc in self.media_channels:
-                mc.refresh_context()
-            return
-        
-        offer = action.get("offer")  # OOPS: offer in dial not handled!!!
-        if offer:
-            self.process_offer(li, offer)
-
-        answer = action.get("answer")
-        if answer:
-            self.process_answer(li, answer)
-        
         self.legs[lj].do(action)
+
+
+    def anchor_action(self, li, legs):
+        left = self.legs.pop(0)
+        right = self.legs.pop(li)
+        self.report(dict(type="anchor", legs=[ left, right ] + legs))
         
-        if type == "hangup":
-            for mc in self.media_channels:
-                mc.finish()
-
-            # TODO: we should wait for full completion before notifying!
-            self.switch.finish_call(self)
-
+        return left
+        
 
     def process(self, action, li):  # li is second arg because it is bound
+        lj = 1 - li
         type = action["type"]
+        print("Routing %s from leg %d." % (type, li))
 
-        if type == "dial":
+        if type == "finish":
+            self.legs.pop(li)
+        elif type == "anchor":
+            self.anchor_action(li, action["legs"])
+        elif type == "dial":
             self.dial_action(li, action)
+        #elif type == "refresh":
+        #    print("Ignoring refresh during routing.")
         else:
-            self.bridge_action(li, action)
+            print("Implicit anchoring")
+            incoming_leg = self.anchor_action(li, [])
+            incoming_leg.do(action)
+
+        if not self.legs:
+            self.report(dict(type="finish"))
+
+
+class Call(object):
+    def __init__(self, mgc, finish_handler):
+        self.mgc = mgc
+        self.finish_handler = finish_handler
+        self.legs = None
+        self.media_channels = None
+        self.routing = None
         
         
-    
+    def make_routing(self, incoming_leg):
+        return Routing(Weak(self), WeakMethod(self.routed), incoming_leg)
+        
+        
+    def start_routing(self, incoming_leg):
+        self.routing = self.make_routing(incoming_leg)  # just to be sure it's stored
+        
+        
+    def routed(self, action):
+        type = action["type"]
+        
+        if type == "finish":
+            self.routing = None
+            
+            if self.legs:
+                print("Routing finished")
+            else:
+                print("Oops, routing finished without success!")
+                self.finish_handler(self)
+                # TODO
+        elif type == "anchor":
+            print("Yay, anchored.")
+            self.legs = action["legs"]
+            self.media_channels = []
+            
+            for i, leg in enumerate(self.legs):
+                leg.set_report(WeakMethod(self.process, i))
+                
+            self.refresh_media()
+        else:
+            print("Unknown routing event %s!" % type)
+        
+        
+    def allocate_media_address(self, channel_index):
+        # TODO: check existing channels
+        return self.mgc.allocate_media_address(channel_index)
+        
+        
+    def deallocate_media_address(self, addr):
+        self.mgc.deallocate_media_address(addr)
+        
+        
+    def refresh_media(self):
+        if self.media_channels is None:
+            print("No media yet to refresh.")
+            return
+            
+        print("Refreshing media")
+        left_media_infos = self.legs[0].get_media_infos()
+        ln = len(left_media_infos)
+        right_media_infos = self.legs[-1].get_media_infos()
+        rn = len(right_media_infos)
+        
+        for i in range(min(ln, rn)):  # TODO: max?
+            li = left_media_infos[i] if i < ln else None
+            ri = right_media_infos[i] if i < rn else None
+            
+            if i < len(self.media_channels):
+                c = self.media_channels[i]
+            else:
+                c = self.mgc.make_media_channel()  # TODO: pass leg addrs!
+                self.media_channels.append(c)
+
+            c.refresh_context(li, ri)
+        
+        
+    def process(self, action, li):  # li is second arg because it is bound
+        lj = 1 - li
+        type = action["type"]
+        
+        if type == "finish":
+            print("Bridged leg %d finished." % li)
+            self.legs[li] = None
+            
+            for leg in self.legs:
+                if leg:
+                    break
+            else:
+                print("Call is finished.")
+                # TODO: we should wait for full completion before notifying!
+                self.finish_handler(self)
+        else:
+            print("Bridging %s from leg %d." % (type, li))
+            self.legs[lj].do(action)
+        
+            if type == "hangup":
+                print("Finishing media channels.")
+                for mc in self.media_channels:
+                    mc.finish()
+
+
+
 # The incoming leg must have a context initialized from the INVITE, then
 # this leg passed to the routing, which returns the outgoing leg, whose
 # context is initialized there. The outgoing leg uses its context to
 # reconstruct the dial.
 # Es ne kelljen a konstruktor-parametereket a legfelsobb szintig feltolni.
-
-
-class PlannedCall(Call):
-    class CallPlanner(Planner):
-        pass
-    #    def wait_action(self, expect, timeout=None):
-    #        planned_event = yield from self.suspend(expect="action", timeout=timeout)
-    #        action = planned_event.event
-            
-    #        if action["type"] != action_type:
-    #            raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
-                
-    #        return action
-            
-            
-    def __init__(self):
-        super(PlannedCall, self).__init__()
-        
-        self.planner = self.CallPlanner(metapoll, self.plan)
-    
-
-    def process(self, action, li):
-        self.planner.resume(PlannedEvent("action", (action, li)))
-
-
-    # Helper generator
-    def bridge_call(self, planner):
-        while True:
-            tag, event = yield from planner.suspend()
-            if tag == "action":
-                action, li = event
-                self.bridge_action(li, action)
-                
-                # TODO: this should be more intelligent
-                if action["type"] == "hangup":
-                    return
-    
-    
-    def plan(self, planner):
-        raise NotImplementedError()

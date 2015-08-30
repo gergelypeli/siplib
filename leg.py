@@ -1,3 +1,4 @@
+from copy import deepcopy
 
 from async import WeakMethod
 from format import Status, make_virtual_response
@@ -6,13 +7,14 @@ from planner import Planner, PlannedEvent
 class Error(Exception): pass
 
 class Leg(object):
-    def __init__(self):
+    def __init__(self, call):
+        self.call = call
         self.report = None
         self.ctx = {}
     
     
-    def make_media_leg(self, sdp_channel):
-        return None  # The Call may decide what to use
+    #def make_media_leg(self, sdp_channel):
+    #    raise NotImplementedError()
         
     
     def set_report(self, report):
@@ -23,7 +25,16 @@ class Leg(object):
         raise NotImplementedError()
 
 
-class Session(object):  # TODO: this is a reimplementation from call.py!
+    def finish(self):
+        self.report(dict(type="finish"))
+        
+    
+    def refresh(self):
+        #self.report(dict(type="refresh"))
+        self.call.refresh_media()
+        
+
+class Session(object):
     def __init__(self):
         self.local_sdp = None
         self.remote_sdp = None
@@ -121,7 +132,7 @@ class InviteState(object):
     def __init__(self, request):
         self.request = request
         sdp = request.get("sdp")
-        self.has_offer_in_request = (sdp and sdp.is_session())
+        self.had_offer_in_request = (sdp and sdp.is_session())
         self.responded_session = None
         self.rpr_session_done = False
         self.final_response = None
@@ -139,12 +150,14 @@ class SipLeg(Leg):
     DISCONNECTING_OUT = "DISCONNECTING_OUT"
     
 
-    def __init__(self, dialog):
-        super(SipLeg, self).__init__()
-        self.state = self.DOWN
+    def __init__(self, call, dialog):
+        super(SipLeg, self).__init__(call)
+
         self.dialog = dialog
+        self.state = self.DOWN
         self.invite_state = None
         self.session = Session()
+        self.media_addresses = []
         
         self.dialog.set_report(WeakMethod(self.process))
 
@@ -160,6 +173,92 @@ class SipLeg(Leg):
             raise Error("Respond to what?")
 
 
+    def get_media_infos(self):
+        # TODO: move this function to Call? Or to Session?
+        # TODO: remove altogether, just let the MediaLegs use the MGW directly!
+        infos = []
+
+        def extract_formats(c):
+            return { r.payload_type: (r.encoding, r.clock) for r in c.formats }
+
+        # Negotiated session parameters
+        lsdp = self.session.local_sdp
+        rsdp = self.session.remote_sdp
+
+        for i in range(len(lsdp.channels) if lsdp else 0):
+            lc = lsdp.channels[i]
+            rc = rsdp.channels[i]
+            #print("XXX local: %s (%s), remote: %s (%s)" % (lc.addr, id(lc.addr), rc.addr, id(rc.addr)))
+            
+            info = dict(
+                type="net",
+                local_addr=lc.addr,
+                remote_addr=rc.addr,
+                send_formats=extract_formats(rc),
+                recv_formats=extract_formats(lc)
+            )
+            
+            infos.append(info)
+            
+        return infos
+        
+
+    def preprocess_outgoing_session(self, sdp):
+        for i in range(len(self.media_addresses), len(sdp.channels)):
+            # TODO: deallocate them, too!
+            self.media_addresses.append(self.call.allocate_media_address(i))
+        
+        for i in range(len(sdp.channels)):
+            # No need to make a copy again here
+            if sdp.channels[i].addr:
+                raise Exception("Outgoing session has channel address set! %s" % id(sdp.channels[i]))
+                
+            sdp.channels[i].addr = self.media_addresses[i]
+            
+        return sdp  # For the sake of consistency
+
+
+    def postprocess_incoming_session(self, sdp):
+        for c in sdp.channels:
+            print("XXX c: %s (%s)" % (c, id(c)))
+            
+        sdp = deepcopy(sdp)
+
+        for c in sdp.channels:
+            print("XXX c: %s (%s)" % (c, id(c)))
+        
+        for i in range(len(sdp.channels)):
+            sdp.channels[i].addr = None  # Just to be sure
+            
+        return sdp
+
+        
+    def process_incoming_offer(self, sdp):
+        self.session.set_remote_offer(sdp)
+        sdp = self.postprocess_incoming_session(sdp)
+        return sdp
+
+    
+    def process_incoming_answer(self, sdp):
+        self.session.set_remote_answer(sdp)
+        self.refresh()
+        sdp = self.postprocess_incoming_session(sdp)
+        return sdp
+
+    
+    def process_outgoing_offer(self, sdp):
+        sdp = self.preprocess_outgoing_session(sdp)
+        self.session.set_local_offer(sdp)
+        return sdp
+
+    
+    def process_outgoing_answer(self, sdp):
+        sdp = self.preprocess_outgoing_session(sdp)
+        self.session.set_local_answer(sdp)
+        self.refresh()
+        return sdp
+        
+
     def do(self, action):
         type = action["type"]
         offer = action.get("offer")
@@ -168,9 +267,9 @@ class SipLeg(Leg):
         if offer and answer:
             raise Error("WTF?")
         elif offer:
-            self.session.set_local_offer(offer)
+            offer = self.process_outgoing_offer(offer)
         elif answer:
-            self.session.set_local_answer(answer)
+            answer = self.process_outgoing_answer(answer)
         
         if self.state == self.DOWN:
             if type == "dial":
@@ -203,7 +302,7 @@ class SipLeg(Leg):
             if self.invite_state.responded_session:
                 sdp = self.invite_state.responded_session
             else:
-                sdp = answer if self.invite_state.has_offer_in_request else offer
+                sdp = answer if self.invite_state.had_offer_in_request else offer
                 if sdp:
                     self.invite_state.responded_session = sdp
                 
@@ -248,7 +347,7 @@ class SipLeg(Leg):
                 
                 offer = sdp if sdp and sdp.is_session() else None
                 if offer:
-                    self.session.set_remote_offer(offer)  # TODO: session query?
+                    offer = self.process_incoming_offer(offer)  # TODO: session query?
                     
                 self.invite_state = InviteState(msg)
                 self.report(dict(type="dial", ctx=self.ctx, offer=offer))
@@ -261,18 +360,19 @@ class SipLeg(Leg):
                 self.send_response(dict(status=Status(200, "OK")), msg)
                 self.invite_state = None
                 self.state = self.DOWN
+                self.finish()
                 return
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
             if is_response and method == "INVITE":
                 offer, answer = None, None
                 
                 if sdp and sdp.is_session() and not self.invite_state.responded_session:
-                    if self.invite_state.has_offer_in_request:
-                        self.session.set_remote_answer(sdp)
-                        answer = sdp
+                    # No session yet in INVITE responses, take this one
+                    
+                    if self.invite_state.had_offer_in_request:
+                        answer = self.process_incoming_answer(sdp)
                     else:
-                        self.session.set_remote_offer(sdp)
-                        offer = sdp
+                        offer = self.process_incoming_offer(sdp)
 
                     self.invite_state.responded_session = sdp  # just to ignore any further
                     
@@ -291,9 +391,10 @@ class SipLeg(Leg):
                     self.report(dict(type="reject", status=status))
                     self.state = self.DOWN
                     # ACKed by tr
+                    self.finish()
                     return
                 elif status.code >= 200:
-                    if self.invite_state.has_offer_in_request:
+                    if self.invite_state.had_offer_in_request:
                         # send ACK without SDP now
                         self.send_request(dict(method="ACK"), msg)
                         self.state = self.UP
@@ -309,15 +410,14 @@ class SipLeg(Leg):
             if not is_response and method == "ACK":
                 answer = None
                 
-                if self.invite_state.has_offer_in_request:
+                if self.invite_state.had_offer_in_request:
                     if sdp and sdp.is_session():
                         print("Unexpected session in ACK!")
                 else:
                     if not (sdp and sdp.is_session()):
                         print("Unexpected sessionless ACK!")
                     else:
-                        self.session.set_remote_answer(sdp)
-                        answer = sdp
+                        answer = self.process_incoming_answer(sdp)
                         self.report(dict(type="session", answer=answer))
                     
                 # Stop the retransmission of the final answer
@@ -336,15 +436,18 @@ class SipLeg(Leg):
                 self.report(dict(type="hangup"))
                 self.send_response(dict(status=Status(200, "OK")), msg)
                 self.state = self.DOWN
+                self.finish()
                 return
         elif self.state == self.DISCONNECTING_OUT:
             if is_response and method == "BYE":
                 self.state = self.DOWN
+                self.finish()
                 return
             elif is_response and method == "INVITE":
                 print("Got cancelled invite response: %s" % (status,))
                 # This was ACKed by the transaction layer
                 self.state = self.DOWN
+                self.finish()
                 return
             elif is_response and method == "CANCEL":
                 print("Got cancel response: %s" % (status,))
@@ -365,16 +468,16 @@ class PlannedLeg(Leg):
             return action
             
             
-    def __init__(self, metapoll):
-        super(PlannedLeg, self).__init__()
+    def __init__(self, call, metapoll):
+        super(PlannedLeg, self).__init__(call)
         
-        self.planner = self.LegPlanner(metapoll, self.plan)
+        self.planner = self.LegPlanner(metapoll, self.plan, finish_handler=WeakMethod(self.finish))
     
 
     def do(self, action):
         self.planner.resume(PlannedEvent("action", action))
 
-    
+
     def plan(self, planner):
         raise NotImplementedError()
         
