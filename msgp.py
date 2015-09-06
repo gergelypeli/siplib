@@ -160,8 +160,14 @@ class Msgp(object):
             # Report ack timeout as a fake request, cancel response handling
             print("MSGP gave up waiting for ack for %s" % prid(sid, seq))
             
+            if msg.response_handler:
+                # Report also a fake response, don't keep a handler waiting
+                source, body = None, None
+                msg.response_handler(sid, source, self.decode_body(body))
+            
             request_handler = s.request_handler or self.request_handler
-            request_handler(sid, None, self.decode_body(msg.body), msg.target)
+            source, body, target = None, msg.body, msg.target  # return some message info
+            request_handler(sid, source, self.decode_body(body), target)
                 
             self.pop_sent_message(sid, seq)
 
