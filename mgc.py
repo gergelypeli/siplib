@@ -1,13 +1,20 @@
 from __future__ import unicode_literals, print_function
 from async import WeakMethod
 import msgp
+from util import vacuum
 
 
 class Controller(object):
+    last_mgc_number = 0
+    
     def __init__(self, metapoll, mgc_addr):
         self.mgc_addr = mgc_addr
-        
         self.metapoll = metapoll
+
+        Controller.last_mgc_number += 1
+        self.mgc_number = Controller.last_mgc_number
+        self.last_leg_number = 0
+        self.last_context_number = 0
         self.msgp = msgp.JsonMsgp(metapoll, mgc_addr, WeakMethod(self.process_request))
         
         
@@ -21,65 +28,133 @@ class Controller(object):
         
     def create_context(self, sid, params, response_handler=None, request_handler=None):
         self.msgp.add_stream(sid, request_handler)
-        self.send_message(sid, "create", params, response_handler)
+        self.send_message(sid, "create_context", params, response_handler)
 
 
     def modify_context(self, sid, params, response_handler=None):
-        self.send_message(sid, "modify", params, response_handler)
+        self.send_message(sid, "modify_context", params, response_handler)
 
 
     def delete_context(self, sid, response_handler=None):
-        self.send_message(sid, "delete", None, response_handler)
+        self.send_message(sid, "delete_context", None, response_handler)
         self.msgp.remove_stream(sid)
         
         
-    def make_media_channel(self, left_info, right_info):
+    def create_leg(self, sid, params, response_handler=None, request_handler=None):
+        self.msgp.add_stream(sid, request_handler)
+        self.send_message(sid, "create_leg", params, response_handler)
+
+
+    def modify_leg(self, sid, params, response_handler=None):
+        self.send_message(sid, "modify_leg", params, response_handler)
+
+
+    def delete_leg(self, sid, response_handler=None):
+        self.send_message(sid, "delete_leg", None, response_handler)
+        self.msgp.remove_stream(sid)
+
+        
+    def generate_leg_sid(self, affinity=None):
+        addr = self.select_gateway_address(affinity)
+        self.last_leg_number += 1
+        label = "leg-%s-%s" % (chr(96 + self.mgc_number), self.last_leg_number)
+        sid = (addr, label)
+        return sid
+        
+
+    def generate_context_sid(self, affinity=None):
+        addr = self.select_gateway_address(affinity)
+        self.last_context_number += 1
+        label = "ctx-%s-%s" % (chr(96 + self.mgc_number), self.last_context_number)
+        sid = (addr, label)
+        return sid
+    
+
+    def allocate_media_address(self, channel_index):
         raise NotImplementedError()
 
 
+    def deallocate_media_address(self, addr):
+        raise NotImplementedError()
+        
+        
+    def select_gateway_address(self, affinity=None):
+        raise NotImplementedError()
+        
+        
 class MediaLeg(object):
-    # TODO: add MGW affinity field!
-    
-    def __init__(self, **kwargs):
-        self.committed = {}
-        self.current = kwargs
+    def __init__(self, mgc, type, affinity=None):
+        self.mgc = mgc
+        self.type = type
+        self.sid = mgc.generate_leg_sid(affinity)
+        self.is_created = False
 
 
-    def get(self, k, v=None):
-        return self.current.get(k, v)
+    def __del__(self):
+        if self.is_created:
+            self.mgc.delete_leg(self.sid)
+            
+
+    def refresh(self, params):
+        if not self.is_created:
+            params = dict(params, type=self.type)
+            self.mgc.create_leg(self.sid, params, response_handler=lambda x, y, z: None)  # TODO
+            self.is_created = True
+        else:
+            self.mgc.modify_leg(self.sid, params)
         
-
-    def update(self, **kwargs):
-        self.current.update(kwargs)
-        
-        
-    def commit(self):
-        changes = { k: v for k, v in self.current.items() if v != self.committed.get(k) }
-        self.committed = self.current.copy()
-        return changes
-
 
 #class EchoedMediaLeg(MediaLeg):
 #    def __init__(self):
 #        super(EchoedMediaLeg, self).__init__(type="echo")
 
 
-#class PlayerMediaLeg(MediaLeg):
-#    def __init__(self, format, filename, volume=1, fade=0):
-#        super(PlayerMediaLeg, self).__init__(type="player", format=format, filename=filename, volume=volume, fade=fade)
+class PlayerMediaLeg(MediaLeg):
+    def __init__(self, mgc):
+        super(PlayerMediaLeg, self).__init__(mgc, "player")
+        
+
+    def play(self, filename=None, format=None, volume=1, fade=0):
+        new = vacuum(dict(
+            filename=filename,
+            format=format,
+            volume=volume,
+            fade=fade
+        ))
+        
+        self.refresh(new)
 
 
-#class ProxiedMediaLeg(MediaLeg):
-#    def __init__(self, local_addr):
-#        super(ProxiedMediaLeg, self).__init__(type="net", local_addr=local_addr)
+class ProxiedMediaLeg(MediaLeg):
+    def __init__(self, mgc, local_addr):
+        super(ProxiedMediaLeg, self).__init__(mgc, "net", affinity=local_addr)
+
+        self.local_addr = local_addr
+        self.committed = {}
 
 
-class ProxiedMediaChannel(object):
-    def __init__(self, mgc, sid):
+    def update(self, **kwargs):
+        new = dict(kwargs, local_addr=self.local_addr)
+        changes = { k: v for k, v in new.items() if v != self.committed.get(k) }
+        self.committed.update(changes)
+        self.refresh(changes)
+        
+        
+class MediaChannel(object):
+    def __init__(self, mgc):
         self.mgc = mgc
-        self.context_sid = sid
-        self.legs = { 0: MediaLeg(), 1: MediaLeg() }
-        self.is_created = False
+        self.sid = None
+        self.legs = [ None, None ]
+        
+        
+    def set_legs(self, legs):
+        changed = legs[0] and legs[1] and (legs[0] != self.legs[0] or legs[1] != self.legs[1])
+        self.legs = legs
+        
+        if changed:
+            self.refresh()
+        else:
+            print("Context not changed.")
 
         
     def process_mgw_request(self, sid, seq, params, target):
@@ -93,28 +168,31 @@ class ProxiedMediaChannel(object):
             print("Oops, MGW %s error for %s!" % (sid, purpose))
         
         
-    def refresh_context(self, li, ri):
-        print("Refreshing context %s" % (self.context_sid,))
-        self.legs[0].update(**li)
-        self.legs[1].update(**ri)
-        
+    def refresh(self):
         # TODO: implement leg deletion
         params = {
             'type': 'proxy',
-            'legs': { li: leg.commit() for li, leg in self.legs.items() }
+            'legs': [ leg.sid[1] for leg in self.legs ]
         }
         
-        if not self.is_created:
+        if not self.sid:
+            leg_addrs = set(leg.sid[0] for leg in self.legs)
+            if len(leg_addrs) != 1:
+                raise Exception("Multiple addresses among media legs!")
+                
+            addr = leg_addrs.pop()
+            self.sid = self.mgc.generate_context_sid(addr)
+            print("Creating context %s" % (self.sid,))
+            
             request_handler = WeakMethod(self.process_mgw_request)
             response_handler = WeakMethod(self.process_mgw_response, "cctx")
-            self.mgc.create_context(self.context_sid, params, response_handler=response_handler, request_handler=request_handler)
-            self.is_created = True
+            self.mgc.create_context(self.sid, params, response_handler=response_handler, request_handler=request_handler)
         else:
+            print("Modifying context %s" % (self.sid,))
             response_handler = WeakMethod(self.process_mgw_response, "mctx")
             self.mgc.modify_context(self.context_sid, params, response_handler=response_handler)
     
 
     def finish(self):  # TODO: get a callback?
-        if self.is_created:
-            self.mgc.delete_context(self.context_sid)  # TODO: wait for response!
-
+        if self.sid:
+            self.mgc.delete_context(self.sid)  # TODO: wait for response!

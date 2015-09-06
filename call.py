@@ -1,4 +1,5 @@
 from async import WeakMethod, Weak
+from mgc import MediaChannel
 #from planner import Planner
 
 
@@ -39,13 +40,14 @@ class Routing(object):
     def anchor_action(self, li, legs):
         left = self.legs.pop(0)
         right = self.legs.pop(li)
+        
         self.report(dict(type="anchor", legs=[ left, right ] + legs))
         
         return left
         
 
     def process(self, action, li):  # li is second arg because it is bound
-        lj = 1 - li
+        #lj = 1 - li
         type = action["type"]
         print("Routing %s from leg %d." % (type, li))
 
@@ -98,11 +100,12 @@ class Call(object):
         elif type == "anchor":
             print("Yay, anchored.")
             self.legs = action["legs"]
-            self.media_channels = []
-            
+
+            # TODO: let the Routing connect them to each other?
             for i, leg in enumerate(self.legs):
                 leg.set_report(WeakMethod(self.process, i))
                 
+            self.media_channels = []
             self.refresh_media()
         else:
             print("Unknown routing event %s!" % type)
@@ -113,32 +116,29 @@ class Call(object):
         return self.mgc.allocate_media_address(channel_index)
         
         
-    def deallocate_media_address(self, addr):
+    def deallocate_media_address(self, addr):  # TODO: may not be necessary
         self.mgc.deallocate_media_address(addr)
         
         
     def refresh_media(self):
         if self.media_channels is None:
-            print("No media yet to refresh.")
+            print("Not media yet to refresh.")
             return
             
         print("Refreshing media")
-        left_media_infos = self.legs[0].get_media_infos()
-        ln = len(left_media_infos)
-        right_media_infos = self.legs[-1].get_media_infos()
-        rn = len(right_media_infos)
+        left_media_legs = self.legs[0].media_legs
+        ln = len(left_media_legs)
+        right_media_legs = self.legs[-1].media_legs
+        rn = len(right_media_legs)
         
         for i in range(min(ln, rn)):  # TODO: max?
-            li = left_media_infos[i] if i < ln else None
-            ri = right_media_infos[i] if i < rn else None
-            
             if i < len(self.media_channels):
                 c = self.media_channels[i]
             else:
-                c = self.mgc.make_media_channel()  # TODO: pass leg addrs!
+                c = MediaChannel(self.mgc)
                 self.media_channels.append(c)
 
-            c.refresh_context(li, ri)
+            c.set_legs([ left_media_legs[i], right_media_legs[i] ])
         
         
     def process(self, action, li):  # li is second arg because it is bound

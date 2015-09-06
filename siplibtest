@@ -14,9 +14,9 @@ from call import Call, Routing
 from sdp import Sdp
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
-from util import resolve
+from util import resolve, setup_exchandler
 from mgw import ContextManager
-from mgc import Controller, ProxiedMediaChannel
+from mgc import Controller, PlayerMediaLeg
 
 HOST = "otthon"
 a_addr = Addr(HOST, 5060)
@@ -73,8 +73,6 @@ class CalleeLeg(PlannedLeg):
     def __init__(self, call, metapoll):
         super(CalleeLeg, self).__init__(call, metapoll)
         
-        #self.media_leg = None
-        self.hack = False
         
     def plan(self, planner):
         print("Callee created.")
@@ -89,10 +87,12 @@ class CalleeLeg(PlannedLeg):
         yield from planner.sleep(1)
         answer = self.make_answer(self.offer)
         self.report(dict(type="accept", answer=answer))
+        self.media_legs.append(PlayerMediaLeg(self.call.mgc))
+        self.media_legs[0].play("playback.wav", ("PCMA", 8000), volume=0.2, fade=5)
+        self.refresh()
         
         yield from planner.sleep(5)
-        #self.media_leg.change(volume=0, fade=5)
-        self.hack = True
+        self.media_legs[0].play(volume=0, fade=5)
         self.refresh()
         
         yield from planner.sleep(5)
@@ -104,25 +104,6 @@ class CalleeLeg(PlannedLeg):
     def make_answer(self, offer):
         return offer
 
-
-#    def make_media_leg(self, sdp_channel):
-#        #return EchoedMediaLeg()
-#        self.media_leg = PlayerMediaLeg(("PCMA", 8000), "playback.wav", volume=0.2, fade=5)
-#        return self.media_leg
-
-
-    def get_media_infos(self):
-        # TODO: nasty hack, because the whole get_media_info is not a good idea
-        if not self.hack:
-            return [
-                dict(type="player", format=("PCMA", 8000), filename="playback.wav", volume=0.2, fade=5)
-            ]
-        else:
-            print("Sending hacked media")
-            return [
-                dict(volume=0, fade=4)
-            ]
-        
 
 class CallerLeg(PlannedLeg):
     def plan(self, planner):
@@ -183,7 +164,6 @@ class TestAuthority(Authority):
 
 
 class TestController(Controller):
-    next_ctx = 1
     next_port = 30000
     
     def allocate_media_address(self, channel_index):
@@ -194,14 +174,22 @@ class TestController(Controller):
         return resolve(addr)
     
     
-    def make_media_channel(self):
-        # Must use unique MGW addresses for Msgp
-        key = chr(self.mgc_addr[1] % 10 + 96)
-        context_id = "ctx-%s-%d" % (key, self.next_ctx)
-        sid = (resolve(mgw_addr), context_id)  # TODO: make Sid class?
-        self.next_ctx += 1
+    def deallocate_media_address(self, addr):
+        pass
         
-        return ProxiedMediaChannel(Weak(self), sid)
+        
+    def select_gateway_address(self, affinity=None):
+        return resolve(mgw_addr)
+        
+    
+    #def make_media_channel(self):
+    #    # Must use unique MGW addresses for Msgp
+    #    key = chr(self.mgc_addr[1] % 10 + 96)
+    #    context_id = "ctx-%s-%d" % (key, self.next_ctx)
+    #    sid = (resolve(mgw_addr), context_id)  # TODO: make Sid class?
+    #    self.next_ctx += 1
+    #    
+    #    return ProxiedMediaChannel(Weak(self), sid)
         
         
 class TestRouting(Routing):
@@ -278,8 +266,8 @@ class Switch(object):
 
 
     # Interface to Call
-    def make_media_channel(self, media_legs):
-        return self.mgc.make_media_channel(media_legs)
+    #def make_media_channel(self, media_legs):
+    #    return self.mgc.make_media_channel(media_legs)
         
         
     def make_call(self):
@@ -353,7 +341,8 @@ class SwitchA(Switch):
                     #ctx["to"] = Nameaddr(callee_uri)
                     return CalleeLeg(self.call, metapoll)  # TODO: Call has no metapoll yet
             
-                return super(RoutingClass, self).route_call(ctx)
+                # FIXME: is RoutingClass legal here? Not according to pyflakes!
+                return super(RoutingClass, self).route_call(ctx)  
             
         
     def __init__(self, metapoll, *args):
@@ -401,6 +390,7 @@ class SwitchB(Switch):
         self.registration_manager.start_registration(a_registrar, callee_uri, callee_uri)
     
 
+setup_exchandler()
 logging.basicConfig(level=logging.DEBUG)
 metapoll = Metapoll()
 

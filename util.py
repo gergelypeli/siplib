@@ -2,11 +2,16 @@ import socket
 import struct
 from format import Addr
 from async import WeakMethod
+import sys, traceback
 
 
 def resolve(addr):
     return Addr(socket.gethostbyname(addr[0]), addr[1])
 
+
+def vacuum(d):
+    return { k: v for k, v in d.items() if v is not None }
+    
 
 class Rtp(object):
     def __init__(self, metapoll, local_addr, remote_addr, receiving_callback):
@@ -53,3 +58,20 @@ class Rtp(object):
         
         if self.receiving_callback:
             self.receiving_callback(type, payload)
+
+
+def my_exchandler(type, value, tb):
+    # Warning: watch for a bit more Python 3-specific code below
+    traceback.print_exception(type, value, tb)
+
+    while tb.tb_next:
+        tb = tb.tb_next
+
+    print("Locals:", file=sys.stderr)
+    for k, v in tb.tb_frame.f_locals.items():
+        if not (k.startswith('__') and k.endswith('__')) or True:
+            print('  {} = {}'.format(k, v), file=sys.stderr)
+
+
+def setup_exchandler():
+    sys.excepthook = my_exchandler

@@ -3,6 +3,7 @@ from copy import deepcopy
 from async import WeakMethod
 from format import Status, make_virtual_response
 from planner import Planner, PlannedEvent
+from mgc import ProxiedMediaLeg
 
 class Error(Exception): pass
 
@@ -11,6 +12,7 @@ class Leg(object):
         self.call = call
         self.report = None
         self.ctx = {}
+        self.media_legs = []
     
     
     #def make_media_leg(self, sdp_channel):
@@ -157,7 +159,6 @@ class SipLeg(Leg):
         self.state = self.DOWN
         self.invite_state = None
         self.session = Session()
-        self.media_addresses = []
         
         self.dialog.set_report(WeakMethod(self.process))
 
@@ -173,60 +174,46 @@ class SipLeg(Leg):
             raise Error("Respond to what?")
 
 
-    def get_media_infos(self):
-        # TODO: move this function to Call? Or to Session?
-        # TODO: remove altogether, just let the MediaLegs use the MGW directly!
-        infos = []
-
+    def refresh_media(self):
         def extract_formats(c):
             return { r.payload_type: (r.encoding, r.clock) for r in c.formats }
 
-        # Negotiated session parameters
+        # Negotiated session parameters, must have the same length
         lsdp = self.session.local_sdp
         rsdp = self.session.remote_sdp
 
         for i in range(len(lsdp.channels) if lsdp else 0):
             lc = lsdp.channels[i]
             rc = rsdp.channels[i]
+            ml = self.media_legs[i]  # must also have the same number of media legs
             #print("XXX local: %s (%s), remote: %s (%s)" % (lc.addr, id(lc.addr), rc.addr, id(rc.addr)))
             
-            info = dict(
-                type="net",
-                local_addr=lc.addr,
+            ml.update(
                 remote_addr=rc.addr,
                 send_formats=extract_formats(rc),
                 recv_formats=extract_formats(lc)
             )
-            
-            infos.append(info)
-            
-        return infos
         
 
     def preprocess_outgoing_session(self, sdp):
-        for i in range(len(self.media_addresses), len(sdp.channels)):
-            # TODO: deallocate them, too!
-            self.media_addresses.append(self.call.allocate_media_address(i))
+        for i in range(len(self.media_legs), len(sdp.channels)):
+            mgc = self.call.mgc
+            local_addr = self.call.allocate_media_address(i)  # TODO: deallocate them, too!
+            self.media_legs.append(ProxiedMediaLeg(mgc, local_addr))
         
         for i in range(len(sdp.channels)):
             # No need to make a copy again here
             if sdp.channels[i].addr:
                 raise Exception("Outgoing session has channel address set! %s" % id(sdp.channels[i]))
                 
-            sdp.channels[i].addr = self.media_addresses[i]
+            sdp.channels[i].addr = self.media_legs[i].local_addr
             
         return sdp  # For the sake of consistency
 
 
     def postprocess_incoming_session(self, sdp):
-        for c in sdp.channels:
-            print("XXX c: %s (%s)" % (c, id(c)))
-            
         sdp = deepcopy(sdp)
 
-        for c in sdp.channels:
-            print("XXX c: %s (%s)" % (c, id(c)))
-        
         for i in range(len(sdp.channels)):
             sdp.channels[i].addr = None  # Just to be sure
             
@@ -241,7 +228,7 @@ class SipLeg(Leg):
     
     def process_incoming_answer(self, sdp):
         self.session.set_remote_answer(sdp)
-        self.refresh()
+        self.refresh_media()
         sdp = self.postprocess_incoming_session(sdp)
         return sdp
 
@@ -255,7 +242,7 @@ class SipLeg(Leg):
     def process_outgoing_answer(self, sdp):
         sdp = self.preprocess_outgoing_session(sdp)
         self.session.set_local_answer(sdp)
-        self.refresh()
+        self.refresh_media()
         return sdp
         
 

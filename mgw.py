@@ -168,25 +168,29 @@ class RtpPlayer(object):
 
     
 class Leg(object):
-    def __init__(self, type, index, context):
+    def __init__(self, label, owner_addr, type):
+        self.label = label
+        self.owner_addr = owner_addr
         self.type = type
-        self.index = index
-        self.context = context
-        
-        self.name = "%s/%d" % (self.context.label, self.index)
-        print("Created %s leg %s" % (type, self.name))
+        self.forward_handler = None
+        print("Created %s leg %s" % (type, self.label))
         
         
     def __del__(self):
-        print("Deleted %s leg %s" % (self.type, self.name))
-            
+        print("Deleted %s leg %s" % (self.type, self.label))
+
+
+    def set_forward_handler(self, fh):
+        self.forward_handler = fh
+                    
         
-    def set(self, params):
+    def modify(self, params):
         pass
         
 
     def recv_format(self, format, packet):
-        self.context.forward(self.index, format, packet)
+        if self.forward_handler:
+            self.forward_handler(format, packet)
 
 
     def send_format(self, format, packet):
@@ -194,12 +198,12 @@ class Leg(object):
 
 
 class NetLeg(Leg):
-    def __init__(self, index, context):
-        super(NetLeg, self).__init__("net", index, context)
+    def __init__(self, label, owner_addr, metapoll):
+        super(NetLeg, self).__init__(label, owner_addr, "net")
         self.local_addr = None
         self.remote_addr = None
         self.socket = None
-        self.metapoll = context.manager.metapoll
+        self.metapoll = metapoll
         self.send_pts_by_format = None
         self.recv_formats_by_pt = None
         
@@ -209,8 +213,8 @@ class NetLeg(Leg):
             self.metapoll.register_reader(self.socket, None)
             
         
-    def set(self, params):
-        super(NetLeg, self).set(params)
+    def modify(self, params):
+        super(NetLeg, self).modify(params)
 
         #print("Setting leg: %s" % (params,))
         
@@ -284,8 +288,8 @@ class NetLeg(Leg):
 
 
 class EchoLeg(Leg):
-    def __init__(self, index, context):
-        super(EchoLeg, self).__init__("echo", index, context)
+    def __init__(self, label, owner_addr):
+        super(EchoLeg, self).__init__(label, owner_addr, "echo")
 
 
     def send_format(self, format, packet):
@@ -295,17 +299,17 @@ class EchoLeg(Leg):
 
 
 class PlayerLeg(Leg):
-    def __init__(self, index, context):
-        super(PlayerLeg, self).__init__("player", index, context)
+    def __init__(self, label, owner_addr, metapoll):
+        super(PlayerLeg, self).__init__(label, owner_addr, "player")
         
-        self.metapoll = context.manager.metapoll
+        self.metapoll = metapoll
         self.rtp_player = None
         self.format = None
         self.volume = 1
 
 
-    def set(self, params):
-        super(PlayerLeg, self).set(params)
+    def modify(self, params):
+        super(PlayerLeg, self).modify(params)
 
         # This is temporary, don't remember it across calls
         fade = 0
@@ -348,46 +352,24 @@ class Context(object):
         print("Deleted context %s" % self.label)
         
         
-    def set_leg(self, li, params):
-        while li >= len(self.legs):
-            self.legs.append(None)
-
-        if params is None:
-            self.legs[li] = None
-            return
-
-        type = params.pop("type", None)
-        if type:
-            # Create new leg if type specified, even if we already have one
-            if type == "net":
-                leg = NetLeg(li, weakref.proxy(self))
-            elif type == "echo":
-                leg = EchoLeg(li, weakref.proxy(self))
-            elif type == "player":
-                leg = PlayerLeg(li, weakref.proxy(self))
-            else:
-                raise Error("Invalid leg type '%s'!" % type)
-                
-            self.legs[li] = leg
-        else:
-            if not self.legs[li]:
-                raise Error("No type for new leg!")
-        
-        self.legs[li].set(params)
-
-
     def modify(self, params):
-        # TODO: implement leg deletion
-        for li, leg_params in params.get("legs", {}).items():
-            self.set_leg(int(li), leg_params)
-            
-        
+        leg_labels = params["legs"]
+
+        for i, leg in enumerate(self.legs):
+            leg.set_forward_handler(None)
+
+        self.legs = [ self.manager.get_leg(label) for label in leg_labels ]
+
+        for i, leg in enumerate(self.legs):
+            leg.set_forward_handler(WeakMethod(self.forward, i))
+
+
     def detected(self, li, remote_addr):
         sid = (self.owner_addr, self.label)
         self.manager.detected(sid, li, remote_addr)
         
     
-    def forward(self, li, format, packet):
+    def forward(self, format, packet, li):  # li is bound
         lj = (1 if li == 0 else 0)
         
         try:
@@ -402,12 +384,17 @@ class Context(object):
 
 class ContextManager(object):
     def __init__(self, metapoll, mgw_addr):
-        self.contexts_by_label = {}
         self.metapoll = metapoll
+        self.contexts_by_label = {}
+        self.legs_by_label = {}
         self.msgp = msgp.JsonMsgp(metapoll, mgw_addr, WeakMethod(self.process_request))
 
 
-    def add_context(self, label, owner_addr, type):
+    def get_leg(self, label):
+        return self.legs_by_label[label]
+        
+
+    def create_context(self, label, owner_addr, type):
         if label in self.contexts_by_label:
             raise Error("Context already exists!")
         
@@ -415,7 +402,9 @@ class ContextManager(object):
             context = Context(label, owner_addr, weakref.proxy(self))
         else:
             raise Error("Invalid context type %s!" % type)
-            
+
+        sid = (owner_addr, label)
+        self.msgp.add_stream(sid)
         self.contexts_by_label[label] = context
         return context
 
@@ -425,32 +414,83 @@ class ContextManager(object):
         context.modify(params)
 
 
-    def remove_context(self, label):
+    def delete_context(self, label):
         context = self.contexts_by_label.pop(label)
         
         old_sid = (context.owner_addr, context.label)
         self.msgp.remove_stream(old_sid)
+
+
+    def take_context(self, label, owner_addr):
+        context = self.contexts_by_label.get(label)
+        old_sid = (context.owner_addr, label)
+        self.msgp.remove_stream(old_sid)
+        
+        context.owner_addr = owner_addr
+        new_sid = (context.owner_addr, label)
+        self.msgp.add_stream(new_sid)
+        
+
+    def create_leg(self, label, owner_addr, type):
+        if type == "net":
+            leg = NetLeg(label, owner_addr, self.metapoll)
+        elif type == "echo":
+            leg = EchoLeg(label, owner_addr)
+        elif type == "player":
+            leg = PlayerLeg(label, owner_addr, self.metapoll)
+        else:
+            raise Error("Invalid leg type '%s'!" % type)
+            
+        sid = (owner_addr, label)
+        self.msgp.add_stream(sid)
+        self.legs_by_label[label] = leg
+        return leg
+        
+        
+    def modify_leg(self, label, params):
+        leg = self.legs_by_label.get(label)
+        leg.modify(params)
+        
+        
+    def delete_leg(self, label):
+        leg = self.legs_by_label.pop(label)
+        
+        old_sid = (leg.owner_addr, leg.label)
+        self.msgp.remove_stream(old_sid)
+
+
+    def take_leg(self, label, owner_addr):  # TODO: make Ownable class!
+        leg = self.legs_by_label.get(label)
+        old_sid = (leg.owner_addr, label)
+        self.msgp.remove_stream(old_sid)
+        
+        leg.owner_addr = owner_addr
+        new_sid = (leg.owner_addr, label)
+        self.msgp.add_stream(new_sid)
         
         
     def process_request(self, sid, seq, params, target):
         try:
             owner_addr, label = sid
             
-            if target == "create":
-                self.add_context(label, owner_addr, params["type"])
-                self.msgp.add_stream(sid)
+            if target == "create_context":
+                self.create_context(label, owner_addr, params["type"])
                 self.modify_context(label, params)  # fake modification
-            elif target == "modify":
+            elif target == "modify_context":
                 self.modify_context(label, params)
-            elif target == "delete":
-                self.remove_context(label)
-            elif target == "take":
-                context = self.contexts_by_label.get(label)
-                old_sid = (context.owner_addr, context.label)
-                self.msgp.remove_stream(old_sid)
-                
-                self.msgp.add_stream(sid)
-                context.owner_addr = owner_addr
+            elif target == "delete_context":
+                self.delete_context(label)
+            elif target == "take_context":
+                self.take_context(label, owner_addr)
+            elif target == "create_leg":
+                self.create_leg(label, owner_addr, params["type"])
+                self.modify_leg(label, params)  # fake modification
+            elif target == "modify_leg":
+                self.modify_leg(label, params)
+            elif target == "delete_leg":
+                self.delete_leg(label)
+            elif target == "take_leg":
+                self.take_leg(label, owner_addr)
             else:
                 raise Error("Invalid target %s!" % target)
         except Exception as e:
@@ -460,7 +500,7 @@ class ContextManager(object):
             self.msgp.send_message(sid, seq, "ok")
         
 
-    def detected(self, sid, li, remote_addr):
+    def detected(self, sid, li, remote_addr):  # TODO: this should be leg-specific!
         params = { 'legs': { li: { 'remote_addr': remote_addr } } }
         self.msgp.send_message(sid, "detected", params)
 
