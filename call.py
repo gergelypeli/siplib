@@ -153,18 +153,25 @@ class Call(object):
                 if leg:
                     break
             else:
-                print("Call is finished.")
-                # TODO: we should wait for full completion before notifying!
-                self.finish_handler(self)
+                if any(self.media_channels):
+                    print("Deleting media channels.")
+                    for i, mc in enumerate(self.media_channels):
+                        if mc:
+                            mc.delete(WeakMethod(self.media_deleted, i))
+                else:
+                    print("Call is finished.")
+                    self.finish_handler(self)
         else:
             print("Bridging %s from leg %d." % (type, li))
             self.legs[lj].do(action)
-        
-            if type == "hangup":
-                print("Finishing media channels.")
-                for mc in self.media_channels:
-                    mc.finish()
 
+
+    def media_deleted(self, li):
+        self.media_channels[li] = None
+        
+        if not any(self.media_channels):
+            print("Call is finished.")
+            self.finish_handler(self)
 
 
 # The incoming leg must have a context initialized from the INVITE, then

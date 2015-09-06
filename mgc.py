@@ -86,22 +86,25 @@ class MediaLeg(object):
     def __init__(self, mgc, type, affinity=None):
         self.mgc = mgc
         self.type = type
-        self.sid = mgc.generate_leg_sid(affinity)
-        self.is_created = False
+        self.affinity = affinity
+        self.sid = None
 
-
-    def __del__(self):
-        if self.is_created:
-            self.mgc.delete_leg(self.sid)
-            
 
     def refresh(self, params):
-        if not self.is_created:
+        if not self.sid:
+            self.sid = self.mgc.generate_leg_sid(self.affinity)
             params = dict(params, type=self.type)
             self.mgc.create_leg(self.sid, params, response_handler=lambda x, y, z: None)  # TODO
-            self.is_created = True
         else:
             self.mgc.modify_leg(self.sid, params)
+        
+        
+    def delete(self, handler=None):
+        if self.sid:
+            response_handler = lambda sid, source, body: handler()  # TODO
+            self.mgc.delete_leg(self.sid, response_handler=response_handler)
+        else:
+            handler()
         
 
 #class EchoedMediaLeg(MediaLeg):
@@ -193,6 +196,9 @@ class MediaChannel(object):
             self.mgc.modify_context(self.context_sid, params, response_handler=response_handler)
     
 
-    def finish(self):  # TODO: get a callback?
+    def delete(self, handler=None):
         if self.sid:
-            self.mgc.delete_context(self.sid)  # TODO: wait for response!
+            response_handler = lambda sid, source, body: handler()  # TODO
+            self.mgc.delete_context(self.sid, response_handler=response_handler)
+        else:
+            handler()

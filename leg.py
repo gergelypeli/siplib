@@ -27,12 +27,27 @@ class Leg(object):
         raise NotImplementedError()
 
 
+    # TODO: these are duplicated from Call/MediaChannel
     def finish(self):
-        self.report(dict(type="finish"))
+        if any(self.media_legs):
+            print("Deleting media legs.")
+            for i, ml in enumerate(self.media_legs):
+                if ml:
+                    ml.delete(WeakMethod(self.media_deleted, i))
+        else:
+            print("Leg is finished.")
+            self.report(dict(type="finish"))
+            
+            
+    def media_deleted(self, li):
+        self.media_legs[li] = None
         
+        if not any(self.media_legs):
+            print("Leg is finished.")
+            self.report(dict(type="finish"))
+
     
-    def refresh(self):
-        #self.report(dict(type="refresh"))
+    def refresh_media(self):
         self.call.refresh_media()
         
 

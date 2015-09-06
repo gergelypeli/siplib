@@ -89,11 +89,11 @@ class CalleeLeg(PlannedLeg):
         self.report(dict(type="accept", answer=answer))
         self.media_legs.append(PlayerMediaLeg(self.call.mgc))
         self.media_legs[0].play("playback.wav", ("PCMA", 8000), volume=0.2, fade=5)
-        self.refresh()
+        self.refresh_media()
         
         yield from planner.sleep(5)
         self.media_legs[0].play(volume=0, fade=5)
-        self.refresh()
+        self.refresh_media()
         
         yield from planner.sleep(5)
         self.report(dict(type="hangup"))
