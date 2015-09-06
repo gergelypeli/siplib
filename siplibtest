@@ -15,7 +15,7 @@ from sdp import Sdp
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
 from util import resolve, setup_exchandler
-from mgw import ContextManager
+from mgw import MediaGateway
 from mgc import Controller, PlayerMediaLeg
 
 HOST = "otthon"
@@ -394,7 +394,7 @@ setup_exchandler()
 logging.basicConfig(level=logging.DEBUG)
 metapoll = Metapoll()
 
-mgw = ContextManager(metapoll, mgw_addr)
+mgw = MediaGateway(metapoll, mgw_addr)
 
 switch_a = SwitchA(Weak(metapoll), a_addr, mgc1_addr, "A-NET")
 switch_b = SwitchB(Weak(metapoll), b_addr, mgc2_addr, "B-NET")

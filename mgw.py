@@ -166,11 +166,21 @@ class RtpPlayer(object):
             self.metapoll.unregister_timeout(self.handle)
             self.handle = None
 
-    
-class Leg(object):
-    def __init__(self, label, owner_addr, type):
+
+class Thing(object):
+    def __init__(self, label, owner_addr):
         self.label = label
         self.owner_addr = owner_addr
+        
+        
+    def modify(self, params):
+        pass
+
+    
+class Leg(Thing):
+    def __init__(self, label, owner_addr, type):
+        super().__init__(label, owner_addr)
+        
         self.type = type
         self.forward_handler = None
         print("Created %s leg %s" % (type, self.label))
@@ -184,10 +194,6 @@ class Leg(object):
         self.forward_handler = fh
                     
         
-    def modify(self, params):
-        pass
-        
-
     def recv_format(self, format, packet):
         if self.forward_handler:
             self.forward_handler(format, packet)
@@ -339,10 +345,10 @@ class PlayerLeg(Leg):
         pass
 
 
-class Context(object):
+class Context(Thing):
     def __init__(self, label, owner_addr, manager):
-        self.label = label
-        self.owner_addr = owner_addr
+        super().__init__(label, owner_addr)
+
         self.manager = manager
         self.legs = []
         print("Created context %s" % self.label)
@@ -382,7 +388,7 @@ class Context(object):
         leg.send_format(format, packet)
 
 
-class ContextManager(object):
+class MediaGateway(object):
     def __init__(self, metapoll, mgw_addr):
         self.metapoll = metapoll
         self.contexts_by_label = {}
@@ -394,42 +400,63 @@ class ContextManager(object):
         return self.legs_by_label[label]
         
 
-    def create_context(self, label, owner_addr, type):
-        if label in self.contexts_by_label:
-            raise Error("Context already exists!")
+    # Things
+    
+    def add_thing(self, things, thing):
+        if thing.label in things:
+            raise Error("Duplicate %s!" % thing.__class__)
         
+        sid = (thing.owner_addr, thing.label)
+        self.msgp.add_stream(sid)
+        things[thing.label] = thing
+        return thing
+        
+        
+    def modify_thing(self, things, label, params):
+        thing = things[label]
+        thing.modify(params)
+        
+        
+    def delete_thing(self, things, label):
+        thing = things.pop(label)
+        old_sid = (thing.owner_addr, thing.label)
+        self.msgp.remove_stream(old_sid)
+
+
+    def take_thing(self, things, label, owner_addr):
+        thing = things[label]
+        old_sid = (thing.owner_addr, thing.label)
+        self.msgp.remove_stream(old_sid)
+        
+        thing.owner_addr = owner_addr
+        new_sid = (thing.owner_addr, thing.label)
+        self.msgp.add_stream(new_sid)
+    
+    
+    # Contexts
+
+    def create_context(self, label, owner_addr, type):
         if type == "proxy":
             context = Context(label, owner_addr, weakref.proxy(self))
         else:
             raise Error("Invalid context type %s!" % type)
-
-        sid = (owner_addr, label)
-        self.msgp.add_stream(sid)
-        self.contexts_by_label[label] = context
-        return context
+            
+        return self.add_thing(self.contexts_by_label, context)
 
 
     def modify_context(self, label, params):
-        context = self.contexts_by_label.get(label)
-        context.modify(params)
+        self.modify_thing(self.contexts_by_label, label, params)
 
 
     def delete_context(self, label):
-        context = self.contexts_by_label.pop(label)
-        
-        old_sid = (context.owner_addr, context.label)
-        self.msgp.remove_stream(old_sid)
+        self.delete_thing(self.contexts_by_label, label)
 
 
     def take_context(self, label, owner_addr):
-        context = self.contexts_by_label.get(label)
-        old_sid = (context.owner_addr, label)
-        self.msgp.remove_stream(old_sid)
+        self.take_thing(self.contexts_by_label, label, owner_addr)
         
-        context.owner_addr = owner_addr
-        new_sid = (context.owner_addr, label)
-        self.msgp.add_stream(new_sid)
         
+    # Legs
 
     def create_leg(self, label, owner_addr, type):
         if type == "net":
@@ -440,33 +467,20 @@ class ContextManager(object):
             leg = PlayerLeg(label, owner_addr, self.metapoll)
         else:
             raise Error("Invalid leg type '%s'!" % type)
-            
-        sid = (owner_addr, label)
-        self.msgp.add_stream(sid)
-        self.legs_by_label[label] = leg
-        return leg
+
+        return self.add_thing(self.legs_by_label, leg)
         
         
     def modify_leg(self, label, params):
-        leg = self.legs_by_label.get(label)
-        leg.modify(params)
+        self.modify_thing(self.legs_by_label, label, params)
         
         
     def delete_leg(self, label):
-        leg = self.legs_by_label.pop(label)
-        
-        old_sid = (leg.owner_addr, leg.label)
-        self.msgp.remove_stream(old_sid)
+        self.delete_thing(self.legs_by_label, label)
 
 
-    def take_leg(self, label, owner_addr):  # TODO: make Ownable class!
-        leg = self.legs_by_label.get(label)
-        old_sid = (leg.owner_addr, label)
-        self.msgp.remove_stream(old_sid)
-        
-        leg.owner_addr = owner_addr
-        new_sid = (leg.owner_addr, label)
-        self.msgp.add_stream(new_sid)
+    def take_leg(self, label, owner_addr):
+        self.take_thing(self.legs_by_label, label, owner_addr)
         
         
     def process_request(self, sid, seq, params, target):
