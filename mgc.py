@@ -1,6 +1,6 @@
 from __future__ import unicode_literals, print_function
 from async import WeakMethod
-import msgp
+from msgp import JsonMsgp, Sid
 from util import vacuum
 
 
@@ -15,7 +15,7 @@ class Controller(object):
         self.mgc_number = Controller.last_mgc_number
         self.last_leg_number = 0
         self.last_context_number = 0
-        self.msgp = msgp.JsonMsgp(metapoll, mgc_addr, WeakMethod(self.process_request))
+        self.msgp = JsonMsgp(metapoll, mgc_addr, WeakMethod(self.process_request))
         
         
     def send_message(self, sid, target, params, response_handler):
@@ -58,7 +58,7 @@ class Controller(object):
         addr = self.select_gateway_address(affinity)
         self.last_leg_number += 1
         label = "leg-%s-%s" % (chr(96 + self.mgc_number), self.last_leg_number)
-        sid = (addr, label)
+        sid = Sid(addr, label)
         return sid
         
 
@@ -66,7 +66,7 @@ class Controller(object):
         addr = self.select_gateway_address(affinity)
         self.last_context_number += 1
         label = "ctx-%s-%s" % (chr(96 + self.mgc_number), self.last_context_number)
-        sid = (addr, label)
+        sid = Sid(addr, label)
         return sid
     
 
@@ -175,11 +175,11 @@ class MediaChannel(object):
         # TODO: implement leg deletion
         params = {
             'type': 'proxy',
-            'legs': [ leg.sid[1] for leg in self.legs ]
+            'legs': [ leg.sid.label for leg in self.legs ]
         }
         
         if not self.sid:
-            leg_addrs = set(leg.sid[0] for leg in self.legs)
+            leg_addrs = set(leg.sid.addr for leg in self.legs)
             if len(leg_addrs) != 1:
                 raise Exception("Multiple addresses among media legs!")
                 

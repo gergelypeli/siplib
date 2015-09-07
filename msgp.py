@@ -2,10 +2,13 @@ from __future__ import print_function, unicode_literals
 import socket
 import datetime
 import json
+from collections import namedtuple
 from async import WeakMethod
 
 
 class Error(Exception): pass
+
+Sid = namedtuple("Sid", [ "addr", "label" ])
 
 
 class Message(object):
@@ -257,7 +260,7 @@ class Msgp(object):
 
 
     def process_message(self, raddr, label, source, target, body):
-        sid = (raddr, label)
+        sid = Sid(raddr, label)
         sseq = int(source) if source.isdigit() else 0
         tseq = int(target) if target.isdigit() else 0
 
