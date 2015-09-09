@@ -5,8 +5,8 @@ from async import WeakMethod
 import sys, traceback
 
 
-def resolve(addr):
-    return Addr(socket.gethostbyname(addr[0]), addr[1])
+def resolve(addr):  # TODO: make this an Addr method?
+    return Addr(socket.gethostbyname(addr.host), addr.port)
 
 
 def vacuum(d):

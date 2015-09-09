@@ -60,9 +60,9 @@ MEDIA_HOST = "otthon"
 MGW_HOST = "localhost"
 MGC1_HOST = "localhost"
 MGC2_HOST = "localhost"
-mgw_addr = (MGW_HOST, 20000)
-mgc1_addr = (MGC1_HOST, 20001)
-mgc2_addr = (MGC2_HOST, 20002)
+mgw_addr = Addr(MGW_HOST, 20000)
+mgc1_addr = Addr(MGC1_HOST, 20001)
+mgc2_addr = Addr(MGC2_HOST, 20002)
 
 
 def sleep(secs, method):
@@ -164,22 +164,26 @@ class TestAuthority(Authority):
 
 
 class TestController(Controller):
-    next_port = 30000
+    def __init__(self, metapoll, mgc_addr, mgw_addr, ports):
+        super().__init__(metapoll, mgc_addr)
+        
+        self.mgw_addr = resolve(mgw_addr)
+        
+        # Must use IP4 addresses or FQDN in SDP, so let's go with IP4
+        # Media host may be different from the signaling host
+        self.media_addresses = set(resolve(Addr(MEDIA_HOST, port)) for port in ports)
+        
     
     def allocate_media_address(self, channel_index):
-        addr = Addr(MEDIA_HOST, self.next_port)
-        self.next_port += 1
-
-        # Must use IP4 addresses or FQDN in SDP, so let's go with IP4
-        return resolve(addr)
+        return self.media_addresses.pop()
     
     
     def deallocate_media_address(self, addr):
-        pass
+        self.media_addresses.add(addr)
         
         
     def select_gateway_address(self, affinity=None):
-        return resolve(mgw_addr)
+        return self.mgw_addr
         
     
     #def make_media_channel(self):
@@ -229,7 +233,7 @@ class TestCall(Call):
 class Switch(object):
     CallClass = TestCall
     
-    def __init__(self, metapoll, local_addr, mgc_addr, realm):
+    def __init__(self, metapoll, local_addr, mgc_addr, mgw_addr, media_ports, realm):
         self.metapoll = metapoll
         self.transport = UdpTransport(metapoll, local_addr, WeakMethod(self.reception))
         self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
@@ -246,7 +250,7 @@ class Switch(object):
             WeakMethod(self.transport.get_hop),
             WeakMethod(self.authority.provide_auth)
         )
-        self.mgc = TestController(metapoll, mgc_addr)
+        self.mgc = TestController(metapoll, mgc_addr, mgw_addr, media_ports)
 
         self.calls = []  # TODO: make it a dict with call identifiers!
 
@@ -332,19 +336,6 @@ class Switch(object):
 
 
 class SwitchA(Switch):
-    class CallClass(TestCall):
-        class RoutingClass(TestRouting):
-            def route_call(self, ctx):
-                # For the phone call only
-                if ctx["to"].uri.user == "555":
-                    print("Returning CalleeLeg for 555")
-                    #ctx["to"] = Nameaddr(callee_uri)
-                    return CalleeLeg(self.call, metapoll)  # TODO: Call has no metapoll yet
-            
-                # FIXME: is RoutingClass legal here? Not according to pyflakes!
-                return super(RoutingClass, self).route_call(ctx)  
-            
-        
     def __init__(self, metapoll, *args):
         super(SwitchA, self).__init__(metapoll, *args)
         
@@ -365,14 +356,17 @@ class SwitchA(Switch):
     
 
 class SwitchB(Switch):
-    #def CallClass(Call):
-    #    def route_call(self, ctx):
-    #        to_uri = ctx["to"].uri
-    #    
-    #        if to_uri.user == "callee":
-    #            return CalleeLeg(metapoll)  # TODO: Call has no metapoll yet
-    #        
-    #        return super(CallClass, self).route_call(ctx)
+    class CallClass(TestCall):
+        class RoutingClass(TestRouting):
+            def route_call(self, ctx):
+                # For the phone call only
+                if ctx["to"].uri.user == "555":
+                    print("Returning CalleeLeg for 555")
+                    #ctx["to"] = Nameaddr(callee_uri)
+                    return CalleeLeg(self.call, metapoll)  # TODO: Call has no metapoll yet
+            
+                # FIXME: is RoutingClass legal here? Not according to pyflakes!
+                return super(RoutingClass, self).route_call(ctx)  
 
 
     def __init__(self, metapoll, *args):
@@ -381,13 +375,16 @@ class SwitchB(Switch):
         self.authority.setuser(*callee_cred)
         self.authority.adduser(*caller_cred)
 
-        #metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
+        metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
 
 
     def test_registering(self):
         print("Registering begins.")
 
-        self.registration_manager.start_registration(a_registrar, callee_uri, callee_uri)
+        self.registration_manager.start_registration(
+        #    a_registrar, callee_uri, callee_uri
+            a_registrar, Uri(Addr("A-NET", None), "555"), Uri(b_addr, "555")
+        )
     
 
 setup_exchandler()
@@ -396,8 +393,8 @@ metapoll = Metapoll()
 
 mgw = MediaGateway(metapoll, mgw_addr)
 
-switch_a = SwitchA(Weak(metapoll), a_addr, mgc1_addr, "A-NET")
-switch_b = SwitchB(Weak(metapoll), b_addr, mgc2_addr, "B-NET")
+switch_a = SwitchA(Weak(metapoll), a_addr, mgc1_addr, mgw_addr, range(30000, 30020, 2), "A-NET")
+switch_b = SwitchB(Weak(metapoll), b_addr, mgc2_addr, mgw_addr, range(40000, 40020, 2), "B-NET")
 
 #switch_a.transport.set_peer(switch_b.transport)
 #switch_b.transport.set_peer(switch_a.transport)

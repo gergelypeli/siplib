@@ -208,6 +208,8 @@ class SipLeg(Leg):
                 send_formats=extract_formats(rc),
                 recv_formats=extract_formats(lc)
             )
+            
+        super().refresh_media()
         
 
     def preprocess_outgoing_session(self, sdp):

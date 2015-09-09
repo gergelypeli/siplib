@@ -47,7 +47,7 @@ class Record(object):
 
 
     def get_contact_uris(self):
-        return self.contacts_by_uri.keys()
+        return list(self.contacts_by_uri.keys())
         
 
     def get_contact_hops(self):

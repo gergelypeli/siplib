@@ -96,7 +96,7 @@ class MediaLeg(object):
             params = dict(params, type=self.type)
             self.mgc.create_leg(self.sid, params, response_handler=lambda x, y, z: None)  # TODO
         else:
-            self.mgc.modify_leg(self.sid, params)
+            self.mgc.modify_leg(self.sid, params, response_handler=lambda x, y, z: None)  # TODO
         
         
     def delete(self, handler=None):

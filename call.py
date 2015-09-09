@@ -125,13 +125,14 @@ class Call(object):
             print("Not media yet to refresh.")
             return
             
-        print("Refreshing media")
         left_media_legs = self.legs[0].media_legs
         ln = len(left_media_legs)
         right_media_legs = self.legs[-1].media_legs
         rn = len(right_media_legs)
+        channel_count = min(ln, rn)  # TODO: max?
+        print("Refreshing media (%d channels)" % channel_count)
         
-        for i in range(min(ln, rn)):  # TODO: max?
+        for i in range(channel_count):
             if i < len(self.media_channels):
                 c = self.media_channels[i]
             else:

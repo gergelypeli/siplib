@@ -288,7 +288,7 @@ class NetLeg(Leg):
         if not self.remote_addr or not self.remote_addr[1]:
             return
             
-        #print("Sending on %s" % self.name)
+        #print("Sending to %s" % (self.remote_addr,))
         # packet should be a bytearray here
         self.socket.sendto(packet, self.remote_addr)
 
