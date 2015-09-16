@@ -1,1 +1,5 @@
 *.pyc
+*.wav
+*.log
+g711-test
+.*

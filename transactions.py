@@ -3,6 +3,7 @@ from __future__ import print_function, unicode_literals, absolute_import
 #from pprint import pprint, pformat
 import uuid
 import datetime
+import logging
 from async import Weak
 
 from format import Via, Status, make_simple_response, make_ack, make_virtual_response, make_timeout_nak, make_timeout_response, is_virtual_response
@@ -48,6 +49,7 @@ from format import Via, Status, make_simple_response, make_ack, make_virtual_res
 
 # sending the ACK should destroy the sent INVITE, even if keeping its branch
 
+logger = logging.getLogger(__name__)
 
 class Error(Exception): pass
 
@@ -284,7 +286,7 @@ class InviteClientTransaction(PlainClientTransaction):
             # And they are h2h anyway, so the dialog shouldn't care.
             if code > 100:
                 if not remote_tag:
-                    print("Invite response without remote tag!")
+                    logger.debug("Invite response without remote tag!")
                     return
             
                 if not him:
@@ -451,7 +453,7 @@ class TransactionManager(object):
             if tr:
                 tr.process(msg)
             else:
-                print("Incoming response to unknown request, ignoring!")
+                logger.debug("Incoming response to unknown request, ignoring!")
                 
             return True
 
@@ -518,7 +520,7 @@ class TransactionManager(object):
             if tr:
                 tr.send(msg)
             else:
-                print("Outgoing response to unknown request, ignoring!")
+                logger.debug("Outgoing response to unknown request, ignoring!")
                 
             return
 

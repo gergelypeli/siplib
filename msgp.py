@@ -2,8 +2,11 @@ from __future__ import print_function, unicode_literals
 import socket
 import datetime
 import json
+import logging
 from collections import namedtuple
 from async import WeakMethod
+
+logger = logging.getLogger(__name__)
 
 
 class Error(Exception): pass
@@ -92,7 +95,7 @@ class Msgp(object):
         raddr, label = sid
         
         what = "response" if msg.target.isdigit() else "request"
-        print("MSGP transmitting %s %s" % (what, prid(sid, sseq)))
+        logger.debug("transmitting %s %s" % (what, prid(sid, sseq)))
 
         header = "@%s #%d ^%s" % (label, sseq, msg.target)
         
@@ -111,7 +114,7 @@ class Msgp(object):
     def transmit_ack(self, sid, sseq):
         raddr, label = sid
         
-        print("MSGP transmitting ack %s" % prid(sid, sseq))
+        logger.debug("transmitting ack %s" % prid(sid, sseq))
         packet = "@%s #ack ^%s\n" % (label, sseq)
 
         packet = packet.encode()
@@ -121,7 +124,7 @@ class Msgp(object):
     def transmit_nak(self, sid, sseq):
         raddr, label = sid
         
-        print("MSGP transmitting nak %s" % prid(sid))
+        logger.debug("transmitting nak %s" % prid(sid))
         packet = "@%s #nak ^%s\n" % (label, sseq)
 
         packet = packet.encode()
@@ -130,7 +133,7 @@ class Msgp(object):
 
     def check_closed_stream(self, sid, s):
         if s.is_closed and not s.sent_messages_by_seq and not s.pending_ack_seqs:
-            print("MSGP finally removing closed stream %s" % prid(sid))
+            logger.debug("finally removing closed stream %s" % prid(sid))
             self.streams_by_id.pop(sid)
 
 
@@ -150,7 +153,7 @@ class Msgp(object):
             return  # already stopped
         
         if ok:
-            print("MSGP got ack for %s" % prid(sid, seq))
+            logger.debug("got ack for %s" % prid(sid, seq))
             
             if msg.response_handler:
                 # Stop retransmission, wait for response
@@ -161,7 +164,7 @@ class Msgp(object):
                 self.pop_sent_message(sid, seq)
         else:
             # Report ack timeout as a fake request, cancel response handling
-            print("MSGP gave up waiting for ack for %s" % prid(sid, seq))
+            logger.debug("gave up waiting for ack for %s" % prid(sid, seq))
             
             if msg.response_handler:
                 # Report also a fake response, don't keep a handler waiting
@@ -182,14 +185,14 @@ class Msgp(object):
 
         if not msg.response_handler:
             if not source:
-                print("MSGP gave up waiting unnecessarily for response for %s" % prid(sid, seq))
+                logger.debug("gave up waiting unnecessarily for response for %s" % prid(sid, seq))
             else:
-                print("MSGP got unexpected response for %s" % prid(sid, seq))
+                logger.debug("got unexpected response for %s" % prid(sid, seq))
         else:
             if not source:
-                print("MSGP gave up waiting for response for %s" % prid(sid, seq))
+                logger.debug("gave up waiting for response for %s" % prid(sid, seq))
             else:
-                print("MSGP got response for %s" % prid(sid, seq))
+                logger.debug("got response for %s" % prid(sid, seq))
                 
             msg.response_handler(sid, source, self.decode_body(body))
 
@@ -198,7 +201,7 @@ class Msgp(object):
         s = self.get_stream(sid)
         if s:
             if s.is_unconfirmed:
-                print("Accepting stream %s" % prid(sid))
+                logger.debug("Accepting stream %s" % prid(sid))
                 s.is_unconfirmed = False
             else:
                 raise Error("Stream already added!")
@@ -220,11 +223,11 @@ class Msgp(object):
         # implicitly, or explicitely ACK-ed.
         if not s.sent_messages_by_seq and not s.pending_ack_seqs:
             # Remove stream now
-            print("MSGP removing closed stream %s" % prid(sid))
+            logger.debug("removing closed stream %s" % prid(sid))
             self.streams_by_id.pop(sid)
         else:
             # Remove stream once pending messages are ACK-ed
-            print("MSGP will remove closed stream %s" % prid(sid))
+            logger.debug("will remove closed stream %s" % prid(sid))
             s.is_closed = True
         
         
@@ -271,11 +274,11 @@ class Msgp(object):
                 s = self.get_stream(sid)
                 s.is_unconfirmed = True  # will be removed unless confirmed
             elif sseq > 1:
-                print("MSGP message for unknown stream: %s!" % prid(sid))
+                logger.debug("message for unknown stream: %s!" % prid(sid))
                 self.transmit_nak(sid, sseq)
                 return
             else:
-                print("MSGP service message for unknown stream: %s!" % prid(sid))
+                logger.debug("service message for unknown stream: %s!" % prid(sid))
                 return
 
         if sseq:
@@ -286,7 +289,7 @@ class Msgp(object):
                 return
                 
             if sseq > s.last_received_seq + 1:
-                print("MSGP out of order: %d >> %d!" % (sseq, s.last_received_seq))
+                logger.debug("out of order: %d >> %d!" % (sseq, s.last_received_seq))
                 return  # TODO: cache and ack!
 
             s.last_received_seq = sseq
@@ -307,12 +310,12 @@ class Msgp(object):
                 
             if s.is_unconfirmed:
                 # Stream still not confirmed, reject
-                print("MSGP rejecting stream %s" % prid(sid))
+                logger.debug("rejecting stream %s" % prid(sid))
                 self.streams_by_id.pop(sid)
                 # Don't send unsolicited nak-s
             elif sseq in s.pending_ack_seqs:
                 s.pending_ack_seqs.remove(sseq)
-                print("MSGP sending explicit ACK %s" % prid(sid, sseq))
+                logger.debug("sending explicit ACK %s" % prid(sid, sseq))
                 self.transmit_ack(sid, sseq)
                 self.check_closed_stream(sid, s)
 
@@ -325,7 +328,7 @@ class Msgp(object):
                 if mseq >= tseq:
                     self.message_stopped(sid, mseq, False)
         else:
-            print("Unknown service message %s from %s" % (source, prid(sid)))
+            logger.debug("Unknown service message %s from %s" % (source, prid(sid)))
 
 
     def recved(self):
@@ -348,15 +351,15 @@ class Msgp(object):
                 elif key == "+":
                     length = int(value)
                 else:
-                    print("MSGP bad message header field: %r!" % field)
+                    logger.debug("bad message header field: %r!" % field)
                     
             if length is not None:
                 if len(rest) < length + 1:
-                    print("MSGP bad message length: %d!" % length)
+                    logger.debug("bad message length: %d!" % length)
                     return
                 
                 if rest[length] != "\n":
-                    print("MSGP bad message body: %d!" % length)
+                    logger.debug("bad message body: %d!" % length)
                     return
             
                 body = rest[:length]
@@ -365,7 +368,7 @@ class Msgp(object):
                 body = None
             
             hb = (header, body + "\n" if body is not None else "")
-            print("MSGP IN from %s:%d to %s:%d\n%s\n%s" % (raddr + self.local_addr + hb))
+            logger.debug("IN from %s:%d to %s:%d\n%s\n%s" % (raddr + self.local_addr + hb))
             self.process_message(raddr, label, source, target, body)
         
         

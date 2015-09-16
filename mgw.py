@@ -1,25 +1,16 @@
-# ctx:n request:create recv_formats:100=x,101=y,102=z
-# ctx:n response:ok
-
-# ctx:n request:modify leg:0 local_port:5678 remote_host:1.2.3.4 send_formats:100=x,101=y,102=z
-# ctx:n response:ok
-
-# ctx:n request:delete
-# ctx:n response:ok
-
-# ctx:n report:dtmf digit:#
-# ctx:n response:ok
-
 from __future__ import print_function, unicode_literals
-#import select
 import socket
 import weakref
 import struct
 import datetime
+import logging
 import wave
+
 import g711
 import msgp
 from async import WeakMethod
+
+logger = logging.getLogger(__name__)
 
 
 class Error(Exception): pass
@@ -183,11 +174,11 @@ class Leg(Thing):
         
         self.type = type
         self.forward_handler = None
-        print("Created %s leg %s" % (type, self.label))
+        logger.debug("Created %s leg %s" % (type, self.label))
         
         
     def __del__(self):
-        print("Deleted %s leg %s" % (self.type, self.label))
+        logger.debug("Deleted %s leg %s" % (self.type, self.label))
 
 
     def set_forward_handler(self, fh):
@@ -271,7 +262,7 @@ class NetLeg(Leg):
         try:
             format = self.recv_formats_by_pt[pt]
         except KeyError:
-            print("Ignoring received unknown payload type %d" % pt)
+            logger.debug("Ignoring received unknown payload type %d" % pt)
         else:
             self.recv_format(format, packet)
     
@@ -280,7 +271,7 @@ class NetLeg(Leg):
         try:
             pt = self.send_pts_by_format[format]  # pt can be 0, which is false...
         except (TypeError, KeyError):
-            print("Ignoring sent unknown payload format %s" % (format,))
+            logger.debug("Ignoring sent unknown payload format %s" % (format,))
             return
             
         set_payload_type(packet, pt)
@@ -300,7 +291,7 @@ class EchoLeg(Leg):
 
     def send_format(self, format, packet):
         # We don't care about payload types
-        print("Echoing %s packet on %s" % (format, self.name))
+        logger.debug("Echoing %s packet on %s" % (format, self.name))
         self.recv_format(format, packet)
 
 
@@ -351,11 +342,11 @@ class Context(Thing):
 
         self.manager = manager
         self.legs = []
-        print("Created context %s" % self.label)
+        logger.debug("Created context %s" % self.label)
         
         
     def __del__(self):
-        print("Deleted context %s" % self.label)
+        logger.debug("Deleted context %s" % self.label)
         
         
     def modify(self, params):
@@ -508,7 +499,7 @@ class MediaGateway(object):
             else:
                 raise Error("Invalid target %s!" % target)
         except Exception as e:
-            print("Context error: %s" % e)
+            logger.debug("Context error: %s" % e)
             self.msgp.send_message(sid, seq, "error")
         else:
             self.msgp.send_message(sid, seq, "ok")

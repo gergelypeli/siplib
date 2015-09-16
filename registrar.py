@@ -3,12 +3,14 @@ from __future__ import print_function, unicode_literals, absolute_import
 import uuid
 import datetime
 import collections
+import logging
 
 from format import Nameaddr, Status
 from async import WeakMethod, Weak
 from transactions import make_simple_response
 
 MAXFWD = 50
+logger = logging.getLogger(__name__)
 
 
 class Error(Exception):
@@ -68,7 +70,7 @@ class Record(object):
             hop = params["hop"]
             
             self.contacts_by_uri[uri] = RecordContact(expiration, hop)
-            print("Registered %s to %s via %s until %s." % (uri, self.record_uri, hop, expiration))
+            logger.debug("Registered %s to %s via %s until %s." % (uri, self.record_uri, hop, expiration))
         
         contact = []
         for uri, c in self.contacts_by_uri.items():
@@ -110,7 +112,7 @@ class Record(object):
 
 
     def send_response(self, user_params, related_request):
-        print("Will send response: %s" % str(user_params))
+        logger.debug("Will send response: %s" % str(user_params))
         params = self.make_response(user_params, related_request)
         self.record_manager.transmit(params, related_request)
         
@@ -132,14 +134,14 @@ class RecordManager(object):
             raise Error("RecordManager has nothing to do with this request!")
             
         uri = params["to"].uri
-        if uri.schema != "sip":
+        if uri.schema != "sip":  # TODO: this check is duplicated in Switch
             return WeakMethod(self.reject_request, Status(404, "Not found"))
             
         record = self.records_by_uri.get(uri)
         if record:
-            print("Have record: %s" % (uri,))
+            logger.debug("Have record: %s" % (uri,))
         else:
-            print("Created record: %s" % (uri,))
+            logger.debug("Created record: %s" % (uri,))
             record = Record(Weak(self), uri)
             self.records_by_uri[uri] = record
             
@@ -160,10 +162,10 @@ class RecordManager(object):
         record = self.records_by_uri.get(record_uri)
         
         if record:
-            print("Found contact URIs: %s" % (record_uri,))
+            logger.debug("Found contact URIs for '%s'" % (record_uri,))
             return record.get_contact_uris()
         else:
-            print("Not found contact URIs: %s" % (record_uri,))
+            #logger.debug("Not found contact URIs: %s" % (record_uri,))
             return []
 
 
@@ -171,10 +173,10 @@ class RecordManager(object):
         record = self.records_by_uri.get(record_uri)
         
         if record:
-            print("Found contact hops: %s" % (record_uri,))
+            logger.debug("Found contact hops for '%s'" % (record_uri,))
             return record.get_contact_hops()
         else:
-            print("Not found contact hops: %s" % (record_uri,))
+            #logger.debug("Not found contact hops: %s" % (record_uri,))
             return []
 
 
@@ -215,7 +217,7 @@ class Registration(object):
             
             total.append((uri, seconds_left))
 
-        print("Registration total: %s" % total)
+        logger.debug("Registration total: %s" % total)
         # TODO: reschedule!
         
         
@@ -251,12 +253,12 @@ class Registration(object):
                 related_request.update(user_params)
                 related_request.update(auth)
                 
-                print("Trying authorization...")
+                logger.debug("Trying authorization...")
                 #print("... with: %s" % related_request)
                 self.send_request(related_request)
                 return None
             else:
-                print("Couldn't authorize, being rejected!")
+                logger.debug("Couldn't authorize, being rejected!")
 
         return params
 

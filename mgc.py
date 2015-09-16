@@ -1,7 +1,11 @@
 from __future__ import unicode_literals, print_function
+import logging
+
 from async import WeakMethod
 from msgp import JsonMsgp, Sid
 from util import vacuum
+
+logger = logging.getLogger(__name__)
 
 
 class Controller(object):
@@ -23,7 +27,7 @@ class Controller(object):
         
         
     def process_request(self, sid, seq, params, target):
-        print("Unsolicited request from the MGW!")
+        logger.debug("Unsolicited request from the MGW!")
         
         
     def create_context(self, sid, params, response_handler=None, request_handler=None):
@@ -157,18 +161,18 @@ class MediaChannel(object):
         if changed:
             self.refresh()
         else:
-            print("Context not changed.")
+            logger.debug("Context not changed.")
 
         
     def process_mgw_request(self, sid, seq, params, target):
-        print("Huh, MGW %s sent a %s message!" % (sid, target))
+        logger.debug("Huh, MGW %s sent a %s message!" % (sid, target))
         
         
     def process_mgw_response(self, sid, seq, params, purpose):
         if params == "ok":
-            print("Huh, MGW %s is OK for %s!" % (sid, purpose))
+            logger.debug("Huh, MGW %s is OK for %s!" % (sid, purpose))
         else:
-            print("Oops, MGW %s error for %s!" % (sid, purpose))
+            logger.debug("Oops, MGW %s error for %s!" % (sid, purpose))
         
         
     def refresh(self):
@@ -185,13 +189,13 @@ class MediaChannel(object):
                 
             addr = leg_addrs.pop()
             self.sid = self.mgc.generate_context_sid(addr)
-            print("Creating context %s" % (self.sid,))
+            logger.debug("Creating context %s" % (self.sid,))
             
             request_handler = WeakMethod(self.process_mgw_request)
             response_handler = WeakMethod(self.process_mgw_response, "cctx")
             self.mgc.create_context(self.sid, params, response_handler=response_handler, request_handler=request_handler)
         else:
-            print("Modifying context %s" % (self.sid,))
+            logger.debug("Modifying context %s" % (self.sid,))
             response_handler = WeakMethod(self.process_mgw_response, "mctx")
             self.mgc.modify_context(self.context_sid, params, response_handler=response_handler)
     

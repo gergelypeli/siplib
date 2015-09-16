@@ -1,6 +1,9 @@
 from async import WeakMethod, Weak
 from mgc import MediaChannel
 #from planner import Planner
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Routing(object):
@@ -20,6 +23,10 @@ class Routing(object):
         leg.set_report(WeakMethod(self.process, li))
 
 
+    def finish(self):
+        self.report(dict(type="finish"))
+        
+
     def route_call(self, ctx):
         return None
 
@@ -27,13 +34,22 @@ class Routing(object):
     def dial_action(self, li, action):
         lj = 1 - li
 
+        # TODO: do we want to alter the From domain?
+        # TODO: do we want to copy?
         src_ctx = action["ctx"]
         dst_ctx = src_ctx.copy()
         action["ctx"] = dst_ctx
 
-        outgoing_leg = self.route_call(dst_ctx)
+        try:
+            outgoing_leg = self.route_call(dst_ctx)
+            if not outgoing_leg:
+                raise Exception("Routing failed for an unknown reason!")
+        except Exception:
+            logger.warning("Routing failed!")
+            self.finish()
+            return
+            
         self.add_leg(lj, outgoing_leg)
-        
         self.legs[lj].do(action)
 
 
@@ -49,7 +65,7 @@ class Routing(object):
     def process(self, action, li):  # li is second arg because it is bound
         #lj = 1 - li
         type = action["type"]
-        print("Routing %s from leg %d." % (type, li))
+        logger.debug("Routing %s from leg %d." % (type, li))
 
         if type == "finish":
             self.legs.pop(li)
@@ -58,14 +74,14 @@ class Routing(object):
         elif type == "dial":
             self.dial_action(li, action)
         #elif type == "refresh":
-        #    print("Ignoring refresh during routing.")
+        #    logger.debug("Ignoring refresh during routing.")
         else:
-            print("Implicit anchoring")
+            logger.debug("Implicit anchoring")
             incoming_leg = self.anchor_action(li, [])
             incoming_leg.do(action)
 
         if not self.legs:
-            self.report(dict(type="finish"))
+            self.finish()
 
 
 class Call(object):
@@ -92,13 +108,13 @@ class Call(object):
             self.routing = None
             
             if self.legs:
-                print("Routing finished")
+                logger.debug("Routing finished")
             else:
-                print("Oops, routing finished without success!")
+                logger.debug("Oops, routing finished without success!")
                 self.finish_handler(self)
                 # TODO
         elif type == "anchor":
-            print("Yay, anchored.")
+            logger.debug("Yay, anchored.")
             self.legs = action["legs"]
 
             # TODO: let the Routing connect them to each other?
@@ -108,7 +124,7 @@ class Call(object):
             self.media_channels = []
             self.refresh_media()
         else:
-            print("Unknown routing event %s!" % type)
+            logger.debug("Unknown routing event %s!" % type)
         
         
     def allocate_media_address(self, channel_index):
@@ -122,7 +138,7 @@ class Call(object):
         
     def refresh_media(self):
         if self.media_channels is None:
-            print("Not media yet to refresh.")
+            logger.debug("Not media yet to refresh.")
             return
             
         left_media_legs = self.legs[0].media_legs
@@ -130,7 +146,7 @@ class Call(object):
         right_media_legs = self.legs[-1].media_legs
         rn = len(right_media_legs)
         channel_count = min(ln, rn)  # TODO: max?
-        print("Refreshing media (%d channels)" % channel_count)
+        logger.debug("Refreshing media (%d channels)" % channel_count)
         
         for i in range(channel_count):
             if i < len(self.media_channels):
@@ -147,7 +163,7 @@ class Call(object):
         type = action["type"]
         
         if type == "finish":
-            print("Bridged leg %d finished." % li)
+            logger.debug("Bridged leg %d finished." % li)
             self.legs[li] = None
             
             for leg in self.legs:
@@ -155,15 +171,15 @@ class Call(object):
                     break
             else:
                 if any(self.media_channels):
-                    print("Deleting media channels.")
+                    logger.debug("Deleting media channels.")
                     for i, mc in enumerate(self.media_channels):
                         if mc:
                             mc.delete(WeakMethod(self.media_deleted, i))
                 else:
-                    print("Call is finished.")
+                    logger.debug("Call is finished.")
                     self.finish_handler(self)
         else:
-            print("Bridging %s from leg %d." % (type, li))
+            logger.debug("Bridging %s from leg %d." % (type, li))
             self.legs[lj].do(action)
 
 
@@ -171,7 +187,7 @@ class Call(object):
         self.media_channels[li] = None
         
         if not any(self.media_channels):
-            print("Call is finished.")
+            logger.debug("Call is finished.")
             self.finish_handler(self)
 
 

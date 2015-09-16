@@ -2,8 +2,10 @@ from __future__ import unicode_literals, print_function
 
 import uuid
 import hashlib
-
+import logging
 from format import Auth, WwwAuth
+
+logger = logging.getLogger(__name__)
 
 # ha1 = md5("authname:realm:password")
 
@@ -31,10 +33,13 @@ def digest(method, uri, ha1, nonce, qop=None, cnonce=None, nc=None):
 
 
 class Authority(object):
-    def __init__(self, realm):
-        self.realm = realm
+    def __init__(self):
         self.nonces = set()
 
+
+    def get_realm(self, params):
+        return params["to"].uri.addr.host
+            
 
     def authenticate(self, params):
         # return:
@@ -54,46 +59,46 @@ class Authority(object):
         auth = params.get("authorization")
         
         if not auth:
-            print("Authority: no Authorization header!")
+            logger.debug("Authority: no Authorization header!")
             return False
 
         if not ha1:
-            print("Authority: no ha1!")
+            logger.debug("Authority: no ha1!")
             return False
 
-        if auth.realm != self.realm:
-            print("Authority: wrong realm!")
+        if auth.realm != self.get_realm(params):
+            logger.debug("Authority: wrong realm!")
             return False
         
         if auth.nonce not in self.nonces:
-            print("Authority: wrong nonce!")
+            logger.debug("Authority: wrong nonce!")
             auth.stale = True
             return False
         
         if auth.uri != uri:  # TODO: this can be more complex than this
-            print("Authority: wrong uri")
+            logger.debug("Authority: wrong uri")
             return False
 
         if auth.qop != "auth":
-            print("Authority: QOP is not auth!")
+            logger.debug("Authority: QOP is not auth!")
             return False
         
         if auth.algorithm not in (None, "MD5"):
-            print("Authority: digest algorithm not MD5!")
+            logger.debug("Authority: digest algorithm not MD5!")
             return False
         
         if not auth.cnonce:
-            print("Authority: cnonce not set!")
+            logger.debug("Authority: cnonce not set!")
             return False
 
         if not auth.nc:
-            print("Authority: nc not set!")
+            logger.debug("Authority: nc not set!")
             return False
 
         response = digest(method, uri, ha1, auth.nonce, auth.qop, auth.cnonce, auth.nc)
         
         if auth.response != response:
-            print("Authority: wrong response!")
+            logger.debug("Authority: wrong response!")
             return False
             
         self.nonces.remove(auth.nonce)
@@ -119,39 +124,40 @@ class Authority(object):
             auth.stale = False  # temporary attribute
             
         ok = self.authenticate(params)
-        print("Authenticated: %s" % ok)
+        logger.debug("Authenticated: %s" % ok)
         if ok:
             return None
             
         # No user or invalid user, come again
+        realm = self.get_realm(params)
         stale = auth.stale if auth else False
         nonce = generate_nonce()
         self.nonces.add(nonce)  # TODO: must clean these up
-        www = WwwAuth(self.realm, nonce, stale=stale, qop=[ "auth" ])
+        www = WwwAuth(realm, nonce, stale=stale, qop=[ "auth" ])
         return { 'www_authenticate': www }
 
 
     def provide_auth(self, response, request):
         www_auth = response.get("www_authenticate")
         if not www_auth:
-            print("No known challenge found, sorry!")
+            logger.debug("No known challenge found, sorry!")
             return None
             
         if "authorization" in request and not www_auth.stale:
-            print("Already tried and not even stale, sorry!")
+            logger.debug("Already tried and not even stale, sorry!")
             return None
 
         if "auth" not in www_auth.qop:
-            print("Digest QOP auth not available!")
+            logger.debug("Digest QOP auth not available!")
             return None
         
         if www_auth.algorithm not in (None, "MD5"):
-            print("Digest algorithm not MD5!")
+            logger.debug("Digest algorithm not MD5!")
             return None
 
         info = self.identify(request)
         if not info:
-            print("Can't identify myself, sorry!")
+            logger.debug("Can't identify myself, sorry!")
             return None
             
         authname, ha1 = info

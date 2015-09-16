@@ -70,7 +70,10 @@ def my_exchandler(type, value, tb):
     print("Locals:", file=sys.stderr)
     for k, v in tb.tb_frame.f_locals.items():
         if not (k.startswith('__') and k.endswith('__')) or True:
-            print('  {} = {}'.format(k, v), file=sys.stderr)
+            try:
+                print('  {} = {}'.format(k, v), file=sys.stderr)
+            except Exception:
+                print("  {} CAN'T BE PRINTED!".format(k), file=sys.stderr)
 
 
 def setup_exchandler():

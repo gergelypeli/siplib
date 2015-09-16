@@ -3,6 +3,7 @@
 from __future__ import print_function, unicode_literals
 from datetime import timedelta
 import logging
+import logging.config
 from async import Metapoll, WeakMethod, Weak
 
 from format import Addr, Uri, Nameaddr, Status
@@ -19,29 +20,31 @@ from mgw import MediaGateway
 from mgc import Controller, PlayerMediaLeg
 
 HOST = "otthon"
-a_addr = Addr(HOST, 5060)
-b_addr = Addr(HOST, 5062)
+A_ADDR = Addr(HOST, 5060)
+B_ADDR = Addr(HOST, 5062)
 
-a_registrar = Uri(a_addr)
+A_DOMAIN = "a.switch"
+B_DOMAIN = "b.switch"
 
-caller_uri = Uri(a_addr, "caller")
-caller_name = "Caller"
-caller_nameaddr = Nameaddr(caller_uri, caller_name)
+#caller_uri = Uri(, "caller")
+#caller_name = "Caller"
+CALLER_NAMEADDR = Nameaddr(Uri(Addr(A_DOMAIN, None), "caller"), "Caller")
 
-callee_uri = Uri(b_addr, "callee")
-callee_name = "Callee"
-callee_nameaddr = Nameaddr(callee_uri, callee_name)
+#callee_uri = Uri(b_addr, "callee")
+#callee_name = "Callee"
+#callee_nameaddr = Nameaddr(callee_uri, callee_name)
+CALLEE_NAMEADDR = Nameaddr(Uri(Addr(B_DOMAIN, None), "callee"), "Callee")
 
 #wrong_uri = Uri(local_addr, "wrong")
 
-caller_cred = ("CALLER_AUTHNAME", "CALLER_HA1")
-callee_cred = ("CALLEE_AUTHNAME", "CALLEE_HA1")
-phone_cred = ("phone", "29947c88227ea55104f09dbdd5e6c48e")  # md5(phone:A-NET:secret)
+CALLER_CRED = ("CALLER_AUTHNAME", "CALLER_HA1")
+CALLEE_CRED = ("CALLEE_AUTHNAME", "CALLEE_HA1")
 
-caller_audio_addr = (HOST, 10000)
-caller_video_addr = (HOST, 10001)
+PHONE_NUMBER = "555"
+#phone_cred = ("phone", "29947c88227ea55104f09dbdd5e6c48e")  # md5(phone:A-NET:secret)
+PHONE_CRED = ("phone", "38450ead4036feb352c45462d8008511")  # md5(phone:a.switch:secret)
 
-caller_sdp = Sdp.parse("""
+CALLER_SDP = Sdp.parse("""
 v=0
 o=jdoe 2890844526 2890842807 IN IP4 10.47.16.5
 s=SDP Seminar
@@ -56,13 +59,16 @@ m=video 51372 RTP/AVP 99
 a=rtpmap:99 h263-1998/90000
 """)
 
-MEDIA_HOST = "otthon"
 MGW_HOST = "localhost"
 MGC1_HOST = "localhost"
 MGC2_HOST = "localhost"
-mgw_addr = Addr(MGW_HOST, 20000)
-mgc1_addr = Addr(MGC1_HOST, 20001)
-mgc2_addr = Addr(MGC2_HOST, 20002)
+MGW_ADDR = Addr(MGW_HOST, 20000)
+MGC1_ADDR = Addr(MGC1_HOST, 20001)
+MGC2_ADDR = Addr(MGC2_HOST, 20002)
+
+MEDIA_HOST = "otthon"
+
+logger = logging.getLogger()
 
 
 def sleep(secs, method):
@@ -75,11 +81,11 @@ class CalleeLeg(PlannedLeg):
         
         
     def plan(self, planner):
-        print("Callee created.")
+        logger.debug("Callee created.")
         
         action = yield from planner.wait_action("dial")
         self.offer = action.get("offer")
-        print("Got offer:\n%s" % repr(self.offer))
+        logger.debug("Got offer:\n%s" % repr(self.offer))
         
         yield from planner.sleep(1)
         self.report(dict(type="ring"))
@@ -88,17 +94,17 @@ class CalleeLeg(PlannedLeg):
         answer = self.make_answer(self.offer)
         self.report(dict(type="accept", answer=answer))
         self.media_legs.append(PlayerMediaLeg(self.call.mgc))
-        self.media_legs[0].play("playback.wav", ("PCMA", 8000), volume=0.2, fade=5)
+        self.media_legs[0].play("playback.wav", ("PCMA", 8000), volume=0.2, fade=3)
         self.refresh_media()
         
-        yield from planner.sleep(5)
-        self.media_legs[0].play(volume=0, fade=5)
+        yield from planner.sleep(3)
+        self.media_legs[0].play(volume=0, fade=3)
         self.refresh_media()
         
-        yield from planner.sleep(5)
+        yield from planner.sleep(3)
         self.report(dict(type="hangup"))
 
-        print("Callee done.")
+        logger.debug("Callee done.")
         
 
     def make_answer(self, offer):
@@ -107,27 +113,27 @@ class CalleeLeg(PlannedLeg):
 
 class CallerLeg(PlannedLeg):
     def plan(self, planner):
-        print("Caller created")
+        logger.debug("Caller created")
         
         yield from planner.sleep(0)
-        self.ctx["from"] = Nameaddr(caller_uri, caller_name)
-        self.ctx["to"] = Nameaddr(callee_uri)
-        self.report(dict(type="dial", ctx=self.ctx, offer=caller_sdp))
+        self.ctx["from"] = CALLER_NAMEADDR
+        self.ctx["to"] = Nameaddr(CALLEE_NAMEADDR.uri)
+        self.report(dict(type="dial", ctx=self.ctx, offer=CALLER_SDP))
 
         action = yield from planner.wait_action("accept")
-        print("Accepted with SDP:\n%s" % repr(action.get("answer")))
+        logger.debug("Accepted with SDP:\n%s" % repr(action.get("answer")))
 
         action = yield from planner.expect("action")
         assert action["type"] == "hangup"
         
-        print("Caller done.")
+        logger.debug("Caller done.")
         #yield from planner.sleep(3)
         #self.leg.do(dict(type="hangup"))
 
 
 class TestAuthority(Authority):
-    def __init__(self, realm, record_manager):
-        super(TestAuthority, self).__init__(realm)
+    def __init__(self, record_manager):
+        super(TestAuthority, self).__init__()
         
         self.record_manager = record_manager
         self.users = {}
@@ -149,14 +155,24 @@ class TestAuthority(Authority):
         contact_hops = self.record_manager.lookup_contact_hops(from_uri)
         
         if method != "REGISTER" and hop in contact_hops:
-            print("Trusting registered user '%s'" % (from_uri,))
+            logger.debug("Trusting request from registered user '%s'" % (from_uri,))
             return True
         
         authname = self.get_digest_authname(params)
-        if authname in self.users:
-            return self.check_digest_ha1(params, self.users[authname])
+        if not authname:
+            logger.debug("Not trusting request without credentials!")
+            return False
             
-        return False
+        if authname not in self.users:
+            logger.debug("Not trusting request from unknown user '%s'" % (from_uri,))
+            return False
+        
+        if not self.check_digest_ha1(params, self.users[authname]):
+            logger.debug("Not trusting request with invalid credentials!")
+            return False
+
+        logger.debug("Trusting request from authenticated user '%s'" % (from_uri,))
+        return True
             
             
     def identify(self, params):
@@ -186,16 +202,6 @@ class TestController(Controller):
         return self.mgw_addr
         
     
-    #def make_media_channel(self):
-    #    # Must use unique MGW addresses for Msgp
-    #    key = chr(self.mgc_addr[1] % 10 + 96)
-    #    context_id = "ctx-%s-%d" % (key, self.next_ctx)
-    #    sid = (resolve(mgw_addr), context_id)  # TODO: make Sid class?
-    #    self.next_ctx += 1
-    #    
-    #    return ProxiedMediaChannel(Weak(self), sid)
-        
-        
 class TestRouting(Routing):
     def __init__(self, switch, call, report, incoming_leg):
         super(TestRouting, self).__init__(call, report, incoming_leg)
@@ -204,18 +210,20 @@ class TestRouting(Routing):
 
     def route_call(self, ctx):
         to_uri = ctx["to"].uri
-        print("Checking registered SIP contact: %s" % (to_uri,))
+        logger.debug("Checking registered SIP contact: %s" % (to_uri,))
         contacts = self.switch.record_manager.lookup_contact_uris(to_uri)
             
-        if contacts:
-            # TODO: do we care about the ctx in the outgoing leg?
-            ctx["to"] = Nameaddr(contacts[0])  # TODO: warn if more
+        if len(contacts) == 1:
+            contact_uri = contacts[0]
+            ctx["uri"] = contact_uri  # Only update the RURI for forwarding
+            #ctx["from"] = ctx["to"]
+            #ctx["to"] = Nameaddr(contact_uri)
             outgoing_dialog = Dialog(Weak(self.switch.dialog_manager))
             outgoing_leg = SipLeg(self.call, outgoing_dialog)
             return outgoing_leg
         else:
-            print("No such registered SIP contact: %s" % (to_uri,))
-            raise Exception("Routing failed!")  # TODO: reject!
+            logger.debug("Not one registered SIP contact: %s" % (to_uri,))
+            raise Exception("Routing failed!")
 
 
 class TestCall(Call):
@@ -233,12 +241,12 @@ class TestCall(Call):
 class Switch(object):
     CallClass = TestCall
     
-    def __init__(self, metapoll, local_addr, mgc_addr, mgw_addr, media_ports, realm):
+    def __init__(self, metapoll, local_addr, mgc_addr, mgw_addr, media_ports, domains):
         self.metapoll = metapoll
         self.transport = UdpTransport(metapoll, local_addr, WeakMethod(self.reception))
         self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
         self.record_manager = RecordManager(WeakMethod(self.transaction_manager.send_message))
-        self.authority = TestAuthority(realm, Weak(self.record_manager))  # TODO: domain2realm!
+        self.authority = TestAuthority(Weak(self.record_manager))
         self.registration_manager = RegistrationManager(
             WeakMethod(self.transaction_manager.send_message),
             WeakMethod(self.transport.get_hop),
@@ -252,6 +260,7 @@ class Switch(object):
         )
         self.mgc = TestController(metapoll, mgc_addr, mgw_addr, media_ports)
 
+        self.domains = domains
         self.calls = []  # TODO: make it a dict with call identifiers!
 
         metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
@@ -269,11 +278,6 @@ class Switch(object):
             self.transaction_manager.send_message(response, msg)
 
 
-    # Interface to Call
-    #def make_media_channel(self, media_legs):
-    #    return self.mgc.make_media_channel(media_legs)
-        
-        
     def make_call(self):
         return self.CallClass(Weak(self), Weak(self.mgc), WeakMethod(self.finish_call))
         
@@ -293,14 +297,17 @@ class Switch(object):
         # TODO: Call should be smarter!
         
         def ugly_delayed_finish():
-            print("Finishing call")
+            logger.debug("Finishing call")
             self.calls.remove(call)
             
         self.metapoll.register_timeout(timedelta(seconds=1), ugly_delayed_finish)
         
 
     def process_request(self, params):
-        if params["uri"].schema != "sip":
+        if params["uri"].schema != "sip":  # TODO: add some addr checks, too
+            WeakMethod(self.reject_request, Status(404, "Not found"))
+
+        if params["to"].uri.addr.host not in self.domains:
             WeakMethod(self.reject_request, Status(404, "Not found"))
             
         challenge = self.authority.require_auth(params)
@@ -339,15 +346,15 @@ class SwitchA(Switch):
     def __init__(self, metapoll, *args):
         super(SwitchA, self).__init__(metapoll, *args)
         
-        self.authority.setuser(*caller_cred)
-        self.authority.adduser(*callee_cred)
-        self.authority.adduser(*phone_cred)
+        self.authority.setuser(*CALLER_CRED)
+        self.authority.adduser(*CALLEE_CRED)
+        self.authority.adduser(*PHONE_CRED)
 
         #metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_dialing))
         
         
     def test_dialing(self):
-        print("Dialing begins.")
+        logger.debug("Dialing begins.")
 
         #incoming_leg = CallerLeg()
         #self.start_call(incoming_leg)
@@ -360,8 +367,8 @@ class SwitchB(Switch):
         class RoutingClass(TestRouting):
             def route_call(self, ctx):
                 # For the phone call only
-                if ctx["to"].uri.user == "555":
-                    print("Returning CalleeLeg for 555")
+                if ctx["to"].uri.user == PHONE_NUMBER:
+                    logger.debug("Returning CalleeLeg for %s" % PHONE_NUMBER)
                     #ctx["to"] = Nameaddr(callee_uri)
                     return CalleeLeg(self.call, metapoll)  # TODO: Call has no metapoll yet
             
@@ -372,29 +379,63 @@ class SwitchB(Switch):
     def __init__(self, metapoll, *args):
         super(SwitchB, self).__init__(metapoll, *args)
         
-        self.authority.setuser(*callee_cred)
-        self.authority.adduser(*caller_cred)
+        self.authority.setuser(*CALLEE_CRED)
+        self.authority.adduser(*CALLER_CRED)
 
         metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
 
 
     def test_registering(self):
-        print("Registering begins.")
+        logger.debug("Registering begins.")
 
         self.registration_manager.start_registration(
         #    a_registrar, callee_uri, callee_uri
-            a_registrar, Uri(Addr("A-NET", None), "555"), Uri(b_addr, "555")
+            registrar_uri=Uri(A_ADDR),
+            record_uri=Uri(Addr(A_DOMAIN, None), PHONE_NUMBER),
+            contact_uri=Uri(B_ADDR, PHONE_NUMBER)
         )
     
 
 setup_exchandler()
-logging.basicConfig(level=logging.DEBUG)
+logging.config.dictConfig({
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'default': {
+            #'format': '%(asctime)s.%(msecs)03d  %(name)s  %(levelname)s  %(message)s',
+            'format': '%(name)-10s | %(message)s',
+            'datefmt': '%F %T'
+        }
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'default'
+        },
+        'file': {
+            'class': 'logging.FileHandler',
+            'formatter': 'default',
+            'filename': 'siplibtest.log',
+            'mode': 'w'
+        }
+    },
+    'loggers': {
+        '': {
+            'level': logging.DEBUG,
+            'handlers': [ 'console', 'file' ]
+        },
+        'msgp': {
+            'level': logging.INFO
+        }
+    }
+})
+logging.debug("Hello!")
 metapoll = Metapoll()
 
-mgw = MediaGateway(metapoll, mgw_addr)
+mgw = MediaGateway(metapoll, MGW_ADDR)
 
-switch_a = SwitchA(Weak(metapoll), a_addr, mgc1_addr, mgw_addr, range(30000, 30020, 2), "A-NET")
-switch_b = SwitchB(Weak(metapoll), b_addr, mgc2_addr, mgw_addr, range(40000, 40020, 2), "B-NET")
+switch_a = SwitchA(Weak(metapoll), A_ADDR, MGC1_ADDR, MGW_ADDR, range(30000, 30020, 2), [ A_DOMAIN ])
+switch_b = SwitchB(Weak(metapoll), B_ADDR, MGC2_ADDR, MGW_ADDR, range(40000, 40020, 2), [ B_DOMAIN ])
 
 #switch_a.transport.set_peer(switch_b.transport)
 #switch_b.transport.set_peer(switch_a.transport)

@@ -1,7 +1,11 @@
 import socket
 from datetime import timedelta
+import logging
+
 from format import Hop, Addr, parse_structured_message, print_structured_message
 from async import WeakMethod
+
+logger = logging.getLogger(__name__)
 
 
 def indented(text, indent="  "):
@@ -27,12 +31,12 @@ class TestTransport(object):
         
     def send(self, msg):
         if msg["hop"] != self.hop:
-            print("This transport can't send this!")
+            logger.debug("This transport can't send this!")
             return
         
         sip = print_structured_message(msg)
-        print("Transport sending by %s:" % (self.hop,))
-        print("\n" + "\n".join("  %s" % line for line in sip.split("\n")))
+        logger.debug("Transport sending by %s:" % (self.hop,))
+        logger.debug("\n" + "\n".join("  %s" % line for line in sip.split("\n")))
         
         self.metapoll.register_timeout(timedelta(), self.transmission.rebind(sip))
 
@@ -58,19 +62,20 @@ class UdpTransport(object):
         
         
     def get_hop(self, uri):
-        return Hop(local_addr=self.local_addr, remote_addr=uri.addr, interface="eth0")
+        raddr = Addr(uri.addr.host, uri.addr.port or 5060)
+        return Hop(local_addr=self.local_addr, remote_addr=raddr, interface="eth0")
         
         
     def send(self, msg):
         hop = msg["hop"]
         
         if hop.local_addr != self.local_addr:
-            print("This transport can't send this!")
+            logger.debug("This transport can't send this!")
             return
         
         sip = print_structured_message(msg)
-        print("Transport sending from %s to %s:" % (hop.local_addr, hop.remote_addr))
-        print(indented(sip))
+        logger.debug("Transport sending from %s to %s:" % (hop.local_addr, hop.remote_addr))
+        logger.debug(indented(sip))
         
         sip = sip.encode()
         self.socket.sendto(sip, hop.remote_addr)
@@ -81,8 +86,8 @@ class UdpTransport(object):
         sip = sip.decode()
         
         hop = Hop(local_addr=self.local_addr, remote_addr=Addr(*raddr), interface="eth0")
-        print("Transport receiving from %s to %s:" % (hop.remote_addr, hop.local_addr))
-        print(indented(sip))
+        logger.debug("Transport receiving from %s to %s:" % (hop.remote_addr, hop.local_addr))
+        logger.debug(indented(sip))
         
         msg = parse_structured_message(sip)
         msg["hop"] = hop

@@ -1,9 +1,13 @@
 from copy import deepcopy
+import logging
 
 from async import WeakMethod
 from format import Status, make_virtual_response
 from planner import Planner, PlannedEvent
 from mgc import ProxiedMediaLeg
+
+logger = logging.getLogger(__name__)
+
 
 class Error(Exception): pass
 
@@ -30,12 +34,12 @@ class Leg(object):
     # TODO: these are duplicated from Call/MediaChannel
     def finish(self):
         if any(self.media_legs):
-            print("Deleting media legs.")
+            logger.debug("Deleting media legs.")
             for i, ml in enumerate(self.media_legs):
                 if ml:
                     ml.delete(WeakMethod(self.media_deleted, i))
         else:
-            print("Leg is finished.")
+            logger.debug("Leg is finished.")
             self.report(dict(type="finish"))
             
             
@@ -43,7 +47,7 @@ class Leg(object):
         self.media_legs[li] = None
         
         if not any(self.media_legs):
-            print("Leg is finished.")
+            logger.debug("Leg is finished.")
             self.report(dict(type="finish"))
 
     
@@ -278,8 +282,10 @@ class SipLeg(Leg):
         if self.state == self.DOWN:
             if type == "dial":
                 self.ctx.update(action["ctx"])
+                
                 self.dialog.setup_outgoing(
-                    self.ctx["from"].uri, self.ctx["from"].name, self.ctx["to"].uri,
+                    self.ctx["uri"],
+                    self.ctx["from"], self.ctx["to"],
                     self.ctx.get("route"), self.ctx.get("hop")
                 )
                 
@@ -416,10 +422,10 @@ class SipLeg(Leg):
                 
                 if self.invite_state.had_offer_in_request:
                     if sdp and sdp.is_session():
-                        print("Unexpected session in ACK!")
+                        logger.debug("Unexpected session in ACK!")
                 else:
                     if not (sdp and sdp.is_session()):
-                        print("Unexpected sessionless ACK!")
+                        logger.debug("Unexpected sessionless ACK!")
                     else:
                         answer = self.process_incoming_answer(sdp)
                         self.report(dict(type="session", answer=answer))
@@ -448,13 +454,13 @@ class SipLeg(Leg):
                 self.finish()
                 return
             elif is_response and method == "INVITE":
-                print("Got cancelled invite response: %s" % (status,))
+                logger.debug("Got cancelled invite response: %s" % (status,))
                 # This was ACKed by the transaction layer
                 self.state = self.DOWN
                 self.finish()
                 return
             elif is_response and method == "CANCEL":
-                print("Got cancel response: %s" % (status,))
+                logger.debug("Got cancel response: %s" % (status,))
                 return
                 
         raise Error("Weirdness!")
