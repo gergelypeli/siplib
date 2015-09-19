@@ -41,13 +41,13 @@ class Authority(object):
         return params["to"].uri.addr.host
             
 
-    def authenticate(self, params):
+    def authorize(self, params):
         # return:
         #   True - if the request may pass
         return True
     
     
-    def identify(self, params):
+    def get_remote_credentials(self, params):
         # return:
         #   (authname, ha1) - how to identify ourselves for this request
         return None
@@ -123,8 +123,8 @@ class Authority(object):
         if auth:
             auth.stale = False  # temporary attribute
             
-        ok = self.authenticate(params)
-        logger.debug("Authenticated: %s" % ok)
+        ok = self.authorize(params)
+        logger.debug("Authorized: %s" % ok)
         if ok:
             return None
             
@@ -155,7 +155,7 @@ class Authority(object):
             logger.debug("Digest algorithm not MD5!")
             return None
 
-        info = self.identify(request)
+        info = self.get_remote_credentials(request)
         if not info:
             logger.debug("Can't identify myself, sorry!")
             return None
@@ -174,3 +174,43 @@ class Authority(object):
         response = digest(method, uri, ha1, nonce, qop, cnonce, nc)
         auth = Auth(realm, nonce, authname, uri, response, opaque=opaque, qop=qop, cnonce=cnonce, nc=nc)
         return { 'authorization':  auth }
+
+
+class SimpleAuthority(Authority):
+    def is_trusted_without_authentication(self, params):
+        return False
+        
+        
+    def get_local_credentials(self, authname):
+        return None
+        
+        
+    def authorize(self, params):
+        from_uri = params["from"].uri
+    
+        if self.is_trusted_without_authentication(params):
+            logger.debug("Trusting request without authentication from '%s'" % (from_uri,))
+            return True
+        
+        authname = self.get_digest_authname(params)
+        if not authname:
+            logger.debug("Not trusting request without credentials!")
+            return False
+            
+        local_credentials = self.get_local_credentials(authname)
+        if not local_credentials:
+            logger.debug("Not trusting request using unknown authname '%s'" % (authname,))
+            return False
+        
+        ha1, record_uris = local_credentials
+        
+        if not self.check_digest_ha1(params, ha1):
+            logger.debug("Not trusting request with invalid credentials!")
+            return False
+
+        if from_uri not in record_uris:
+            logger.debug("Not trusting request with unauthorized authname '%s'!" % (authname,))
+            return False
+
+        logger.debug("Trusting request from authorized authname '%s'" % (authname,))
+        return True

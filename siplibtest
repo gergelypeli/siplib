@@ -13,7 +13,7 @@ from dialog import Dialog, DialogManager
 from leg import SipLeg, PlannedLeg, create_uninvited_leg
 from call import Call, Routing
 from sdp import Sdp
-from authority import Authority
+from authority import SimpleAuthority
 from registrar import RegistrationManager, RecordManager
 from util import resolve, setup_exchandler
 from mgw import MediaGateway
@@ -37,9 +37,12 @@ CALLEE_NAMEADDR = Nameaddr(Uri(Addr(B_DOMAIN, None), "callee"), "Callee")
 
 #wrong_uri = Uri(local_addr, "wrong")
 
-CALLER_CRED = ("CALLER_AUTHNAME", "CALLER_HA1")
-CALLEE_CRED = ("CALLEE_AUTHNAME", "CALLEE_HA1")
+#CALLER_CRED = ("CALLER_AUTHNAME", "CALLER_HA1")
+#CALLEE_CRED = ("CALLEE_AUTHNAME", "CALLEE_HA1")
+A_CRED = ("A_AUTHNAME", "A_HA1")
+B_CRED = ("B_AUTHNAME", "B_HA1")
 
+PHONE_CALLERID = "phone"
 PHONE_NUMBER = "555"
 #phone_cred = ("phone", "29947c88227ea55104f09dbdd5e6c48e")  # md5(phone:A-NET:secret)
 PHONE_CRED = ("phone", "38450ead4036feb352c45462d8008511")  # md5(phone:a.switch:secret)
@@ -131,52 +134,41 @@ class CallerLeg(PlannedLeg):
         #self.leg.do(dict(type="hangup"))
 
 
-class TestAuthority(Authority):
+class TestRecordManager(RecordManager):
+    def is_known_record(self, uri):
+        return True  # TODO
+        
+
+class TestAuthority(SimpleAuthority):
     def __init__(self, record_manager):
         super(TestAuthority, self).__init__()
         
         self.record_manager = record_manager
-        self.users = {}
-        self.myuser = None
+        self.local_credentials = {}
+        self.remote_credentials = None
         
         
-    def adduser(self, authname, ha1):
-        self.users[authname] = ha1
-        
-        
-    def setuser(self, authname, ha1):
-        self.myuser = (authname, ha1)
-        
+    def set_remote_credentials(self, authname, ha1):
+        self.remote_credentials = (authname, ha1)
 
-    def authenticate(self, params):
-        method = params["method"]
+
+    def add_local_credentials(self, authname, ha1, record_uris):
+        self.local_credentials[authname] = (ha1, record_uris)
+
+
+    def get_remote_credentials(self, params):  # overload
+        return self.remote_credentials
+
+        
+    def get_local_credentials(self, authname):  # overload
+        return self.local_credentials.get(authname)
+        
+        
+    def is_trusted_without_authentication(self, params):  # overload
         from_uri = params["from"].uri
         hop = params["hop"]
-        contact_hops = self.record_manager.lookup_contact_hops(from_uri)
         
-        if method != "REGISTER" and hop in contact_hops:
-            logger.debug("Trusting request from registered user '%s'" % (from_uri,))
-            return True
-        
-        authname = self.get_digest_authname(params)
-        if not authname:
-            logger.debug("Not trusting request without credentials!")
-            return False
-            
-        if authname not in self.users:
-            logger.debug("Not trusting request from unknown user '%s'" % (from_uri,))
-            return False
-        
-        if not self.check_digest_ha1(params, self.users[authname]):
-            logger.debug("Not trusting request with invalid credentials!")
-            return False
-
-        logger.debug("Trusting request from authenticated user '%s'" % (from_uri,))
-        return True
-            
-            
-    def identify(self, params):
-        return self.myuser
+        return hop in self.record_manager.lookup_contact_hops(from_uri)
 
 
 class TestController(Controller):
@@ -245,7 +237,7 @@ class Switch(object):
         self.metapoll = metapoll
         self.transport = UdpTransport(metapoll, local_addr, WeakMethod(self.reception))
         self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
-        self.record_manager = RecordManager(WeakMethod(self.transaction_manager.send_message))
+        self.record_manager = TestRecordManager(WeakMethod(self.transaction_manager.send_message))
         self.authority = TestAuthority(Weak(self.record_manager))
         self.registration_manager = RegistrationManager(
             WeakMethod(self.transaction_manager.send_message),
@@ -346,10 +338,10 @@ class SwitchA(Switch):
     def __init__(self, metapoll, *args):
         super(SwitchA, self).__init__(metapoll, *args)
         
-        self.authority.setuser(*CALLER_CRED)
-        self.authority.adduser(*CALLEE_CRED)
-        self.authority.adduser(*PHONE_CRED)
-
+        self.authority.set_remote_credentials(A_CRED[0], A_CRED[1])
+        self.authority.add_local_credentials(B_CRED[0], B_CRED[1], [ Uri(Addr(A_DOMAIN, None), PHONE_NUMBER) ])
+        self.authority.add_local_credentials(PHONE_CRED[0], PHONE_CRED[1], [ Uri(Addr(A_DOMAIN, None), PHONE_CALLERID) ])
+        
         #metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_dialing))
         
         
@@ -379,8 +371,8 @@ class SwitchB(Switch):
     def __init__(self, metapoll, *args):
         super(SwitchB, self).__init__(metapoll, *args)
         
-        self.authority.setuser(*CALLEE_CRED)
-        self.authority.adduser(*CALLER_CRED)
+        self.authority.set_remote_credentials(*B_CRED)
+        self.authority.add_local_credentials(A_CRED[0], A_CRED[1], [ Uri(Addr(A_DOMAIN, None), PHONE_CALLERID) ])
 
         metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
 

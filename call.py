@@ -73,8 +73,9 @@ class Routing(object):
             self.anchor_action(li, action["legs"])
         elif type == "dial":
             self.dial_action(li, action)
-        #elif type == "refresh":
-        #    logger.debug("Ignoring refresh during routing.")
+        elif type == "reject":
+            incoming_leg = self.legs[0]
+            incoming_leg.do(action)
         else:
             logger.debug("Implicit anchoring")
             incoming_leg = self.anchor_action(li, [])

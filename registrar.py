@@ -112,7 +112,7 @@ class Record(object):
 
 
     def send_response(self, user_params, related_request):
-        logger.debug("Will send response: %s" % str(user_params))
+        #logger.debug("Will send response: %s" % str(user_params))
         params = self.make_response(user_params, related_request)
         self.record_manager.transmit(params, related_request)
         
@@ -129,33 +129,44 @@ class RecordManager(object):
         self.records_by_uri = {}
         
         
-    def match_incoming_request(self, params):
-        if params["method"] != "REGISTER":
-            raise Error("RecordManager has nothing to do with this request!")
-            
-        uri = params["to"].uri
-        if uri.schema != "sip":  # TODO: this check is duplicated in Switch
-            return WeakMethod(self.reject_request, Status(404, "Not found"))
-            
-        record = self.records_by_uri.get(uri)
-        if record:
-            logger.debug("Have record: %s" % (uri,))
-        else:
-            logger.debug("Created record: %s" % (uri,))
-            record = Record(Weak(self), uri)
-            self.records_by_uri[uri] = record
-            
-        return WeakMethod(record.recv_request)
+    def is_known_record(self, uri):
+        raise NotImplementedError()
         
-        
-    def transmit(self, params, related_params=None, report_response=None):
-        self.transmission(params, related_params, report_response)
-
 
     def reject_request(self, msg, status):
         if msg:
             response = make_simple_response(msg, status)
             self.transmission(response, msg)
+
+
+    def not_found(self):
+        return WeakMethod(self.reject_request, Status(404, "Not found"))
+        
+        
+    def match_incoming_request(self, params):
+        if params["method"] != "REGISTER":
+            raise Error("RecordManager has nothing to do with this request!")
+            
+        uri = params["to"].uri
+        if uri.schema != "sip":
+            return self.not_found()
+            
+        record = self.records_by_uri.get(uri)
+        if record:
+            logger.debug("Found record: '%s'" % (uri,))
+        else:
+            if not self.is_known_record(uri):  # TODO: remove records, too!
+                return self.not_found()
+                
+            logger.debug("Created record: %s" % (uri,))
+            record = Record(Weak(self), uri)
+            self.records_by_uri[uri] = record
+        
+        return WeakMethod(record.recv_request)
+        
+        
+    def transmit(self, params, related_params=None, report_response=None):
+        self.transmission(params, related_params, report_response)
 
 
     def lookup_contact_uris(self, record_uri):
