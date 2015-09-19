@@ -41,15 +41,15 @@ class Authority(object):
         return params["to"].uri.addr.host
             
 
-    def authorize(self, params):
-        # return:
-        #   True - if the request may pass
-        return True
-    
-    
     def get_remote_credentials(self, params):
         # return:
-        #   (authname, ha1) - how to identify ourselves for this request
+        #   (authname, ha1) - how to identify ourselves for this request (most likely by From URI)
+        return None
+
+
+    def get_local_credentials(self, params):
+        # return:
+        #  (authname, ha1) - for this request (most likely by From URI)
         return None
         
 
@@ -111,29 +111,50 @@ class Authority(object):
         return auth.username if auth else None
         
 
-    def check_digest_authname_ha1(self, params, authname, ha1):
-        return self.get_digest_authname(params) == authname and self.check_digest_ha1(params, ha1)
+    def authorize(self, params, creds):
+        cred_authname, cred_ha1 = creds
+    
+        authname = self.get_digest_authname(params)
+        if not authname:
+            logger.debug("No credentials in request")
+            return False
+            
+        if authname != cred_authname:
+            logger.debug("Wrong authname in request '%s'" % (authname,))
+            return False
+        
+        if not self.check_digest_ha1(params, cred_ha1):
+            logger.debug("Incorrect digest in request")
+            return False
+
+        logger.debug("Authorized for '%s'" % (authname,))
+        return True
 
 
     def require_auth(self, params):
+        # At this point we already decided the this request must be authorized
         if params["method"] in ("CANCEL", "ACK"):
             return None
+
+        creds = self.get_local_credentials(params)
+        if not creds:
+            logger.debug("Needs no authorization")
+            return None
         
-        auth = params.get("authorization")
+        auth = params.get("authorization")  # TODO: comment it more!
         if auth:
             auth.stale = False  # temporary attribute
-            
-        ok = self.authorize(params)
-        logger.debug("Authorized: %s" % ok)
+        
+        ok = self.authorize(params, creds)
         if ok:
             return None
             
-        # No user or invalid user, come again
         realm = self.get_realm(params)
         stale = auth.stale if auth else False
         nonce = generate_nonce()
         self.nonces.add(nonce)  # TODO: must clean these up
         www = WwwAuth(realm, nonce, stale=stale, qop=[ "auth" ])
+        
         return { 'www_authenticate': www }
 
 
@@ -174,43 +195,4 @@ class Authority(object):
         response = digest(method, uri, ha1, nonce, qop, cnonce, nc)
         auth = Auth(realm, nonce, authname, uri, response, opaque=opaque, qop=qop, cnonce=cnonce, nc=nc)
         return { 'authorization':  auth }
-
-
-class SimpleAuthority(Authority):
-    def is_trusted_without_authentication(self, params):
-        return False
         
-        
-    def get_local_credentials(self, authname):
-        return None
-        
-        
-    def authorize(self, params):
-        from_uri = params["from"].uri
-    
-        if self.is_trusted_without_authentication(params):
-            logger.debug("Trusting request without authentication from '%s'" % (from_uri,))
-            return True
-        
-        authname = self.get_digest_authname(params)
-        if not authname:
-            logger.debug("Not trusting request without credentials!")
-            return False
-            
-        local_credentials = self.get_local_credentials(authname)
-        if not local_credentials:
-            logger.debug("Not trusting request using unknown authname '%s'" % (authname,))
-            return False
-        
-        ha1, record_uris = local_credentials
-        
-        if not self.check_digest_ha1(params, ha1):
-            logger.debug("Not trusting request with invalid credentials!")
-            return False
-
-        if from_uri not in record_uris:
-            logger.debug("Not trusting request with unauthorized authname '%s'!" % (authname,))
-            return False
-
-        logger.debug("Trusting request from authorized authname '%s'" % (authname,))
-        return True

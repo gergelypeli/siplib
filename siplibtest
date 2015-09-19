@@ -13,7 +13,7 @@ from dialog import Dialog, DialogManager
 from leg import SipLeg, PlannedLeg, create_uninvited_leg
 from call import Call, Routing
 from sdp import Sdp
-from authority import SimpleAuthority
+from authority import Authority
 from registrar import RegistrationManager, RecordManager
 from util import resolve, setup_exchandler
 from mgw import MediaGateway
@@ -139,12 +139,11 @@ class TestRecordManager(RecordManager):
         return True  # TODO
         
 
-class TestAuthority(SimpleAuthority):
-    def __init__(self, record_manager):
+class TestAuthority(Authority):
+    def __init__(self):
         super(TestAuthority, self).__init__()
         
-        self.record_manager = record_manager
-        self.local_credentials = {}
+        self.local_credentials_by_uri = {}
         self.remote_credentials = None
         
         
@@ -152,23 +151,18 @@ class TestAuthority(SimpleAuthority):
         self.remote_credentials = (authname, ha1)
 
 
-    def add_local_credentials(self, authname, ha1, record_uris):
-        self.local_credentials[authname] = (ha1, record_uris)
+    def add_local_credentials(self, uri, authname, ha1):
+        self.local_credentials_by_uri[uri] = (authname, ha1)
 
 
     def get_remote_credentials(self, params):  # overload
         return self.remote_credentials
 
         
-    def get_local_credentials(self, authname):  # overload
-        return self.local_credentials.get(authname)
-        
-        
-    def is_trusted_without_authentication(self, params):  # overload
+    def get_local_credentials(self, params):  # overload
+        # URI-s not found here mean the request can be accepted without authorization
         from_uri = params["from"].uri
-        hop = params["hop"]
-        
-        return hop in self.record_manager.lookup_contact_hops(from_uri)
+        return self.local_credentials_by_uri.get(from_uri)
 
 
 class TestController(Controller):
@@ -238,7 +232,7 @@ class Switch(object):
         self.transport = UdpTransport(metapoll, local_addr, WeakMethod(self.reception))
         self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
         self.record_manager = TestRecordManager(WeakMethod(self.transaction_manager.send_message))
-        self.authority = TestAuthority(Weak(self.record_manager))
+        self.authority = TestAuthority()
         self.registration_manager = RegistrationManager(
             WeakMethod(self.transaction_manager.send_message),
             WeakMethod(self.transport.get_hop),
@@ -301,10 +295,16 @@ class Switch(object):
 
         if params["to"].uri.addr.host not in self.domains:
             WeakMethod(self.reject_request, Status(404, "Not found"))
-            
-        challenge = self.authority.require_auth(params)
-        if challenge:
-            return WeakMethod(self.challenge_request, challenge)
+
+        if params["hop"] in self.record_manager.lookup_contact_hops(params["from"].uri):
+            logger.debug("Trusting request without authentication")
+        else:
+            challenge = self.authority.require_auth(params)
+            if challenge:
+                logger.debug("Request requires challenge")
+                return WeakMethod(self.challenge_request, challenge)
+            else:
+                logger.debug("Request does not require challenge")
 
         if params["method"] == "REGISTER":
             return self.record_manager.match_incoming_request(params)
@@ -339,8 +339,8 @@ class SwitchA(Switch):
         super(SwitchA, self).__init__(metapoll, *args)
         
         self.authority.set_remote_credentials(A_CRED[0], A_CRED[1])
-        self.authority.add_local_credentials(B_CRED[0], B_CRED[1], [ Uri(Addr(A_DOMAIN, None), PHONE_NUMBER) ])
-        self.authority.add_local_credentials(PHONE_CRED[0], PHONE_CRED[1], [ Uri(Addr(A_DOMAIN, None), PHONE_CALLERID) ])
+        self.authority.add_local_credentials(Uri(Addr(A_DOMAIN, None), PHONE_NUMBER), B_CRED[0], B_CRED[1])
+        self.authority.add_local_credentials(Uri(Addr(A_DOMAIN, None), PHONE_CALLERID), PHONE_CRED[0], PHONE_CRED[1])
         
         #metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_dialing))
         
@@ -372,7 +372,7 @@ class SwitchB(Switch):
         super(SwitchB, self).__init__(metapoll, *args)
         
         self.authority.set_remote_credentials(*B_CRED)
-        self.authority.add_local_credentials(A_CRED[0], A_CRED[1], [ Uri(Addr(A_DOMAIN, None), PHONE_CALLERID) ])
+        self.authority.add_local_credentials(Uri(Addr(A_DOMAIN, None), PHONE_CALLERID), A_CRED[0], A_CRED[1])
 
         metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
 
