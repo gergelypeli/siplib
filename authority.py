@@ -41,18 +41,6 @@ class Authority(object):
         return params["to"].uri.addr.host
             
 
-    def get_remote_credentials(self, params):
-        # return:
-        #   (authname, ha1) - how to identify ourselves for this request (most likely by From URI)
-        return None
-
-
-    def get_local_credentials(self, params):
-        # return:
-        #  (authname, ha1) - for this request (most likely by From URI)
-        return None
-        
-
     def check_digest_ha1(self, params, ha1):
         method = params["method"]
         uri = params["uri"].print()
@@ -131,16 +119,11 @@ class Authority(object):
         return True
 
 
-    def require_auth(self, params):
+    def require_auth(self, params, creds):
         # At this point we already decided the this request must be authorized
         if params["method"] in ("CANCEL", "ACK"):
             raise Exception("Method %s can't be authenticated!" % params["method"])
 
-        creds = self.get_local_credentials(params)
-        if not creds:
-            logger.debug("Needs no authorization")
-            return None
-        
         auth = params.get("authorization")  # TODO: comment it more!
         if auth:
             auth.stale = False  # temporary attribute
@@ -158,7 +141,7 @@ class Authority(object):
         return { 'www_authenticate': www }
 
 
-    def provide_auth(self, response, request):
+    def provide_auth(self, response, request, creds):
         www_auth = response.get("www_authenticate")
         if not www_auth:
             logger.debug("No known challenge found, sorry!")
@@ -176,12 +159,7 @@ class Authority(object):
             logger.debug("Digest algorithm not MD5!")
             return None
 
-        info = self.get_remote_credentials(request)
-        if not info:
-            logger.debug("Can't identify myself, sorry!")
-            return None
-            
-        authname, ha1 = info
+        authname, ha1 = creds
         
         method = request["method"]
         uri = request["uri"].print()
