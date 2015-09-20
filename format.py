@@ -103,7 +103,9 @@ class Auth(collections.namedtuple("Auth",
     [ "realm", "nonce", "username", "uri", "response", "opaque", "algorithm", "qop", "cnonce", "nc" ]
 )):
     def __new__(cls, realm, nonce, username, uri, response, opaque=None, algorithm=None, qop=None, cnonce=None, nc=None):
-        return super(Auth, cls).__new__(cls, realm, nonce, username, uri, response, opaque, algorithm, qop, cnonce, nc)
+        self = super(Auth, cls).__new__(cls, realm, nonce, username, uri, response, opaque, algorithm, qop, cnonce, nc)
+        self.stale = False  # internally used attribute
+        return self
 
 
     def print(self):

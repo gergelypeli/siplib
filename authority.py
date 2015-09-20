@@ -47,46 +47,46 @@ class Authority(object):
         auth = params.get("authorization")
         
         if not auth:
-            logger.debug("Authority: no Authorization header!")
+            logger.debug("No Authorization header!")
             return False
 
         if not ha1:
-            logger.debug("Authority: no ha1!")
+            logger.debug("No ha1!")
             return False
 
         if auth.realm != self.get_realm(params):
-            logger.debug("Authority: wrong realm!")
+            logger.debug("Wrong realm!")
             return False
         
         if auth.nonce not in self.nonces:
-            logger.debug("Authority: wrong nonce!")
+            logger.debug("Wrong nonce!")
             auth.stale = True
             return False
         
         if auth.uri != uri:  # TODO: this can be more complex than this
-            logger.debug("Authority: wrong uri")
+            logger.debug("Wrong uri")
             return False
 
         if auth.qop != "auth":
-            logger.debug("Authority: QOP is not auth!")
+            logger.debug("QOP is not auth!")
             return False
         
         if auth.algorithm not in (None, "MD5"):
-            logger.debug("Authority: digest algorithm not MD5!")
+            logger.debug("Digest algorithm not MD5!")
             return False
         
         if not auth.cnonce:
-            logger.debug("Authority: cnonce not set!")
+            logger.debug("Cnonce not set!")
             return False
 
         if not auth.nc:
-            logger.debug("Authority: nc not set!")
+            logger.debug("Nc not set!")
             return False
 
         response = digest(method, uri, ha1, auth.nonce, auth.qop, auth.cnonce, auth.nc)
         
         if auth.response != response:
-            logger.debug("Authority: wrong response!")
+            logger.debug("Wrong response!")
             return False
             
         self.nonces.remove(auth.nonce)
@@ -124,14 +124,11 @@ class Authority(object):
         if params["method"] in ("CANCEL", "ACK"):
             raise Exception("Method %s can't be authenticated!" % params["method"])
 
-        auth = params.get("authorization")  # TODO: comment it more!
-        if auth:
-            auth.stale = False  # temporary attribute
-        
         ok = self.authorize(params, creds)
         if ok:
             return None
             
+        auth = params.get("authorization")
         realm = self.get_realm(params)
         stale = auth.stale if auth else False
         nonce = generate_nonce()
