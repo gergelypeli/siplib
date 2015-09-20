@@ -134,7 +134,7 @@ class Authority(object):
     def require_auth(self, params):
         # At this point we already decided the this request must be authorized
         if params["method"] in ("CANCEL", "ACK"):
-            return None
+            raise Exception("Method %s can't be authenticated!" % params["method"])
 
         creds = self.get_local_credentials(params)
         if not creds:

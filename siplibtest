@@ -15,6 +15,7 @@ from call import Call, Routing
 from sdp import Sdp
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
+from account import Account, AccountManager
 from util import resolve, setup_exchandler
 from mgw import MediaGateway
 from mgc import Controller, PlayerMediaLeg
@@ -135,8 +136,7 @@ class CallerLeg(PlannedLeg):
 
 
 class TestRecordManager(RecordManager):
-    def is_known_record(self, uri):
-        return True  # TODO
+    pass
         
 
 class TestAuthority(Authority):
@@ -227,7 +227,7 @@ class TestCall(Call):
 class Switch(object):
     CallClass = TestCall
     
-    def __init__(self, metapoll, local_addr, mgc_addr, mgw_addr, media_ports, domains):
+    def __init__(self, metapoll, local_addr, mgc_addr, mgw_addr, media_ports):
         self.metapoll = metapoll
         self.transport = UdpTransport(metapoll, local_addr, WeakMethod(self.reception))
         self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
@@ -245,8 +245,8 @@ class Switch(object):
             WeakMethod(self.authority.provide_auth)
         )
         self.mgc = TestController(metapoll, mgc_addr, mgw_addr, media_ports)
+        self.account_manager = AccountManager()
 
-        self.domains = domains
         self.calls = []  # TODO: make it a dict with call identifiers!
 
         metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
@@ -290,30 +290,64 @@ class Switch(object):
         
 
     def process_request(self, params):
-        if params["uri"].schema != "sip":  # TODO: add some addr checks, too
-            WeakMethod(self.reject_request, Status(404, "Not found"))
+        method = params["method"]
+        request_uri = params["uri"]
+        from_uri = params["from"].uri
+        #to_uri = params["to"].uri
+        hop = params["hop"]
+        
+        if request_uri.schema != "sip":  # TODO: add some addr checks, too
+            return WeakMethod(self.reject_request, Status(404, "Not found"))
 
-        if params["to"].uri.addr.host not in self.domains:
-            WeakMethod(self.reject_request, Status(404, "Not found"))
-
-        if params["hop"] in self.record_manager.lookup_contact_hops(params["from"].uri):
-            logger.debug("Trusting request without authentication")
+        auth_policy = self.account_manager.get_account_auth_policy(from_uri)
+        must_auth = None
+        
+        if method in ("CANCEL", "ACK"):
+            must_auth = False
+            logger.debug("Accepting request because it can't be authenticated anyway")
+        elif not auth_policy:
+            logger.debug("Rejecting request because account is unknown")
+            return WeakMethod(self.reject_request, Status(403, "Forbidden"))
+        elif auth_policy == Account.AUTH_NEVER:
+            must_auth = False
+            logger.debug("Accepting request because authentication is never needed")
+        elif auth_policy == Account.AUTH_ALWAYS:
+            must_auth = True
+            logger.debug("Challenging request because authentication is always needed")
+        elif auth_policy == Account.AUTH_IF_UNREGISTERED:
+            must_auth = (hop not in self.record_manager.lookup_contact_hops(from_uri))
+            if must_auth:
+                logger.debug("Challenging request because account is not registered")
+            else:
+                logger.debug("Accepting request because account is registered")
+        elif auth_policy == Account.AUTH_BY_ADDRESS:
+            if hop not in self.record_manager.lookup_contact_hops(from_uri):
+                logger.debug("Rejecting request because hop address is not allowed")
+                return WeakMethod(self.reject_request, Status(403, "Forbidden"))
+            else:
+                must_auth = False
+                logger.debug("Accepting request because hop address is allowed")
         else:
+            raise Exception("WTF?")
+
+        if must_auth:
             challenge = self.authority.require_auth(params)
             if challenge:
-                logger.debug("Request requires challenge")
+                logger.debug("Rejecting request without proper authentication")
                 return WeakMethod(self.challenge_request, challenge)
             else:
-                logger.debug("Request does not require challenge")
+                logger.debug("Accepting request with proper authentication")
 
-        if params["method"] == "REGISTER":
+        if method == "REGISTER":
+            # If the From URI was OK, then the To URI is as well, because
+            # we don't support third party registrations now.
             return self.record_manager.match_incoming_request(params)
 
         report = self.dialog_manager.match_incoming_request(params)
         if report:
             return report
     
-        if params["method"] == "INVITE" and "tag" not in params["to"].params:
+        if method == "INVITE" and "tag" not in params["to"].params:
             return self.start_call(params)
     
         return WeakMethod(self.reject_request, Status(400, "Bad request"))
@@ -338,9 +372,15 @@ class SwitchA(Switch):
     def __init__(self, metapoll, *args):
         super(SwitchA, self).__init__(metapoll, *args)
         
+        player_uri = Uri(Addr(A_DOMAIN, None), PHONE_NUMBER)
+        phone_uri = Uri(Addr(A_DOMAIN, None), PHONE_CALLERID)
+        
+        self.account_manager.add_account(player_uri, "Playa", Account.AUTH_IF_UNREGISTERED)
+        self.account_manager.add_account(phone_uri, "Phone", Account.AUTH_IF_UNREGISTERED)
+        
         self.authority.set_remote_credentials(A_CRED[0], A_CRED[1])
-        self.authority.add_local_credentials(Uri(Addr(A_DOMAIN, None), PHONE_NUMBER), B_CRED[0], B_CRED[1])
-        self.authority.add_local_credentials(Uri(Addr(A_DOMAIN, None), PHONE_CALLERID), PHONE_CRED[0], PHONE_CRED[1])
+        self.authority.add_local_credentials(player_uri, B_CRED[0], B_CRED[1])
+        self.authority.add_local_credentials(phone_uri, PHONE_CRED[0], PHONE_CRED[1])
         
         #metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_dialing))
         
@@ -371,8 +411,12 @@ class SwitchB(Switch):
     def __init__(self, metapoll, *args):
         super(SwitchB, self).__init__(metapoll, *args)
         
+        phone_uri = Uri(Addr(A_DOMAIN, None), PHONE_CALLERID)
+        
+        self.account_manager.add_account(phone_uri, "Phone", Account.AUTH_IF_UNREGISTERED)
+        
         self.authority.set_remote_credentials(*B_CRED)
-        self.authority.add_local_credentials(Uri(Addr(A_DOMAIN, None), PHONE_CALLERID), A_CRED[0], A_CRED[1])
+        self.authority.add_local_credentials(phone_uri, A_CRED[0], A_CRED[1])
 
         metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
 
@@ -426,8 +470,8 @@ metapoll = Metapoll()
 
 mgw = MediaGateway(metapoll, MGW_ADDR)
 
-switch_a = SwitchA(Weak(metapoll), A_ADDR, MGC1_ADDR, MGW_ADDR, range(30000, 30020, 2), [ A_DOMAIN ])
-switch_b = SwitchB(Weak(metapoll), B_ADDR, MGC2_ADDR, MGW_ADDR, range(40000, 40020, 2), [ B_DOMAIN ])
+switch_a = SwitchA(Weak(metapoll), A_ADDR, MGC1_ADDR, MGW_ADDR, range(30000, 30020, 2))
+switch_b = SwitchB(Weak(metapoll), B_ADDR, MGC2_ADDR, MGW_ADDR, range(40000, 40020, 2))
 
 #switch_a.transport.set_peer(switch_b.transport)
 #switch_b.transport.set_peer(switch_a.transport)

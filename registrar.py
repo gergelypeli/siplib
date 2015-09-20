@@ -129,38 +129,38 @@ class RecordManager(object):
         self.records_by_uri = {}
         
         
-    def is_known_record(self, uri):
-        raise NotImplementedError()
-        
-
     def reject_request(self, msg, status):
         if msg:
             response = make_simple_response(msg, status)
             self.transmission(response, msg)
 
 
-    def not_found(self):
-        return WeakMethod(self.reject_request, Status(404, "Not found"))
+    def reject(self, code, reason):
+        return WeakMethod(self.reject_request, Status(code, reason))
         
         
     def match_incoming_request(self, params):
         if params["method"] != "REGISTER":
             raise Error("RecordManager has nothing to do with this request!")
+        
+        registering_uri = params["from"].uri
+        record_uri = params["to"].uri
+        
+        if registering_uri != record_uri:
+            # Third party registrations not supported yet
+            # We'd need to know which account is allowed to register which
+            return self.reject(403, "Forbidden")
+        
+        if record_uri.schema != "sip":
+            return self.reject(404, "Not Found")
             
-        uri = params["to"].uri
-        if uri.schema != "sip":
-            return self.not_found()
-            
-        record = self.records_by_uri.get(uri)
+        record = self.records_by_uri.get(record_uri)
         if record:
-            logger.debug("Found record: '%s'" % (uri,))
+            logger.debug("Found record: '%s'" % (record_uri,))
         else:
-            if not self.is_known_record(uri):  # TODO: remove records, too!
-                return self.not_found()
-                
-            logger.debug("Created record: %s" % (uri,))
-            record = Record(Weak(self), uri)
-            self.records_by_uri[uri] = record
+            logger.debug("Created record: %s" % (record_uri,))
+            record = Record(Weak(self), record_uri)
+            self.records_by_uri[record_uri] = record
         
         return WeakMethod(record.recv_request)
         
