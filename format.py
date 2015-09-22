@@ -14,7 +14,27 @@ class FormatError(Exception):
 
 
 Addr = collections.namedtuple("Addr", [ "host", "port" ])
-Status = collections.namedtuple("Status", [ "code", "reason" ])
+Addr.__new__.__defaults__ = (None,)
+
+class Status(collections.namedtuple("Status", [ "code", "reason" ])):
+    REASONS_BY_CODE = {
+        100: "Trying",
+        180: "Ringing",
+        183: "Session Progress",
+        200: "OK",
+        400: "Bad Request",
+        401: "Unauthorized",
+        403: "Forbidden",
+        404: "Not Found",
+        408: "Request Timeout",
+        481: "Transaction Does Not Exist",
+        487: "Request Terminated",
+        500: "Internal Error"
+    }
+    
+    def __new__(cls, code, reason=None):
+        reason = reason or cls.REASONS_BY_CODE.get(code) or "Just because"
+        super(Status, cls).__new__(cls, code, reason)
 
 
 class Via(collections.namedtuple("Via", [ "addr", "branch" ])):

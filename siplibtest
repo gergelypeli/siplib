@@ -80,10 +80,6 @@ def sleep(secs, method):
 
 
 class CalleeLeg(PlannedLeg):
-    def __init__(self, call, metapoll):
-        super(CalleeLeg, self).__init__(call, metapoll)
-        
-        
     def plan(self, planner):
         logger.debug("Callee created.")
         
@@ -114,6 +110,16 @@ class CalleeLeg(PlannedLeg):
     def make_answer(self, offer):
         return offer
 
+
+class UnreachableLeg(PlannedLeg):
+    def plan(self, planner):
+        logger.debug("Unreachable leg created.")
+        
+        yield from planner.suspend(expect="judgement-day")
+        
+        logger.error("Unreachable leg woke up from the dead!")
+        
+        
 
 class CallerLeg(PlannedLeg):
     def plan(self, planner):

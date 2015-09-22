@@ -21,9 +21,15 @@ class Planner(object):
 
 
     def __del__(self):
-        # Not necessary, self.generator.__del__ does the same
         if self.generator:
-            self.generator.close()
+            try:
+                self.generator.close()
+            except Exception:
+                print("Force terminated plan.")
+                self.generator = None
+                
+                if self.finish_handler:
+                    self.finish_handler()
         
         if self.timeout_handle:
             self.metapoll.unregister_timeout(self.timeout_handle)
