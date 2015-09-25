@@ -1,4 +1,4 @@
-from async import WeakMethod, Weak
+from async import WeakMethod, Weak, WeakGeneratorMethod
 from format import Status
 from mgc import MediaChannel
 from planner import Planner
@@ -107,7 +107,7 @@ class PlannedSimpleRouting(SimpleRouting):
     def start_routing(self, action):
         self.planner = self.RoutingPlanner(
             self.metapoll,
-            self.plan,
+            WeakGeneratorMethod(self.plan),
             finish_handler=WeakMethod(self.routing_finished, action),
             error_handler=WeakMethod(self.fail_routing)
         )

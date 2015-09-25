@@ -1,7 +1,7 @@
 from copy import deepcopy
 import logging
 
-from async import WeakMethod
+from async import WeakMethod, WeakGeneratorMethod
 from format import Status, make_virtual_response
 from planner import Planner, PlannedEvent
 from mgc import ProxiedMediaLeg
@@ -484,7 +484,11 @@ class PlannedLeg(Leg):
     def __init__(self, call, metapoll):
         super(PlannedLeg, self).__init__(call)
         
-        self.planner = self.LegPlanner(metapoll, self.plan, finish_handler=WeakMethod(self.plan_finished))
+        self.planner = self.LegPlanner(
+            metapoll,
+            WeakGeneratorMethod(self.plan),
+            finish_handler=WeakMethod(self.plan_finished)
+        )
         self.planner.start()
 
 

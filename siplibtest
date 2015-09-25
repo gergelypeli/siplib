@@ -81,6 +81,7 @@ def sleep(secs, method):
 
 class CalleeLeg(PlannedLeg):
     def plan(self, planner):
+        logger.debug("XXX self is %r" % self)
         logger.debug("Callee created.")
         
         action = yield from planner.wait_action("dial")
