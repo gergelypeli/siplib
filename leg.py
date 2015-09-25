@@ -485,6 +485,7 @@ class PlannedLeg(Leg):
         super(PlannedLeg, self).__init__(call)
         
         self.planner = self.LegPlanner(metapoll, self.plan, finish_handler=WeakMethod(self.plan_finished))
+        self.planner.start()
 
 
     def plan_finished(self, result):

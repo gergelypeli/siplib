@@ -11,13 +11,22 @@ PlannedEvent.__new__.__defaults__ = (None,)
 class Planner(object):
     def __init__(self, metapoll, generator_method, finish_handler=None, error_handler=None):
         self.metapoll = metapoll
-        self.generator = generator_method.__func__(Weak(generator_method.__self__), Weak(self))
+        self.generator_func = generator_method.__func__
+        self.generator_self = generator_method.__self__
         self.finish_handler = finish_handler
         self.error_handler = error_handler
+
+        self.generator = None
         self.timeout_handle = None
         self.event_queue = []
+
+
+    def start(self, *args, **kwargs):
+        if self.generator:
+            raise Exception("Plan already started!")
         
         print("Starting plan.")
+        self.generator = self.generator_func(Weak(self.generator_self), Weak(self), *args, **kwargs)
         self.resume(None)
 
 
@@ -107,6 +116,7 @@ def main():
     class Planned(object):
         def __init__(self, metapoll):
             self.planner = Planner(metapoll, self.plan)
+            self.planner.start()
         
     
         def plan(self, planner):

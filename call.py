@@ -15,7 +15,6 @@ class Routing(object):
         
         self.call = call
         self.report = report
-        self.ctx = None
         self.legs = {}
         self.add_leg(incoming_leg)
 
@@ -58,14 +57,13 @@ class Routing(object):
         
         
 class SimpleRouting(Routing):
-    def route_call(self):
+    def route_call(self, ctx):
         raise NotImplementedError()
 
 
     def start_routing(self, action):
         try:
-            # No need to clone the ctx for a single outgoing leg
-            outgoing_leg = self.route_call()
+            outgoing_leg = self.route_call(action["ctx"])
             if not outgoing_leg:
                 raise Exception("Routing failed for an unknown reason!")
         except Exception as e:
@@ -84,7 +82,6 @@ class SimpleRouting(Routing):
         elif type == "anchor":
             self.anchor_routing(li, action["legs"])
         elif type == "dial":
-            self.ctx = action["ctx"]
             self.start_routing(action)  # async friendly way
         elif type == "reject":
             incoming_leg = self.legs[0]
@@ -114,6 +111,7 @@ class PlannedSimpleRouting(SimpleRouting):
             finish_handler=WeakMethod(self.routing_finished, action),
             error_handler=WeakMethod(self.fail_routing)
         )
+        self.planner.start(action["ctx"])
     
     
     def routing_finished(self, outgoing_leg, action):

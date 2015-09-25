@@ -178,14 +178,14 @@ class TestRouting(SimpleRouting):
         self.switch = switch
         
 
-    def route_call(self):
-        to_uri = self.ctx["to"].uri
+    def route_call(self, ctx):
+        to_uri = ctx["to"].uri
         logger.debug("Checking registered SIP contact: %s" % (to_uri,))
         contacts = self.switch.record_manager.lookup_contact_uris(to_uri)
             
         if len(contacts) == 1:
             contact_uri = contacts[0]
-            self.ctx["uri"] = contact_uri  # Only update the RURI for forwarding
+            ctx["uri"] = contact_uri  # Only update the RURI for forwarding
             #ctx["from"] = ctx["to"]
             #ctx["to"] = Nameaddr(contact_uri)
             outgoing_dialog = Dialog(Weak(self.switch.dialog_manager))
@@ -386,15 +386,15 @@ class SwitchA(Switch):
 class SwitchB(Switch):
     class CallClass(TestCall):
         class RoutingClass(TestRouting):
-            def route_call(self):
+            def route_call(self, ctx):
                 # For the phone call only
-                if self.ctx["to"].uri.user == PHONE_NUMBER:
+                if ctx["to"].uri.user == PHONE_NUMBER:
                     logger.debug("Returning CalleeLeg for %s" % PHONE_NUMBER)
                     #ctx["to"] = Nameaddr(callee_uri)
                     return CalleeLeg(self.call, metapoll)  # TODO: Call has no metapoll yet
             
                 # FIXME: is RoutingClass legal here? Not according to pyflakes!
-                return super(RoutingClass, self).route_call()
+                return super(RoutingClass, self).route_call(ctx)
 
 
     def __init__(self, metapoll, *args):
