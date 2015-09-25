@@ -1,6 +1,6 @@
 # This needs at least Python 3.3 because of yield from!
 
-from async import Metapoll, Weak
+from async import Metapoll, Weak, WeakMethod
 import collections
 
 
@@ -9,10 +9,11 @@ PlannedEvent.__new__.__defaults__ = (None,)
 
 
 class Planner(object):
-    def __init__(self, metapoll, generator_method, finish_handler=None):
+    def __init__(self, metapoll, generator_method, finish_handler=None, error_handler=None):
         self.metapoll = metapoll
         self.generator = generator_method.__func__(Weak(generator_method.__self__), Weak(self))
         self.finish_handler = finish_handler
+        self.error_handler = error_handler
         self.timeout_handle = None
         self.event_queue = []
         
@@ -24,12 +25,14 @@ class Planner(object):
         if self.generator:
             try:
                 self.generator.close()
-            except Exception:
+            except Exception as e:
+                print("Force aborted plan.")
+                if self.error_handler:
+                    self.error_handler(e)
+            else:
                 print("Force terminated plan.")
-                self.generator = None
-                
-                if self.finish_handler:
-                    self.finish_handler()
+                if self.error_handler:
+                    self.error_handler(None)  # TODO: figure something out here!
         
         if self.timeout_handle:
             self.metapoll.unregister_timeout(self.timeout_handle)
@@ -43,8 +46,10 @@ class Planner(object):
             
         while True:
             # self is actually a weak self, because this function is called from within the plan
+            # But getting a bound method of a proxy binds to the strong object!
+            # So self.resume can be passed to WeakMethod to weaken it again!
             if timeout is not None:
-                handler = lambda: self.resume(PlannedEvent("timeout"))
+                handler = WeakMethod(self.resume, PlannedEvent("timeout"))
                 self.timeout_handle = self.metapoll.register_timeout(timeout, handler)
 
             print("Suspending plan.")
@@ -84,12 +89,18 @@ class Planner(object):
                 # This just returns if the plan is suspended again, or
                 # raises StopIteration if it ended.
                 self.generator.send(planned_event)
-        except StopIteration:
+        except StopIteration as e:
             print("Terminated plan.")
             self.generator = None
             
             if self.finish_handler:
-                self.finish_handler()
+                self.finish_handler(e.value)
+        except Exception as e:
+            print("Aborted plan.")
+            self.generator = None
+            
+            if self.error_handler:
+                self.error_handler(e)
         
         
 def main():

@@ -32,7 +32,7 @@ def lookup_host_alias(host):
 
 
 def Weak(x):
-    return weakref.proxy(x)
+    return x if isinstance(x, weakref.ProxyTypes) else weakref.proxy(x)
 
 
 class WeakMethod(object):

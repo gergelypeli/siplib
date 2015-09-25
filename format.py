@@ -34,7 +34,7 @@ class Status(collections.namedtuple("Status", [ "code", "reason" ])):
     
     def __new__(cls, code, reason=None):
         reason = reason or cls.REASONS_BY_CODE.get(code) or "Just because"
-        super(Status, cls).__new__(cls, code, reason)
+        return super(Status, cls).__new__(cls, code, reason)
 
 
 class Via(collections.namedtuple("Via", [ "addr", "branch" ])):
