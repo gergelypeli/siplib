@@ -2,6 +2,9 @@
 
 from async import Metapoll, Weak, WeakMethod
 import collections
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 PlannedEvent = collections.namedtuple("PlannedEvent", [ "tag", "event" ])
@@ -24,7 +27,7 @@ class Planner(object):
         if self.generator:
             raise Exception("Plan already started!")
         
-        print("Starting plan.")
+        logger.debug("Starting plan.")
         self.generator = self.generator_method(Weak(self), *args, **kwargs)
         self.resume(None)
 
@@ -34,11 +37,11 @@ class Planner(object):
             try:
                 self.generator.close()
             except Exception as e:
-                print("Force aborted plan.")
+                logger.warning("Force aborted plan.")
                 if self.error_handler:
                     self.error_handler(e)
             else:
-                print("Force terminated plan.")
+                logger.warning("Force terminated plan.")
                 if self.error_handler:
                     self.error_handler(None)  # TODO: figure something out here!
         
@@ -49,7 +52,7 @@ class Planner(object):
     def suspend(self, expect=None, timeout=None, strict=False):
         for i, planned_event in enumerate(self.event_queue):
             if not expect or expect == planned_event.tag:
-                print("Unqueueing planned event '%s'." % planned_event.tag)
+                logger.debug("Unqueueing planned event '%s'." % planned_event.tag)
                 return self.event_queue.pop(i)
             
         while True:
@@ -60,16 +63,16 @@ class Planner(object):
                 handler = WeakMethod(self.resume, PlannedEvent("timeout"))
                 self.timeout_handle = self.metapoll.register_timeout(timeout, handler)
 
-            print("Suspending plan.")
+            logger.debug("Suspending plan.")
             planned_event = yield
-            print("Resuming plan.")
+            logger.debug("Resuming plan.")
 
             if timeout is not None:
                 self.metapoll.unregister_timeout(self.timeout_handle)
                 self.timeout_handle = None
         
             if not expect or expect == planned_event.tag:
-                print("Got planned event '%s'." % planned_event.tag)
+                logger.debug("Got planned event '%s'." % planned_event.tag)
                 return planned_event
 
             if strict:
@@ -78,7 +81,7 @@ class Planner(object):
             if planned_event.tag == "timeout":
                 raise Exception("Timeout before planned event '%s'!" % expect)
                 
-            print("Queueing planned event '%s'." % planned_event.tag)
+            logger.debug("Queueing planned event '%s'." % planned_event.tag)
             self.event_queue.append(planned_event)
 
 
@@ -98,13 +101,13 @@ class Planner(object):
                 # raises StopIteration if it ended.
                 self.generator.send(planned_event)
         except StopIteration as e:
-            print("Terminated plan.")
+            logger.debug("Terminated plan.")
             self.generator = None
             
             if self.finish_handler:
                 self.finish_handler(e.value)
         except Exception as e:
-            print("Aborted plan: %s" % e)
+            logger.warning("Aborted plan: %s" % e)
             self.generator = None
             
             if self.error_handler:
@@ -119,11 +122,11 @@ def main():
         
     
         def plan(self, planner):
-            print("One.")
+            logger.debug("One.")
             yield from planner.poll(timeout=2)
-            print("Two.")
+            logger.debug("Two.")
             yield from planner.poll(timeout=2)
-            print("Three.")
+            logger.debug("Three.")
         
 
     metapoll = Metapoll()
