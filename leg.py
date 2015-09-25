@@ -294,6 +294,9 @@ class SipLeg(Leg):
                 self.invite_state = InviteState(invite_request)
                 self.state = self.DIALING_OUT
                 return
+            else:
+                logger.debug("Ignoring %s, already down." % type)
+                return
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
             if type == "hangup":
                 self.send_request(dict(method="CANCEL"), self.invite_state.request)
@@ -481,8 +484,15 @@ class PlannedLeg(Leg):
     def __init__(self, call, metapoll):
         super(PlannedLeg, self).__init__(call)
         
-        self.planner = self.LegPlanner(metapoll, self.plan, finish_handler=WeakMethod(self.finish))
-    
+        self.planner = self.LegPlanner(metapoll, self.plan, finish_handler=WeakMethod(self.plan_finished))
+
+
+    def plan_finished(self, result):
+        if result is not None:
+            logger.error("Plan return value ignored!")
+            
+        self.finish()
+        
 
     def do(self, action):
         self.planner.resume(PlannedEvent("action", action))

@@ -1,6 +1,7 @@
 from async import WeakMethod, Weak
+from format import Status
 from mgc import MediaChannel
-#from planner import Planner
+from planner import Planner
 import logging
 
 logger = logging.getLogger(__name__)
@@ -14,75 +15,119 @@ class Routing(object):
         
         self.call = call
         self.report = report
+        self.ctx = None
         self.legs = {}
-        self.add_leg(0, incoming_leg)
+        self.add_leg(incoming_leg)
 
 
-    def add_leg(self, li, leg):
+    def add_leg(self, leg):
+        li = max(self.legs.keys()) + 1 if self.legs else 0
+
         self.legs[li] = leg
         leg.set_report(WeakMethod(self.process, li))
 
 
-    def finish(self):
+    def remove_leg(self, li):
+        self.legs[li] = None  # keep entry to keep on counting the legs
+        
+        if not any(self.legs.values()):
+            self.finish_routing()
+            
+
+    def finish_routing(self):
         self.report(dict(type="finish"))
         
-
-    def route_call(self, ctx):
-        return None
-
-
-    def dial_action(self, li, action):
-        lj = 1 - li
-
-        # TODO: do we want to alter the From domain?
-        # TODO: do we want to copy?
-        src_ctx = action["ctx"]
-        dst_ctx = src_ctx.copy()
-        action["ctx"] = dst_ctx
-
-        try:
-            outgoing_leg = self.route_call(dst_ctx)
-            if not outgoing_leg:
-                raise Exception("Routing failed for an unknown reason!")
-        except Exception:
-            logger.warning("Routing failed!")
-            self.finish()
-            return
-            
-        self.add_leg(lj, outgoing_leg)
-        self.legs[lj].do(action)
+        
+    def fail_routing(self, exception):  # TODO
+        logger.warning("Routing failed!")
+        self.legs[0].do(dict(type="fail", status=Status(500)))
 
 
-    def anchor_action(self, li, legs):
+    def anchor_routing(self, li, further_legs=[]):  # TODO: rename to done?
         left = self.legs.pop(0)
         right = self.legs.pop(li)
         
-        self.report(dict(type="anchor", legs=[ left, right ] + legs))
+        self.report(dict(type="anchor", legs=[ left, right ] + further_legs))
         
-        return left
+        if not self.legs:
+            self.finish_routing()
         
+        
+    def process(action, li):
+        raise NotImplementedError()
+        
+        
+class SimpleRouting(Routing):
+    def route_call(self):
+        raise NotImplementedError()
 
-    def process(self, action, li):  # li is second arg because it is bound
-        #lj = 1 - li
+
+    def start_routing(self, action):
+        try:
+            # No need to clone the ctx for a single outgoing leg
+            outgoing_leg = self.route_call()
+            if not outgoing_leg:
+                raise Exception("Routing failed for an unknown reason!")
+        except Exception as e:
+            self.fail_routing(e)
+        else:
+            self.add_leg(outgoing_leg)
+            outgoing_leg.do(action)
+        
+        
+    def process(self, action, li):  # li is second arg because it is bound TODO: use kwargs?
         type = action["type"]
         logger.debug("Routing %s from leg %d." % (type, li))
 
         if type == "finish":
-            self.legs.pop(li)
+            self.remove_leg(li)
         elif type == "anchor":
-            self.anchor_action(li, action["legs"])
+            self.anchor_routing(li, action["legs"])
         elif type == "dial":
-            self.dial_action(li, action)
+            self.ctx = action["ctx"]
+            self.start_routing(action)  # async friendly way
         elif type == "reject":
             incoming_leg = self.legs[0]
             incoming_leg.do(action)
         else:
             logger.debug("Implicit anchoring")
-            incoming_leg = self.anchor_action(li, [])
+            incoming_leg = self.legs[0]
+            self.anchor_routing(li)
             incoming_leg.do(action)
 
-        if not self.legs:
-            self.finish()
+
+class PlannedSimpleRouting(SimpleRouting):
+    class RoutingPlanner(Planner):
+        pass
+
+            
+    def __init__(self, call, report, incoming_leg, metapoll):
+        super(PlannedSimpleRouting, self).__init__(call, report, incoming_leg)
+        
+        self.metapoll = metapoll
+
+
+    def start_routing(self, action):
+        self.planner = self.RoutingPlanner(
+            self.metapoll,
+            self.plan,
+            finish_handler=WeakMethod(self.routing_finished, action),
+            error_handler=WeakMethod(self.fail_routing)
+        )
+    
+    
+    def routing_finished(self, outgoing_leg, action):
+        self.add_leg(outgoing_leg)
+        outgoing_leg.do(action)
+        
+
+    #def process(self, action, li):
+    #    self.planner.resume(PlannedEvent("action", (li, action)))
+
+
+    def plan(self, planner):
+        raise NotImplementedError()
+        
 
 
 class Call(object):
