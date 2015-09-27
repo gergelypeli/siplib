@@ -336,6 +336,12 @@ class SipLeg(Leg):
                 # TODO: Do we need to block requests here, or can we already send new ones?
                 # Just wait for the ACK for now.
                 return
+            elif type == "reject":
+                status = action["status"]
+                invite_response = dict(status=status)
+                self.send_response(invite_response, self.invite_state.request)
+                self.state = self.DOWN  # The transactions will catch the ACK
+                return
         elif self.state == self.UP:
             if type == "hangup":
                 self.send_request(dict(method="BYE"))

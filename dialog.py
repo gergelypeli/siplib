@@ -189,6 +189,7 @@ class Dialog(object):
         if params["is_response"]:
             raise Error("Not a request!")
 
+        method = params["method"]
         from_nameaddr = params["from"]
         from_tag = from_nameaddr.params["tag"]
         to_nameaddr = params["to"]
@@ -197,6 +198,7 @@ class Dialog(object):
         cseq = params["cseq"]
         peer_contact = first(params["contact"])
 
+        # The same CSeq may arrive with CANCEL
         if self.last_recved_cseq is not None and cseq < self.last_recved_cseq:
             return None
         else:
@@ -209,7 +211,8 @@ class Dialog(object):
             if from_tag != self.remote_nameaddr.params["tag"]:
                 raise Error("Mismatching remote tag!")
 
-            if to_tag != self.local_nameaddr.params["tag"]:
+            # CANCEL-s may have not To tag
+            if to_tag != self.local_nameaddr.params["tag"] and not (method == "CANCEL" and not to_tag):
                 raise Error("Mismatching local tag!")
         else:
             if to_tag:
@@ -313,7 +316,6 @@ class Dialog(object):
             # CANCELs are cloned from the INVITE in the transaction layer
             params = user_params
             params["is_response"] = False
-            
         else:
             # Even 2xx ACKs are in-dialog
             params = self.make_request(user_params, related_params)

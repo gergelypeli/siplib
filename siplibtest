@@ -79,6 +79,17 @@ def sleep(secs, method):
     metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
 
 
+class UnreachableLeg(PlannedLeg):
+    def plan(self, planner):
+        logger.debug("Unreachable created.")
+        
+        action = yield from planner.wait_action("dial")
+        logger.debug("Got dial, but not answering anything.")
+
+        action = yield from planner.wait_action("hangup")
+        logger.debug("And now the caller hung up.")
+
+
 class CalleeLeg(PlannedLeg):
     def plan(self, planner):
         logger.debug("Callee created.")
@@ -110,16 +121,6 @@ class CalleeLeg(PlannedLeg):
     def make_answer(self, offer):
         return offer
 
-
-class UnreachableLeg(PlannedLeg):
-    def plan(self, planner):
-        logger.debug("Unreachable leg created.")
-        
-        yield from planner.suspend(expect="judgement-day")
-        
-        logger.error("Unreachable leg woke up from the dead!")
-        
-        
 
 class CallerLeg(PlannedLeg):
     def plan(self, planner):
@@ -389,9 +390,10 @@ class SwitchB(Switch):
             def route_call(self, ctx):
                 # For the phone call only
                 if ctx["to"].uri.user == PHONE_NUMBER:
-                    logger.debug("Returning CalleeLeg for %s" % PHONE_NUMBER)
-                    #ctx["to"] = Nameaddr(callee_uri)
-                    return CalleeLeg(self.call, metapoll)  # TODO: Call has no metapoll yet
+                    #logger.debug("Returning CalleeLeg for %s" % PHONE_NUMBER)
+                    #return CalleeLeg(self.call, self.switch.metapoll)
+                    logger.debug("Returning UnreachableLeg for %s" % PHONE_NUMBER)
+                    return UnreachableLeg(self.call, self.switch.metapoll)
             
                 # FIXME: is RoutingClass legal here? Not according to pyflakes!
                 return super(RoutingClass, self).route_call(ctx)
@@ -418,54 +420,64 @@ class SwitchB(Switch):
             record_uri=Uri(Addr(A_DOMAIN, None), PHONE_NUMBER),
             contact_uri=Uri(B_ADDR, PHONE_NUMBER)
         )
+
+
+def main():
+    # By using only local variables, they'll be released when exiting this function,
+    # so various __del__ methods will run before interpreter shutdown, when even
+    # logging is disfunctional.
     
-
-setup_exchandler()
-logging.config.dictConfig({
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'default': {
-            #'format': '%(asctime)s.%(msecs)03d  %(name)s  %(levelname)s  %(message)s',
-            'format': '%(name)-10s | %(message)s',
-            'datefmt': '%F %T'
-        }
-    },
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-            'formatter': 'default'
+    setup_exchandler()
+    
+    logging.config.dictConfig({
+        'version': 1,
+        'disable_existing_loggers': False,
+        'formatters': {
+            'default': {
+                #'format': '%(asctime)s.%(msecs)03d  %(name)s  %(levelname)s  %(message)s',
+                'format': '%(name)-10s | %(message)s',
+                'datefmt': '%F %T'
+            }
         },
-        'file': {
-            'class': 'logging.FileHandler',
-            'formatter': 'default',
-            'filename': 'siplibtest.log',
-            'mode': 'w'
-        }
-    },
-    'loggers': {
-        '': {
-            'level': logging.DEBUG,
-            'handlers': [ 'console', 'file' ]
+        'handlers': {
+            'console': {
+                'class': 'logging.StreamHandler',
+                'formatter': 'default'
+            },
+            'file': {
+                'class': 'logging.FileHandler',
+                'formatter': 'default',
+                'filename': 'siplibtest.log',
+                'mode': 'w'
+            }
         },
-        'msgp': {
-            'level': logging.INFO
+        'loggers': {
+            '': {
+                'level': logging.DEBUG,
+                'handlers': [ 'console', 'file' ]
+            },
+            'msgp': {
+                'level': logging.INFO
+            }
         }
-    }
-})
-logging.debug("Hello!")
-metapoll = Metapoll()
+    })
+    logging.debug("Hello!")
 
-mgw = MediaGateway(metapoll, MGW_ADDR)
+    metapoll = Metapoll()
 
-switch_a = SwitchA(Weak(metapoll), A_ADDR, MGC1_ADDR, MGW_ADDR, range(30000, 30020, 2))
-switch_b = SwitchB(Weak(metapoll), B_ADDR, MGC2_ADDR, MGW_ADDR, range(40000, 40020, 2))
+    mgw = MediaGateway(metapoll, MGW_ADDR)
 
-#switch_a.transport.set_peer(switch_b.transport)
-#switch_b.transport.set_peer(switch_a.transport)
+    switch_a = SwitchA(Weak(metapoll), A_ADDR, MGC1_ADDR, MGW_ADDR, range(30000, 30020, 2))
+    switch_b = SwitchB(Weak(metapoll), B_ADDR, MGC2_ADDR, MGW_ADDR, range(40000, 40020, 2))
 
-while True:
-    try:
-        metapoll.do_poll()
-    except KeyboardInterrupt:
-        raise  #break
+    #switch_a.transport.set_peer(switch_b.transport)
+    #switch_b.transport.set_peer(switch_a.transport)
+
+    while True:
+        try:
+            metapoll.do_poll()
+        except KeyboardInterrupt:
+            raise  #break
+
+
+main()

@@ -38,11 +38,11 @@ class Routing(object):
         
         
     def fail_routing(self, exception):  # TODO
-        logger.warning("Routing failed!")
-        self.legs[0].do(dict(type="fail", status=Status(500)))
+        logger.warning("Routing failed: %s" % exception)
+        self.legs[0].do(dict(type="reject", status=Status(500)))
 
 
-    def anchor_routing(self, li, further_legs=[]):  # TODO: rename to done?
+    def anchor_routing(self, li, further_legs):  # TODO: rename to done?
         left = self.legs.pop(0)
         right = self.legs.pop(li)
         
@@ -79,18 +79,29 @@ class SimpleRouting(Routing):
 
         if type == "finish":
             self.remove_leg(li)
-        elif type == "anchor":
-            self.anchor_routing(li, action["legs"])
-        elif type == "dial":
-            self.start_routing(action)  # async friendly way
-        elif type == "reject":
-            incoming_leg = self.legs[0]
-            incoming_leg.do(action)
+        elif li == 0:
+            if type == "dial":
+                self.start_routing(action)  # async friendly way
+            elif type == "hangup":
+                outgoing_leg = self.legs[1]
+                outgoing_leg.do(action)
+            else:
+                raise Exception("Invalid action from incoming leg: %s" % type)
         else:
-            logger.debug("Implicit anchoring")
-            incoming_leg = self.legs[0]
-            self.anchor_routing(li)
-            incoming_leg.do(action)
+            if type == "anchor":
+                self.anchor_routing(li, action["legs"])
+            elif type == "reject":
+                incoming_leg = self.legs[0]
+                incoming_leg.do(action)
+            else:
+                # Any positive feedback from outgoing legs can be anchored,
+                # because it means that that leg is also anchored itself.
+                # But can't just anchor right after routing, because the
+                # outgoing leg may still be thinking.
+                logger.debug("Implicit anchoring")
+                incoming_leg = self.legs[0]
+                self.anchor_routing(li, [])
+                incoming_leg.do(action)
 
 
 class PlannedSimpleRouting(SimpleRouting):

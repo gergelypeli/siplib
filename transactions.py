@@ -320,10 +320,10 @@ class InviteClientTransaction(PlainClientTransaction):
         if self.state == self.TRANSMITTING:  # TODO: do we still need explicit timeout response?
             self.report_response(make_timeout_response(self.outgoing_msg), self.outgoing_msg)  # nothing at all
         elif self.state == self.LINGERING:
-            # expired only after a provisional response, or after sending an ACK
-            got_final = max([ max(him.statuses) for him in self.bastards.values() ]) >= 200
+            # FIXME: don't reuse the LINGERING state after sending an ACK!
+            sent_ack = any(him.ack for him in self.bastards.values())
 
-            if not got_final:
+            if not sent_ack:
                 self.report_response(make_timeout_response(self.outgoing_msg), self.outgoing_msg)
         else:
             raise Error("Invite client expired while %s!" % self.state)
@@ -568,6 +568,9 @@ class TransactionManager(object):
             # TODO: shouldn't send CANCEL before provisional response
             cancel_params = request_params.copy()
             cancel_params["method"] = "CANCEL"
+            cancel_params["via"] = None  # ClientTransaction is a bit sensitive for this
+            cancel_params["authorization"] = None
+            cancel_params["sdp"] = None
         
             tr.send(cancel_params)
         elif method == "INVITE":
