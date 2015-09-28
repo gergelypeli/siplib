@@ -81,13 +81,25 @@ def sleep(secs, method):
 
 class UnreachableLeg(PlannedLeg):
     def plan(self, planner):
-        logger.debug("Unreachable created.")
+        logger.debug("Unreachable leg created.")
         
         action = yield from planner.wait_action("dial")
         logger.debug("Got dial, but not answering anything.")
 
         action = yield from planner.wait_action("hangup")
         logger.debug("And now the caller hung up.")
+
+
+class RejectingLeg(PlannedLeg):
+    def plan(self, planner):
+        logger.debug("Rejecting leg created.")
+        
+        action = yield from planner.wait_action("dial")
+        logger.debug("Got dial, but not now rejecting it.")
+
+        self.report(dict(type="reject", status=Status(603)))
+
+        logger.debug("And now done.")
 
 
 class CalleeLeg(PlannedLeg):
@@ -392,8 +404,10 @@ class SwitchB(Switch):
                 if ctx["to"].uri.user == PHONE_NUMBER:
                     #logger.debug("Returning CalleeLeg for %s" % PHONE_NUMBER)
                     #return CalleeLeg(self.call, self.switch.metapoll)
-                    logger.debug("Returning UnreachableLeg for %s" % PHONE_NUMBER)
-                    return UnreachableLeg(self.call, self.switch.metapoll)
+                    #logger.debug("Returning UnreachableLeg for %s" % PHONE_NUMBER)
+                    #return UnreachableLeg(self.call, self.switch.metapoll)
+                    logger.debug("Returning RejectingLeg for %s" % PHONE_NUMBER)
+                    return RejectingLeg(self.call, self.switch.metapoll)
             
                 # FIXME: is RoutingClass legal here? Not according to pyflakes!
                 return super(RoutingClass, self).route_call(ctx)

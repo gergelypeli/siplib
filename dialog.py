@@ -196,7 +196,6 @@ class Dialog(object):
         to_tag = to_nameaddr.params.get("tag")
         call_id = params["call_id"]
         cseq = params["cseq"]
-        peer_contact = first(params["contact"])
 
         # The same CSeq may arrive with CANCEL
         if self.last_recved_cseq is not None and cseq < self.last_recved_cseq:
@@ -214,14 +213,16 @@ class Dialog(object):
             # CANCEL-s may have not To tag
             if to_tag != self.local_nameaddr.params["tag"] and not (method == "CANCEL" and not to_tag):
                 raise Error("Mismatching local tag!")
+                
+            # TODO: 12.2 only re-INVITE-s modify the peer_contact, and nothing the route set
+            peer_contact = first(params.get("contact"))
+            if peer_contact:
+                self.peer_contact = peer_contact
         else:
             if to_tag:
                 raise Error("Unexpected to tag!")
 
             self.setup_incoming(params)
-
-        if peer_contact:
-            self.peer_contact = peer_contact
 
         self.take_sdp(params)
 
@@ -254,33 +255,33 @@ class Dialog(object):
 
     def take_response(self, params, related_request):
         status = params["status"]
-        
         from_nameaddr = params["from"]
         from_tag = from_nameaddr.params["tag"]
         to_nameaddr = params["to"]
         to_tag = to_nameaddr.params.get("tag")
         call_id = params["call_id"]
-        peer_contact = first(params["contact"])
 
-        if from_nameaddr != self.local_nameaddr:
-            raise Error("Mismatching recipient, from %s, local %s!" % (from_nameaddr, self.local_nameaddr))
+        if call_id != self.call_id:
+            raise Error("Mismatching call id!")
 
-        if self.is_established():
-            if call_id != self.call_id:
-                raise Error("Mismatching call id!")
+        if from_tag != self.local_nameaddr.params["tag"]:
+            raise Error("Mismatching local tag!")
 
-            if from_tag != self.local_nameaddr.params["tag"]:
-                raise Error("Mismatching local tag!")
+        if self.is_established() and to_tag != self.remote_nameaddr.params["tag"]:
+            raise Error("Mismatching remote tag!")
 
-            if to_tag != self.remote_nameaddr.params["tag"]:
-                raise Error("Mismatching remote tag!")
-        elif status.code < 300 and to_tag:
+        if status.code < 300 and to_tag:
             # Failure responses don't establish a dialog (including 401/407).
             # Also, provisional responses may not have a to tag.
-            
-            self.setup_outgoing2(params)
-            
-        if status.code == 401:
+
+            if not self.is_established():
+                self.setup_outgoing2(params)
+            else:
+                # TODO: 12.2 only re-INVITE-s modify the peer_contact, and nothing the route set
+                peer_contact = first(params.get("contact"))
+                if peer_contact:
+                    self.peer_contact = peer_contact
+        elif status.code == 401:
             # Let's try authentication! TODO: 407, too!
             auth = self.dialog_manager.provide_auth(params, related_request)
                 
@@ -298,9 +299,6 @@ class Dialog(object):
                 return None
             else:
                 logger.debug("Couldn't authorize, being rejected!")
-
-        if peer_contact:
-            self.peer_contact = peer_contact
 
         self.take_sdp(params)
 

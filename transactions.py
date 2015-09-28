@@ -102,7 +102,7 @@ class Transaction(object):
             self.retransmit_interval = self.T1
             self.expiration_deadline = datetime.datetime.now() + self.TP
         elif self.state == self.PROVISIONING:
-            self.retransmit_interval = self.TP
+            self.retransmit_interval = self.TP * 0.9
             self.expiration_deadline = None
         elif self.state == self.LINGERING:
             self.retransmit_interval = None

@@ -28,8 +28,20 @@ class Status(collections.namedtuple("Status", [ "code", "reason" ])):
         404: "Not Found",
         408: "Request Timeout",
         481: "Transaction Does Not Exist",
+        482: "Loop Detected",
+        483: "Too Many Hops",
+        486: "Busy Here",
         487: "Request Terminated",
-        500: "Internal Error"
+        488: "Not Acceptable Here",
+        491: "Request Pending",
+        500: "Internal Error",
+        501: "Not Implemented",
+        503: "Service Unavailable",
+        504: "Server Timeout",
+        600: "Busy Everywhere",
+        603: "Decline",
+        604: "Does Not Exist Anywhere",
+        606: "Not Acceptable"
     }
     
     def __new__(cls, code, reason=None):

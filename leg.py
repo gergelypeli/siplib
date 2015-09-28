@@ -182,6 +182,11 @@ class SipLeg(Leg):
         self.dialog.set_report(WeakMethod(self.process))
 
 
+    def change_state(self, new_state):
+        logger.debug("Changing state %s => %s" % (self.state, new_state))
+        self.state = new_state
+        
+
     def send_request(self, request, related=None):
         self.dialog.send_request(request, related)
 
@@ -292,7 +297,7 @@ class SipLeg(Leg):
                 invite_request = dict(method="INVITE", sdp=offer)
                 self.send_request(invite_request)  # Will be extended!
                 self.invite_state = InviteState(invite_request)
-                self.state = self.DIALING_OUT
+                self.change_state(self.DIALING_OUT)
                 return
             else:
                 logger.debug("Ignoring %s, already down." % type)
@@ -300,7 +305,7 @@ class SipLeg(Leg):
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
             if type == "hangup":
                 self.send_request(dict(method="CANCEL"), self.invite_state.request)
-                self.state = self.DISCONNECTING_OUT
+                self.change_state(self.DISCONNECTING_OUT)
                 return
         elif self.state in (self.DIALING_OUT_ANSWERED,):  # TODO: into InviteState?
             if type == "session":
@@ -309,7 +314,7 @@ class SipLeg(Leg):
                     raise Error("Answer expected in ACK!")
                     
                 self.send_request(dict(method="ACK", sdp=answer), self.invite_state.final_response)
-                self.state = self.UP
+                self.change_state(self.UP)
                 return
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
             if self.invite_state.responded_session:
@@ -322,7 +327,7 @@ class SipLeg(Leg):
             if type == "ring":
                 invite_response = dict(status=Status(180, "Ringing"), sdp=sdp)
                 self.send_response(invite_response, self.invite_state.request)
-                self.state = self.DIALING_IN_RINGING
+                self.change_state(self.DIALING_IN_RINGING)
                 return
             elif type == "session":
                 status = Status(180, "Ringing") if self.state == self.DIALING_IN_RINGING else Status(183, "Session Progress")
@@ -332,7 +337,7 @@ class SipLeg(Leg):
             elif type == "accept":
                 invite_response = dict(status=Status(200, "OK"), sdp=sdp)
                 self.send_response(invite_response, self.invite_state.request)
-                self.state = self.DIALING_IN_ANSWERED  # TODO: into InviteState?
+                self.change_state(self.DIALING_IN_ANSWERED)  # TODO: into InviteState?
                 # TODO: Do we need to block requests here, or can we already send new ones?
                 # Just wait for the ACK for now.
                 return
@@ -340,12 +345,13 @@ class SipLeg(Leg):
                 status = action["status"]
                 invite_response = dict(status=status)
                 self.send_response(invite_response, self.invite_state.request)
-                self.state = self.DOWN  # The transactions will catch the ACK
+                self.change_state(self.DOWN)  # The transactions will catch the ACK
+                self.finish()
                 return
         elif self.state == self.UP:
             if type == "hangup":
                 self.send_request(dict(method="BYE"))
-                self.state = self.DISCONNECTING_OUT
+                self.change_state(self.DISCONNECTING_OUT)
                 return
                 
         raise Error("Weirdness!")
@@ -356,6 +362,9 @@ class SipLeg(Leg):
         method = msg["method"]
         status = msg.get("status")
         sdp = msg.get("sdp")
+        
+        # Note: must change state before report, because that can generate
+        # a reverse action which should only be processed with the new state!
         
         if self.state == self.DOWN:
             if not is_response and method == "INVITE":
@@ -369,16 +378,17 @@ class SipLeg(Leg):
                     offer = self.process_incoming_offer(offer)  # TODO: session query?
                     
                 self.invite_state = InviteState(msg)
+                self.change_state(self.DIALING_IN)
                 self.report(dict(type="dial", ctx=self.ctx, offer=offer))
-                self.state = self.DIALING_IN
                 return
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
             if not is_response and method == "CANCEL":
-                self.report(dict(type="hangup"))
                 self.send_response(dict(status=Status(487, "Request Terminated")), self.invite_state.request)
                 self.send_response(dict(status=Status(200, "OK")), msg)
+                
                 self.invite_state = None
-                self.state = self.DOWN
+                self.change_state(self.DOWN)
+                self.report(dict(type="hangup"))
                 self.finish()
                 return
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
@@ -396,19 +406,20 @@ class SipLeg(Leg):
                     self.invite_state.responded_session = sdp  # just to ignore any further
                     
                 if status.code == 180:
+                    self.change_state(self.DIALING_OUT_RINGING)
+                    
                     if self.state == self.DIALING_OUT:
                         self.report(dict(type="ring", offer=offer, answer=answer))
                     elif offer or answer:
                         self.report(dict(type="session", offer=offer, answer=answer))
-                    self.state = self.DIALING_OUT_RINGING
                     return
                 elif status.code == 183:
                     if offer or answer:
                         self.report(dict(type="session", offer=offer, answer=answer))
                     return
                 elif status.code >= 300:
+                    self.change_state(self.DOWN)
                     self.report(dict(type="reject", status=status))
-                    self.state = self.DOWN
                     # ACKed by tr
                     self.finish()
                     return
@@ -416,12 +427,12 @@ class SipLeg(Leg):
                     if self.invite_state.had_offer_in_request:
                         # send ACK without SDP now
                         self.send_request(dict(method="ACK"), msg)
-                        self.state = self.UP
+                        self.change_state(self.UP)
                     else:
                         # wait for outgoing session for the ACK
                         # beware, the report() below may send it!
                         self.invite_state.final_response = msg
-                        self.state = self.DIALING_OUT_ANSWERED
+                        self.change_state(self.DIALING_OUT_ANSWERED)
                         
                     self.report(dict(type="accept", offer=offer, answer=answer))
                     return
@@ -437,35 +448,37 @@ class SipLeg(Leg):
                         logger.debug("Unexpected sessionless ACK!")
                     else:
                         answer = self.process_incoming_answer(sdp)
-                        self.report(dict(type="session", answer=answer))
                     
                 # Stop the retransmission of the final answer
                 self.send_response(make_virtual_response(), self.invite_state.request)
                 # Let the ACK server transaction expire
                 self.send_response(make_virtual_response(), msg)
+                
                 self.invite_state = None
-                self.state = self.UP
+                self.change_state(self.UP)
+                if answer:
+                    self.report(dict(type="session", answer=answer))
                 return
             elif not is_response and method == "NAK":  # virtual request, no ACK received
                 self.send_request(dict(method="BYE"))  # required behavior
-                self.state = self.DISCONNECTING_OUT
+                self.change_state(self.DISCONNECTING_OUT)
                 return
         elif self.state == self.UP:
             if not is_response and method == "BYE":
-                self.report(dict(type="hangup"))
                 self.send_response(dict(status=Status(200, "OK")), msg)
-                self.state = self.DOWN
+                self.change_state(self.DOWN)
+                self.report(dict(type="hangup"))
                 self.finish()
                 return
         elif self.state == self.DISCONNECTING_OUT:
             if is_response and method == "BYE":
-                self.state = self.DOWN
+                self.change_state(self.DOWN)
                 self.finish()
                 return
             elif is_response and method == "INVITE":
                 logger.debug("Got cancelled invite response: %s" % (status,))
                 # This was ACKed by the transaction layer
-                self.state = self.DOWN
+                self.change_state(self.DOWN)
                 self.finish()
                 return
             elif is_response and method == "CANCEL":
