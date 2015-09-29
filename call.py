@@ -8,22 +8,27 @@ logger = logging.getLogger(__name__)
 
 
 class Routing(object):
-    def __init__(self, call, report, incoming_leg):
+    def __init__(self, call, report):
         # The report handler is for the finish and anchor events.
         # Both may be forwarded by an owning internal leg,
         # or be processed by the owning Call.
         
         self.call = call
         self.report = report
+        self.oid = "routing=x"
         self.legs = {}
-        self.add_leg(incoming_leg)
 
 
+    def set_oid(self, oid):
+        self.oid = oid
+        
+        
     def add_leg(self, leg):
         li = max(self.legs.keys()) + 1 if self.legs else 0
 
         self.legs[li] = leg
         leg.set_report(WeakMethod(self.process, li))
+        leg.set_oid("%s/leg=%d" % (self.oid, li))
 
 
     def remove_leg(self, li):
@@ -109,8 +114,8 @@ class PlannedSimpleRouting(SimpleRouting):
         pass
 
             
-    def __init__(self, call, report, incoming_leg, metapoll):
-        super(PlannedSimpleRouting, self).__init__(call, report, incoming_leg)
+    def __init__(self, call, report, metapoll):
+        super(PlannedSimpleRouting, self).__init__(call, report)
         
         self.metapoll = metapoll
 
@@ -146,14 +151,21 @@ class Call(object):
         self.legs = None
         self.media_channels = None
         self.routing = None
+        self.oid = "call=x"
+
+
+    def set_oid(self, oid):
+        self.oid = oid
         
         
-    def make_routing(self, incoming_leg):
-        return Routing(Weak(self), WeakMethod(self.routed), incoming_leg)
+    def make_routing(self):
+        return Routing(Weak(self), WeakMethod(self.routed))
         
         
     def start_routing(self, incoming_leg):
-        self.routing = self.make_routing(incoming_leg)  # just to be sure it's stored
+        self.routing = self.make_routing()  # just to be sure it's stored
+        self.routing.set_oid("%s/routing=0" % self.oid)
+        self.routing.add_leg(incoming_leg)
         
         
     def routed(self, action):

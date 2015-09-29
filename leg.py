@@ -17,16 +17,18 @@ class Leg(object):
         self.report = None
         self.ctx = {}
         self.media_legs = []
+        self.logger = logging.LoggerAdapter(logger, {})
     
     
-    #def make_media_leg(self, sdp_channel):
-    #    raise NotImplementedError()
+    def set_oid(self, oid):
+        # FIXME: nasty!
+        self.logger.extra['oid'] = oid
         
-    
+
     def set_report(self, report):
         self.report = report
         
-    
+        
     def do(self, action):
         raise NotImplementedError()
 
@@ -34,12 +36,12 @@ class Leg(object):
     # TODO: these are duplicated from Call/MediaChannel
     def finish(self):
         if any(self.media_legs):
-            logger.debug("Deleting media legs.")
+            self.logger.debug("Deleting media legs.")
             for i, ml in enumerate(self.media_legs):
                 if ml:
                     ml.delete(WeakMethod(self.media_deleted, i))
         else:
-            logger.debug("Leg is finished.")
+            self.logger.debug("Leg is finished.")
             self.report(dict(type="finish"))
             
             
@@ -47,7 +49,7 @@ class Leg(object):
         self.media_legs[li] = None
         
         if not any(self.media_legs):
-            logger.debug("Leg is finished.")
+            self.logger.debug("Leg is finished.")
             self.report(dict(type="finish"))
 
     
@@ -183,7 +185,7 @@ class SipLeg(Leg):
 
 
     def change_state(self, new_state):
-        logger.debug("Changing state %s => %s" % (self.state, new_state))
+        self.logger.debug("Changing state %s => %s" % (self.state, new_state))
         self.state = new_state
         
 
@@ -300,7 +302,7 @@ class SipLeg(Leg):
                 self.change_state(self.DIALING_OUT)
                 return
             else:
-                logger.debug("Ignoring %s, already down." % type)
+                self.logger.debug("Ignoring %s, already down." % type)
                 return
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
             if type == "hangup":
@@ -442,10 +444,10 @@ class SipLeg(Leg):
                 
                 if self.invite_state.had_offer_in_request:
                     if sdp and sdp.is_session():
-                        logger.debug("Unexpected session in ACK!")
+                        self.logger.debug("Unexpected session in ACK!")
                 else:
                     if not (sdp and sdp.is_session()):
-                        logger.debug("Unexpected sessionless ACK!")
+                        self.logger.debug("Unexpected sessionless ACK!")
                     else:
                         answer = self.process_incoming_answer(sdp)
                     
@@ -476,13 +478,13 @@ class SipLeg(Leg):
                 self.finish()
                 return
             elif is_response and method == "INVITE":
-                logger.debug("Got cancelled invite response: %s" % (status,))
+                self.logger.debug("Got cancelled invite response: %s" % (status,))
                 # This was ACKed by the transaction layer
                 self.change_state(self.DOWN)
                 self.finish()
                 return
             elif is_response and method == "CANCEL":
-                logger.debug("Got cancel response: %s" % (status,))
+                self.logger.debug("Got cancel response: %s" % (status,))
                 return
                 
         raise Error("Weirdness!")
@@ -513,7 +515,7 @@ class PlannedLeg(Leg):
 
     def plan_finished(self, result):
         if result is not None:
-            logger.error("Plan return value ignored!")
+            self.logger.error("Plan return value ignored!")
             
         self.finish()
         

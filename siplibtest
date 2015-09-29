@@ -186,8 +186,8 @@ class TestController(Controller):
         
     
 class TestRouting(SimpleRouting):
-    def __init__(self, switch, call, report, incoming_leg):
-        super(TestRouting, self).__init__(call, report, incoming_leg)
+    def __init__(self, switch, call, report):
+        super(TestRouting, self).__init__(call, report)
         self.switch = switch
         
 
@@ -217,8 +217,8 @@ class TestCall(Call):
         self.switch = switch
 
 
-    def make_routing(self, incoming_leg):
-        return self.RoutingClass(self.switch, Weak(self), WeakMethod(self.routed), incoming_leg)
+    def make_routing(self):
+        return self.RoutingClass(self.switch, Weak(self), WeakMethod(self.routed))
     
 
 class Switch(object):
@@ -245,8 +245,13 @@ class Switch(object):
         self.account_manager = AccountManager()
 
         self.calls = []  # TODO: make it a dict with call identifiers!
+        self.oid = "switch=x"
 
         metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
+
+
+    def set_oid(self, oid):
+        self.oid = oid
 
 
     def authing(self, response, request):
@@ -272,6 +277,7 @@ class Switch(object):
         
     def start_call(self, params):  # TODO: params unused
         call = self.make_call()
+        call.set_oid("%s/call=%d" % (self.oid, len(self.calls)))
         self.calls.append(call)
 
         incoming_dialog = Dialog(Weak(self.dialog_manager))
@@ -443,24 +449,47 @@ def main():
     
     setup_exchandler()
     
+    class OidLogFilter(logging.Filter):
+        def filter(self, record):
+            if not hasattr(record, 'oid'):
+                record.oid = record.name
+            
+            #if "/" in record.oid:
+                #record.oid = ".".join(
+                #    x[:1] if not x.isdigit() else x for x in record.oid.split(".")
+                #)
+            #    record.oid = "/".join(
+            #        "%s=%s" % (k[:1], v) for k, v in (x.split("=") for x in record.oid.split("/"))
+            #    )
+            
+            return True
+    
     logging.config.dictConfig({
         'version': 1,
         'disable_existing_loggers': False,
         'formatters': {
             'default': {
                 #'format': '%(asctime)s.%(msecs)03d  %(name)s  %(levelname)s  %(message)s',
-                'format': '%(name)-10s | %(message)s',
+                #'format': '%(name)-10s | %(message)s',
+                'format': '%(oid)s | %(message)s',
                 'datefmt': '%F %T'
+            }
+        },
+        'filters': {
+            'oidfilter': {
+                '()': OidLogFilter
             }
         },
         'handlers': {
             'console': {
                 'class': 'logging.StreamHandler',
-                'formatter': 'default'
+                'formatter': 'default',
+                'filters': [ 'oidfilter' ]
             },
             'file': {
                 'class': 'logging.FileHandler',
                 'formatter': 'default',
+                'filters': [ 'oidfilter' ],
                 'filename': 'siplibtest.log',
                 'mode': 'w'
             }
@@ -482,7 +511,10 @@ def main():
     mgw = MediaGateway(metapoll, MGW_ADDR)
 
     switch_a = SwitchA(Weak(metapoll), A_ADDR, MGC1_ADDR, MGW_ADDR, range(30000, 30020, 2))
+    switch_a.set_oid("switch=a")
+    
     switch_b = SwitchB(Weak(metapoll), B_ADDR, MGC2_ADDR, MGW_ADDR, range(40000, 40020, 2))
+    switch_b.set_oid("switch=b")
 
     #switch_a.transport.set_peer(switch_b.transport)
     #switch_b.transport.set_peer(switch_a.transport)
