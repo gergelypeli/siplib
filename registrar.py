@@ -3,14 +3,15 @@ from __future__ import print_function, unicode_literals, absolute_import
 import uuid
 import datetime
 import collections
-import logging
+#import logging
 
 from format import Nameaddr, Status
 from async import WeakMethod, Weak
 from transactions import make_simple_response
+from util import Logger
 
 MAXFWD = 50
-logger = logging.getLogger(__name__)
+#logger = logging.getLogger(__name__)
 
 
 class Error(Exception):
@@ -70,7 +71,7 @@ class Record(object):
             hop = params["hop"]
             
             self.contacts_by_uri[uri] = RecordContact(expiration, hop)
-            logger.debug("Registered %s to %s via %s until %s." % (uri, self.record_uri, hop, expiration))
+            self.record_manager.logger.debug("Registered %s to %s via %s until %s." % (uri, self.record_uri, hop, expiration))
         
         contact = []
         for uri, c in self.contacts_by_uri.items():
@@ -112,7 +113,7 @@ class Record(object):
 
 
     def send_response(self, user_params, related_request):
-        #logger.debug("Will send response: %s" % str(user_params))
+        #self.logger.debug("Will send response: %s" % str(user_params))
         params = self.make_response(user_params, related_request)
         self.record_manager.transmit(params, related_request)
         
@@ -127,6 +128,11 @@ class RecordManager(object):
     def __init__(self, transmission):
         self.transmission = transmission
         self.records_by_uri = {}
+        self.logger = Logger()
+        
+        
+    def set_oid(self, oid):
+        self.logger.set_oid(oid)
         
         
     def reject_request(self, msg, status):
@@ -156,9 +162,9 @@ class RecordManager(object):
             
         record = self.records_by_uri.get(record_uri)
         if record:
-            logger.debug("Found record: '%s'" % (record_uri,))
+            self.logger.debug("Found record: '%s'" % (record_uri,))
         else:
-            logger.debug("Created record: %s" % (record_uri,))
+            self.logger.debug("Created record: %s" % (record_uri,))
             record = Record(Weak(self), record_uri)
             self.records_by_uri[record_uri] = record
         
@@ -173,10 +179,10 @@ class RecordManager(object):
         record = self.records_by_uri.get(record_uri)
         
         if record:
-            logger.debug("Found contact URIs for '%s'" % (record_uri,))
+            self.logger.debug("Found contact URIs for '%s'" % (record_uri,))
             return record.get_contact_uris()
         else:
-            #logger.debug("Not found contact URIs: %s" % (record_uri,))
+            #self.logger.debug("Not found contact URIs: %s" % (record_uri,))
             return []
 
 
@@ -184,10 +190,10 @@ class RecordManager(object):
         record = self.records_by_uri.get(record_uri)
         
         if record:
-            logger.debug("Found contact hops for '%s'" % (record_uri,))
+            self.logger.debug("Found contact hops for '%s'" % (record_uri,))
             return record.get_contact_hops()
         else:
-            #logger.debug("Not found contact hops: %s" % (record_uri,))
+            #self.logger.debug("Not found contact hops: %s" % (record_uri,))
             return []
 
 
@@ -228,7 +234,7 @@ class Registration(object):
             
             total.append((uri, seconds_left))
 
-        logger.debug("Registration total: %s" % total)
+        self.registration_manager.logger.debug("Registration total: %s" % total)
         # TODO: reschedule!
         
         
@@ -264,12 +270,12 @@ class Registration(object):
                 related_request.update(user_params)
                 related_request.update(auth)
                 
-                logger.debug("Trying authorization...")
+                self.registration_manager.logger.debug("Trying authorization...")
                 #print("... with: %s" % related_request)
                 self.send_request(related_request)
                 return None
             else:
-                logger.debug("Couldn't authorize, being rejected!")
+                self.registration_manager.logger.debug("Couldn't authorize, being rejected!")
 
         return params
 
@@ -291,6 +297,11 @@ class RegistrationManager(object):
         self.hopping = hopping
         self.authing = authing
         self.registrations_by_id = {}
+        self.logger = Logger()
+        
+        
+    def set_oid(self, oid):
+        self.logger.set_oid(oid)
         
         
     def get_hop(self, uri):

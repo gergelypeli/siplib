@@ -16,7 +16,7 @@ from sdp import Sdp
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
 from account import Account, AccountManager
-from util import resolve, setup_exchandler
+from util import resolve, setup_exchandler, build_oid, Logger
 from mgw import MediaGateway
 from mgc import Controller, PlayerMediaLeg
 
@@ -72,43 +72,39 @@ MGC2_ADDR = Addr(MGC2_HOST, 20002)
 
 MEDIA_HOST = "otthon"
 
-logger = logging.getLogger()
-
-
-def sleep(secs, method):
-    metapoll.register_timeout(timedelta(seconds=secs), WeakMethod(method))
+#logger = logging.getLogger()
 
 
 class UnreachableLeg(PlannedLeg):
     def plan(self, planner):
-        logger.debug("Unreachable leg created.")
+        self.logger.debug("Unreachable leg created.")
         
         action = yield from planner.wait_action("dial")
-        logger.debug("Got dial, but not answering anything.")
+        self.logger.debug("Got dial, but not answering anything.")
 
         action = yield from planner.wait_action("hangup")
-        logger.debug("And now the caller hung up.")
+        self.logger.debug("And now the caller hung up.")
 
 
 class RejectingLeg(PlannedLeg):
     def plan(self, planner):
-        logger.debug("Rejecting leg created.")
+        self.logger.debug("Rejecting leg created.")
         
         action = yield from planner.wait_action("dial")
-        logger.debug("Got dial, but not now rejecting it.")
+        self.logger.debug("Got dial, but not now rejecting it.")
 
         self.report(dict(type="reject", status=Status(603)))
 
-        logger.debug("And now done.")
+        self.logger.debug("And now done.")
 
 
 class CalleeLeg(PlannedLeg):
     def plan(self, planner):
-        logger.debug("Callee created.")
+        self.logger.debug("Callee created.")
         
         action = yield from planner.wait_action("dial")
         self.offer = action.get("offer")
-        logger.debug("Got offer:\n%s" % repr(self.offer))
+        self.logger.debug("Got offer:\n%s" % repr(self.offer))
         
         yield from planner.sleep(1)
         self.report(dict(type="ring"))
@@ -127,7 +123,7 @@ class CalleeLeg(PlannedLeg):
         yield from planner.sleep(3)
         self.report(dict(type="hangup"))
 
-        logger.debug("Callee done.")
+        self.logger.debug("Callee done.")
         
 
     def make_answer(self, offer):
@@ -136,7 +132,7 @@ class CalleeLeg(PlannedLeg):
 
 class CallerLeg(PlannedLeg):
     def plan(self, planner):
-        logger.debug("Caller created")
+        self.logger.debug("Caller created")
         
         yield from planner.sleep(0)
         self.ctx["from"] = CALLER_NAMEADDR
@@ -144,12 +140,12 @@ class CallerLeg(PlannedLeg):
         self.report(dict(type="dial", ctx=self.ctx, offer=CALLER_SDP))
 
         action = yield from planner.wait_action("accept")
-        logger.debug("Accepted with SDP:\n%s" % repr(action.get("answer")))
+        self.logger.debug("Accepted with SDP:\n%s" % repr(action.get("answer")))
 
         action = yield from planner.expect("action")
         assert action["type"] == "hangup"
         
-        logger.debug("Caller done.")
+        self.logger.debug("Caller done.")
         #yield from planner.sleep(3)
         #self.leg.do(dict(type="hangup"))
 
@@ -193,7 +189,7 @@ class TestRouting(SimpleRouting):
 
     def route_call(self, ctx):
         to_uri = ctx["to"].uri
-        logger.debug("Checking registered SIP contact: %s" % (to_uri,))
+        self.logger.debug("Checking registered SIP contact: %s" % (to_uri,))
         contacts = self.switch.record_manager.lookup_contact_uris(to_uri)
             
         if len(contacts) == 1:
@@ -205,7 +201,7 @@ class TestRouting(SimpleRouting):
             outgoing_leg = SipLeg(self.call, outgoing_dialog)
             return outgoing_leg
         else:
-            logger.debug("Not one registered SIP contact: %s" % (to_uri,))
+            self.logger.debug("Not one registered SIP contact: %s" % (to_uri,))
             raise Exception("Routing failed!")
 
 
@@ -244,14 +240,23 @@ class Switch(object):
         self.mgc = TestController(metapoll, mgc_addr, mgw_addr, media_ports)
         self.account_manager = AccountManager()
 
-        self.calls = []  # TODO: make it a dict with call identifiers!
-        self.oid = "switch=x"
+        self.calls_by_oid = {}
+        self.call_count = 0
+        
+        self.logger = Logger()
 
         metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
 
 
     def set_oid(self, oid):
         self.oid = oid
+        self.logger.set_oid(oid)
+        self.authority.set_oid(build_oid(oid, "authority"))
+        self.record_manager.set_oid(build_oid(oid, "recman"))
+        self.registration_manager.set_oid(build_oid(oid, "regman"))
+        self.transport.set_oid(build_oid(oid, "transport"))
+        self.dialog_manager.set_oid(build_oid(oid, "diaman"))
+        self.mgc.set_oid(build_oid(oid, "mgc"))
 
 
     def authing(self, response, request):
@@ -277,8 +282,12 @@ class Switch(object):
         
     def start_call(self, params):  # TODO: params unused
         call = self.make_call()
-        call.set_oid("%s/call=%d" % (self.oid, len(self.calls)))
-        self.calls.append(call)
+        
+        oid = build_oid(self.oid, "call", self.call_count)
+        self.call_count += 1
+        call.set_oid(oid)
+        
+        self.calls_by_oid[oid] = call
 
         incoming_dialog = Dialog(Weak(self.dialog_manager))
         incoming_leg = SipLeg(call, incoming_dialog)
@@ -287,12 +296,12 @@ class Switch(object):
         return WeakMethod(incoming_dialog.recv_request)
     
 
-    def finish_call(self, call):
-        # TODO: Call should be smarter!
+    def finish_call(self, oid):
+        # TODO: Call should be smarter! Hm, are we now?
         
         def ugly_delayed_finish():
-            logger.debug("Finishing call")
-            self.calls.remove(call)
+            self.logger.debug("Finishing call")
+            self.calls_by_oid.pop(oid)
             
         self.metapoll.register_timeout(timedelta(seconds=1), ugly_delayed_finish)
         
@@ -312,29 +321,29 @@ class Switch(object):
         
         if method in ("CANCEL", "ACK"):
             must_auth = False
-            logger.debug("Accepting request because it can't be authenticated anyway")
+            self.logger.debug("Accepting request because it can't be authenticated anyway")
         elif not auth_policy:
-            logger.debug("Rejecting request because account is unknown")
+            self.logger.debug("Rejecting request because account is unknown")
             return WeakMethod(self.reject_request, Status(403, "Forbidden"))
         elif auth_policy == Account.AUTH_NEVER:
             must_auth = False
-            logger.debug("Accepting request because authentication is never needed")
+            self.logger.debug("Accepting request because authentication is never needed")
         elif auth_policy == Account.AUTH_ALWAYS:
             must_auth = True
-            logger.debug("Challenging request because authentication is always needed")
+            self.logger.debug("Challenging request because authentication is always needed")
         elif auth_policy == Account.AUTH_IF_UNREGISTERED:
             must_auth = (hop not in self.record_manager.lookup_contact_hops(from_uri))
             if must_auth:
-                logger.debug("Challenging request because account is not registered")
+                self.logger.debug("Challenging request because account is not registered")
             else:
-                logger.debug("Accepting request because account is registered")
+                self.logger.debug("Accepting request because account is registered")
         elif auth_policy == Account.AUTH_BY_ADDRESS:
             if hop not in self.record_manager.lookup_contact_hops(from_uri):
-                logger.debug("Rejecting request because hop address is not allowed")
+                self.logger.debug("Rejecting request because hop address is not allowed")
                 return WeakMethod(self.reject_request, Status(403, "Forbidden"))
             else:
                 must_auth = False
-                logger.debug("Accepting request because hop address is allowed")
+                self.logger.debug("Accepting request because hop address is allowed")
         else:
             raise Exception("WTF?")
 
@@ -343,10 +352,10 @@ class Switch(object):
             challenge = self.authority.require_auth(params, creds)
             
             if challenge:
-                logger.debug("Rejecting request without proper authentication")
+                self.logger.debug("Rejecting request without proper authentication")
                 return WeakMethod(self.challenge_request, challenge)
             else:
-                logger.debug("Accepting request with proper authentication")
+                self.logger.debug("Accepting request with proper authentication")
 
         if method == "REGISTER":
             # If the From URI was OK, then the To URI is as well, because
@@ -394,7 +403,7 @@ class SwitchA(Switch):
         
         
     def test_dialing(self):
-        logger.debug("Dialing begins.")
+        self.logger.debug("Dialing begins.")
 
         #incoming_leg = CallerLeg()
         #self.start_call(incoming_leg)
@@ -408,12 +417,12 @@ class SwitchB(Switch):
             def route_call(self, ctx):
                 # For the phone call only
                 if ctx["to"].uri.user == PHONE_NUMBER:
-                    #logger.debug("Returning CalleeLeg for %s" % PHONE_NUMBER)
-                    #return CalleeLeg(self.call, self.switch.metapoll)
-                    #logger.debug("Returning UnreachableLeg for %s" % PHONE_NUMBER)
+                    self.logger.debug("Returning CalleeLeg for %s" % PHONE_NUMBER)
+                    return CalleeLeg(self.call, self.switch.metapoll)
+                    #self.logger.debug("Returning UnreachableLeg for %s" % PHONE_NUMBER)
                     #return UnreachableLeg(self.call, self.switch.metapoll)
-                    logger.debug("Returning RejectingLeg for %s" % PHONE_NUMBER)
-                    return RejectingLeg(self.call, self.switch.metapoll)
+                    #self.logger.debug("Returning RejectingLeg for %s" % PHONE_NUMBER)
+                    #return RejectingLeg(self.call, self.switch.metapoll)
             
                 # FIXME: is RoutingClass legal here? Not according to pyflakes!
                 return super(RoutingClass, self).route_call(ctx)
@@ -432,7 +441,7 @@ class SwitchB(Switch):
 
 
     def test_registering(self):
-        logger.debug("Registering begins.")
+        self.logger.debug("Registering begins.")
 
         self.registration_manager.start_registration(
         #    a_registrar, callee_uri, callee_uri
@@ -509,12 +518,13 @@ def main():
     metapoll = Metapoll()
 
     mgw = MediaGateway(metapoll, MGW_ADDR)
+    mgw.set_oid("mgw")
 
     switch_a = SwitchA(Weak(metapoll), A_ADDR, MGC1_ADDR, MGW_ADDR, range(30000, 30020, 2))
-    switch_a.set_oid("switch=a")
+    switch_a.set_oid(build_oid(None, "switch", "a"))
     
     switch_b = SwitchB(Weak(metapoll), B_ADDR, MGC2_ADDR, MGW_ADDR, range(40000, 40020, 2))
-    switch_b.set_oid("switch=b")
+    switch_b.set_oid(build_oid(None, "switch", "b"))
 
     #switch_a.transport.set_peer(switch_b.transport)
     #switch_b.transport.set_peer(switch_a.transport)
@@ -523,7 +533,8 @@ def main():
         try:
             metapoll.do_poll()
         except KeyboardInterrupt:
-            raise  #break
+            #raise
+            break
 
 
 main()

@@ -2,12 +2,10 @@ from __future__ import unicode_literals, print_function
 
 import uuid
 import hashlib
-import logging
 from format import Auth, WwwAuth
+from util import Logger
 
-logger = logging.getLogger(__name__)
-
-# ha1 = md5("authname:realm:password")
+# Note: ha1 = md5("authname:realm:password")
 
 
 def generate_nonce():
@@ -35,7 +33,12 @@ def digest(method, uri, ha1, nonce, qop=None, cnonce=None, nc=None):
 class Authority(object):
     def __init__(self):
         self.nonces = set()
+        self.logger = Logger()
 
+
+    def set_oid(self, oid):
+        self.logger.set_oid(oid)
+        
 
     def get_realm(self, params):
         return params["to"].uri.addr.host
@@ -47,46 +50,46 @@ class Authority(object):
         auth = params.get("authorization")
         
         if not auth:
-            logger.debug("No Authorization header!")
+            self.logger.debug("No Authorization header!")
             return False
 
         if not ha1:
-            logger.debug("No ha1!")
+            self.logger.debug("No ha1!")
             return False
 
         if auth.realm != self.get_realm(params):
-            logger.debug("Wrong realm!")
+            self.logger.debug("Wrong realm!")
             return False
         
         if auth.nonce not in self.nonces:
-            logger.debug("Wrong nonce!")
+            self.logger.debug("Wrong nonce!")
             auth.stale = True
             return False
         
         if auth.uri != uri:  # TODO: this can be more complex than this
-            logger.debug("Wrong uri")
+            self.logger.debug("Wrong uri")
             return False
 
         if auth.qop != "auth":
-            logger.debug("QOP is not auth!")
+            self.logger.debug("QOP is not auth!")
             return False
         
         if auth.algorithm not in (None, "MD5"):
-            logger.debug("Digest algorithm not MD5!")
+            self.logger.debug("Digest algorithm not MD5!")
             return False
         
         if not auth.cnonce:
-            logger.debug("Cnonce not set!")
+            self.logger.debug("Cnonce not set!")
             return False
 
         if not auth.nc:
-            logger.debug("Nc not set!")
+            self.logger.debug("Nc not set!")
             return False
 
         response = digest(method, uri, ha1, auth.nonce, auth.qop, auth.cnonce, auth.nc)
         
         if auth.response != response:
-            logger.debug("Wrong response!")
+            self.logger.debug("Wrong response!")
             return False
             
         self.nonces.remove(auth.nonce)
@@ -104,18 +107,18 @@ class Authority(object):
     
         authname = self.get_digest_authname(params)
         if not authname:
-            logger.debug("No credentials in request")
+            self.logger.debug("No credentials in request")
             return False
             
         if authname != cred_authname:
-            logger.debug("Wrong authname in request '%s'" % (authname,))
+            self.logger.debug("Wrong authname in request '%s'" % (authname,))
             return False
         
         if not self.check_digest_ha1(params, cred_ha1):
-            logger.debug("Incorrect digest in request")
+            self.logger.debug("Incorrect digest in request")
             return False
 
-        logger.debug("Authorized for '%s'" % (authname,))
+        self.logger.debug("Authorized for '%s'" % (authname,))
         return True
 
 
@@ -141,19 +144,19 @@ class Authority(object):
     def provide_auth(self, response, request, creds):
         www_auth = response.get("www_authenticate")
         if not www_auth:
-            logger.debug("No known challenge found, sorry!")
+            self.logger.debug("No known challenge found, sorry!")
             return None
             
         if "authorization" in request and not www_auth.stale:
-            logger.debug("Already tried and not even stale, sorry!")
+            self.logger.debug("Already tried and not even stale, sorry!")
             return None
 
         if "auth" not in www_auth.qop:
-            logger.debug("Digest QOP auth not available!")
+            self.logger.debug("Digest QOP auth not available!")
             return None
         
         if www_auth.algorithm not in (None, "MD5"):
-            logger.debug("Digest algorithm not MD5!")
+            self.logger.debug("Digest algorithm not MD5!")
             return None
 
         authname, ha1 = creds

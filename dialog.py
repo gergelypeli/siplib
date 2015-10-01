@@ -2,15 +2,15 @@ from __future__ import print_function, unicode_literals, absolute_import
 
 import uuid
 from weakref import WeakValueDictionary
-import logging
+#import logging
 
 from format import Uri, Nameaddr
 from sdp import Origin
 from async import WeakMethod
-from util import resolve
+from util import resolve, Logger
 
 MAXFWD = 50
-logger = logging.getLogger(__name__)
+#logger = logging.getLogger(__name__)
 
 
 class Error(Exception):
@@ -81,6 +81,12 @@ class Dialog(object):
         self.local_sdp_session_host = resolve(self.dialog_manager.get_local_addr())[0]
         self.remote_sdp_session_version = None
 
+        self.logger = Logger()
+
+
+    def set_oid(self, oid):
+        self.logger.set_oid(oid)
+        
 
     def set_report(self, report):
         self.report = report
@@ -294,11 +300,11 @@ class Dialog(object):
                 related_request.update(user_params)
                 related_request.update(auth)
                 
-                logger.debug("Trying authorization...")
+                self.logger.debug("Trying authorization...")
                 self.send_request(related_request)
                 return None
             else:
-                logger.debug("Couldn't authorize, being rejected!")
+                self.logger.debug("Couldn't authorize, being rejected!")
 
         self.take_sdp(params)
 
@@ -346,6 +352,12 @@ class DialogManager(object):
         self.hopping = hopping
         self.authing = authing
         self.dialogs_by_id = WeakValueDictionary()
+
+        self.logger = Logger()
+        
+        
+    def set_oid(self, oid):
+        self.logger.set_oid(oid)
         
         
     def get_local_addr(self):
@@ -367,7 +379,7 @@ class DialogManager(object):
     def dialog_established(self, dialog):
         did = identify_dialog(dialog)
         self.dialogs_by_id[did] = dialog
-        logger.debug("Established dialog %s" % (did,))
+        self.logger.debug("Established dialog %s" % (did,))
         
 
     def match_incoming_request(self, params):
@@ -375,13 +387,13 @@ class DialogManager(object):
         dialog = self.dialogs_by_id.get(did)
         
         if dialog:
-            logger.debug("Found dialog: %s" % (did,))
+            self.logger.debug("Found dialog: %s" % (did,))
             return WeakMethod(dialog.recv_request)
 
         #print("No dialog %s" % (did,))
 
         if local_tag:
-            logger.debug("In-dialog request has no dialog!")
+            self.logger.debug("In-dialog request has no dialog!")
             return None
             
         return None

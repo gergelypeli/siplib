@@ -1,12 +1,13 @@
 from copy import deepcopy
-import logging
+#import logging
 
 from async import WeakMethod, WeakGeneratorMethod
 from format import Status, make_virtual_response
 from planner import Planner, PlannedEvent
 from mgc import ProxiedMediaLeg
+from util import Logger, build_oid
 
-logger = logging.getLogger(__name__)
+#logger = logging.getLogger(__name__)
 
 
 class Error(Exception): pass
@@ -17,17 +18,20 @@ class Leg(object):
         self.report = None
         self.ctx = {}
         self.media_legs = []
-        self.logger = logging.LoggerAdapter(logger, {})
+        self.logger = Logger()
     
     
     def set_oid(self, oid):
-        # FIXME: nasty!
-        self.logger.extra['oid'] = oid
+        self.logger.set_oid(oid)
         
 
     def set_report(self, report):
         self.report = report
         
+        
+    def start(self):
+        pass  # Useful for Leg types that do something by themselves
+
         
     def do(self, action):
         raise NotImplementedError()
@@ -184,6 +188,11 @@ class SipLeg(Leg):
         self.dialog.set_report(WeakMethod(self.process))
 
 
+    def set_oid(self, oid):
+        Leg.set_oid(self, oid)
+        self.dialog.set_oid(build_oid(oid, "dialog"))
+
+
     def change_state(self, new_state):
         self.logger.debug("Changing state %s => %s" % (self.state, new_state))
         self.state = new_state
@@ -332,7 +341,8 @@ class SipLeg(Leg):
                 self.change_state(self.DIALING_IN_RINGING)
                 return
             elif type == "session":
-                status = Status(180, "Ringing") if self.state == self.DIALING_IN_RINGING else Status(183, "Session Progress")
+                already_ringing = (self.state == self.DIALING_IN_RINGING)
+                status = Status(180, "Ringing") if already_ringing else Status(183, "Session Progress")
                 invite_response = dict(status=status, sdp=sdp)
                 self.send_response(invite_response, self.invite_state.request)
                 return
@@ -408,9 +418,10 @@ class SipLeg(Leg):
                     self.invite_state.responded_session = sdp  # just to ignore any further
                     
                 if status.code == 180:
+                    already_ringing = (self.state == self.DIALING_OUT_RINGING)
                     self.change_state(self.DIALING_OUT_RINGING)
                     
-                    if self.state == self.DIALING_OUT:
+                    if not already_ringing:
                         self.report(dict(type="ring", offer=offer, answer=answer))
                     elif offer or answer:
                         self.report(dict(type="session", offer=offer, answer=answer))
@@ -510,7 +521,15 @@ class PlannedLeg(Leg):
             WeakGeneratorMethod(self.plan),
             finish_handler=WeakMethod(self.plan_finished)
         )
+        
+        
+    def start(self):
         self.planner.start()
+
+
+    def set_oid(self, oid):
+        Leg.set_oid(self, oid)
+        self.planner.set_oid(build_oid(oid, "planner"))
 
 
     def plan_finished(self, result):

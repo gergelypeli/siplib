@@ -3,14 +3,15 @@ import socket
 import weakref
 import struct
 import datetime
-import logging
+#import logging
 import wave
 
 import g711
 import msgp
 from async import WeakMethod
+from util import Logger, build_oid
 
-logger = logging.getLogger(__name__)
+#logger = logging.getLogger(__name__)
 
 
 class Error(Exception): pass
@@ -159,9 +160,10 @@ class RtpPlayer(object):
 
 
 class Thing(object):
-    def __init__(self, label, owner_addr):
+    def __init__(self, oid, label, owner_addr):
         self.label = label
         self.owner_addr = owner_addr
+        self.logger = Logger(oid)
         
         
     def modify(self, params):
@@ -169,16 +171,16 @@ class Thing(object):
 
     
 class Leg(Thing):
-    def __init__(self, label, owner_addr, type):
-        super().__init__(label, owner_addr)
+    def __init__(self, oid, label, owner_addr, type):
+        super().__init__(oid, label, owner_addr)
         
         self.type = type
         self.forward_handler = None
-        logger.debug("Created %s leg %s" % (type, self.label))
+        self.logger.debug("Created %s leg %s" % (type, self.label))
         
         
     def __del__(self):
-        logger.debug("Deleted %s leg %s" % (self.type, self.label))
+        self.logger.debug("Deleted %s leg %s" % (self.type, self.label))
 
 
     def set_forward_handler(self, fh):
@@ -195,8 +197,8 @@ class Leg(Thing):
 
 
 class NetLeg(Leg):
-    def __init__(self, label, owner_addr, metapoll):
-        super(NetLeg, self).__init__(label, owner_addr, "net")
+    def __init__(self, oid, label, owner_addr, metapoll):
+        super(NetLeg, self).__init__(oid, label, owner_addr, "net")
         self.local_addr = None
         self.remote_addr = None
         self.socket = None
@@ -262,7 +264,7 @@ class NetLeg(Leg):
         try:
             format = self.recv_formats_by_pt[pt]
         except KeyError:
-            logger.debug("Ignoring received unknown payload type %d" % pt)
+            self.logger.debug("Ignoring received unknown payload type %d" % pt)
         else:
             self.recv_format(format, packet)
     
@@ -271,7 +273,7 @@ class NetLeg(Leg):
         try:
             pt = self.send_pts_by_format[format]  # pt can be 0, which is false...
         except (TypeError, KeyError):
-            logger.debug("Ignoring sent unknown payload format %s" % (format,))
+            self.logger.debug("Ignoring sent unknown payload format %s" % (format,))
             return
             
         set_payload_type(packet, pt)
@@ -285,19 +287,19 @@ class NetLeg(Leg):
 
 
 class EchoLeg(Leg):
-    def __init__(self, label, owner_addr):
-        super(EchoLeg, self).__init__(label, owner_addr, "echo")
+    def __init__(self, oid, label, owner_addr):
+        super(EchoLeg, self).__init__(oid, label, owner_addr, "echo")
 
 
     def send_format(self, format, packet):
         # We don't care about payload types
-        logger.debug("Echoing %s packet on %s" % (format, self.name))
+        self.logger.debug("Echoing %s packet on %s" % (format, self.name))
         self.recv_format(format, packet)
 
 
 class PlayerLeg(Leg):
-    def __init__(self, label, owner_addr, metapoll):
-        super(PlayerLeg, self).__init__(label, owner_addr, "player")
+    def __init__(self, oid, label, owner_addr, metapoll):
+        super(PlayerLeg, self).__init__(oid, label, owner_addr, "player")
         
         self.metapoll = metapoll
         self.rtp_player = None
@@ -337,16 +339,16 @@ class PlayerLeg(Leg):
 
 
 class Context(Thing):
-    def __init__(self, label, owner_addr, manager):
-        super().__init__(label, owner_addr)
+    def __init__(self, oid, label, owner_addr, manager):
+        super().__init__(oid, label, owner_addr)
 
         self.manager = manager
         self.legs = []
-        logger.debug("Created context %s" % self.label)
+        self.logger.debug("Created context %s" % self.label)
         
         
     def __del__(self):
-        logger.debug("Deleted context %s" % self.label)
+        self.logger.debug("Deleted context %s" % self.label)
         
         
     def modify(self, params):
@@ -386,7 +388,15 @@ class MediaGateway(object):
         self.legs_by_label = {}
         self.msgp = msgp.JsonMsgp(metapoll, mgw_addr, WeakMethod(self.process_request))
 
+        self.logger = Logger()
 
+
+    def set_oid(self, oid):
+        self.oid = oid
+        self.logger.set_oid(oid)
+        self.msgp.set_oid(build_oid(oid, "msgp"))
+        
+    
     def get_leg(self, label):
         return self.legs_by_label[label]
         
@@ -428,7 +438,8 @@ class MediaGateway(object):
 
     def create_context(self, label, owner_addr, type):
         if type == "proxy":
-            context = Context(label, owner_addr, weakref.proxy(self))
+            oid = build_oid(self.oid, "context", label)
+            context = Context(oid, label, owner_addr, weakref.proxy(self))
         else:
             raise Error("Invalid context type %s!" % type)
             
@@ -450,12 +461,14 @@ class MediaGateway(object):
     # Legs
 
     def create_leg(self, label, owner_addr, type):
+        oid = build_oid(self.oid, "leg", label)
+        
         if type == "net":
-            leg = NetLeg(label, owner_addr, self.metapoll)
+            leg = NetLeg(oid, label, owner_addr, self.metapoll)
         elif type == "echo":
-            leg = EchoLeg(label, owner_addr)
+            leg = EchoLeg(oid, label, owner_addr)
         elif type == "player":
-            leg = PlayerLeg(label, owner_addr, self.metapoll)
+            leg = PlayerLeg(oid, label, owner_addr, self.metapoll)
         else:
             raise Error("Invalid leg type '%s'!" % type)
 
@@ -499,7 +512,7 @@ class MediaGateway(object):
             else:
                 raise Error("Invalid target %s!" % target)
         except Exception as e:
-            logger.debug("Context error: %s" % e)
+            self.logger.debug("Processing error: %s" % e, exc_info=True)
             self.msgp.send_message(sid, seq, "error")
         else:
             self.msgp.send_message(sid, seq, "ok")

@@ -2,9 +2,7 @@ from async import WeakMethod, Weak, WeakGeneratorMethod
 from format import Status
 from mgc import MediaChannel
 from planner import Planner
-import logging
-
-logger = logging.getLogger(__name__)
+from util import build_oid, Logger
 
 
 class Routing(object):
@@ -17,18 +15,19 @@ class Routing(object):
         self.report = report
         self.oid = "routing=x"
         self.legs = {}
-
-
+        #self.logger = logging.LoggerAdapter(logger, {})
+        self.logger = Logger()
+    
+    
     def set_oid(self, oid):
-        self.oid = oid
-        
-        
+        self.logger.set_oid(oid)
+
+
     def add_leg(self, leg):
         li = max(self.legs.keys()) + 1 if self.legs else 0
 
         self.legs[li] = leg
-        leg.set_report(WeakMethod(self.process, li))
-        leg.set_oid("%s/leg=%d" % (self.oid, li))
+        leg.set_report(WeakMethod(self.process, li))        
 
 
     def remove_leg(self, li):
@@ -43,7 +42,7 @@ class Routing(object):
         
         
     def fail_routing(self, exception):  # TODO
-        logger.warning("Routing failed: %s" % exception)
+        self.logger.warning("Routing failed: %s" % exception)
         self.legs[0].do(dict(type="reject", status=Status(500)))
 
 
@@ -74,13 +73,16 @@ class SimpleRouting(Routing):
         except Exception as e:
             self.fail_routing(e)
         else:
+            oid = self.call.generate_leg_oid()
+            outgoing_leg.set_oid(oid)
             self.add_leg(outgoing_leg)
+            outgoing_leg.start()
             outgoing_leg.do(action)
         
         
     def process(self, action, li):  # li is second arg because it is bound TODO: use kwargs?
         type = action["type"]
-        logger.debug("Routing %s from leg %d." % (type, li))
+        self.logger.debug("Routing %s from leg %d." % (type, li))
 
         if type == "finish":
             self.remove_leg(li)
@@ -103,7 +105,7 @@ class SimpleRouting(Routing):
                 # because it means that that leg is also anchored itself.
                 # But can't just anchor right after routing, because the
                 # outgoing leg may still be thinking.
-                logger.debug("Implicit anchoring")
+                self.logger.debug("Implicit anchoring")
                 incoming_leg = self.legs[0]
                 self.anchor_routing(li, [])
                 incoming_leg.do(action)
@@ -120,6 +122,11 @@ class PlannedSimpleRouting(SimpleRouting):
         self.metapoll = metapoll
 
 
+    def set_oid(self, oid):
+        SimpleRouting.set_oid(self, oid)
+        self.oid = oid
+
+
     def start_routing(self, action):
         self.planner = self.RoutingPlanner(
             self.metapoll,
@@ -127,6 +134,7 @@ class PlannedSimpleRouting(SimpleRouting):
             finish_handler=WeakMethod(self.routing_finished, action),
             error_handler=WeakMethod(self.fail_routing)
         )
+        self.planner.set_oid(build_oid(self.oid, "planner"))
         self.planner.start(action["ctx"])
     
     
@@ -152,10 +160,25 @@ class Call(object):
         self.media_channels = None
         self.routing = None
         self.oid = "call=x"
+        self.leg_count = 0
+
+        self.logger = Logger()
 
 
     def set_oid(self, oid):
         self.oid = oid
+        self.logger.set_oid(oid)
+        
+        
+    def generate_leg_oid(self):
+        leg_oid = build_oid(self.oid, "leg", self.leg_count)
+        self.leg_count += 1
+
+        return leg_oid
+        
+        
+    def finish(self):
+        self.finish_handler(self.oid)
         
         
     def make_routing(self):
@@ -164,8 +187,13 @@ class Call(object):
         
     def start_routing(self, incoming_leg):
         self.routing = self.make_routing()  # just to be sure it's stored
-        self.routing.set_oid("%s/routing=0" % self.oid)
+
+        leg_oid = self.generate_leg_oid()
+        incoming_leg.set_oid(leg_oid)
+        self.routing.set_oid(build_oid(leg_oid, "routing"))
+        
         self.routing.add_leg(incoming_leg)
+        incoming_leg.start()
         
         
     def routed(self, action):
@@ -175,13 +203,13 @@ class Call(object):
             self.routing = None
             
             if self.legs:
-                logger.debug("Routing finished")
+                self.logger.debug("Routing finished")
             else:
-                logger.debug("Oops, routing finished without success!")
-                self.finish_handler(self)
+                self.logger.debug("Oops, routing finished without success!")
+                self.finish()
                 # TODO
         elif type == "anchor":
-            logger.debug("Yay, anchored.")
+            self.logger.debug("Yay, anchored.")
             self.legs = action["legs"]
 
             # TODO: let the Routing connect them to each other?
@@ -191,7 +219,7 @@ class Call(object):
             self.media_channels = []
             self.refresh_media()
         else:
-            logger.debug("Unknown routing event %s!" % type)
+            self.logger.debug("Unknown routing event %s!" % type)
         
         
     def allocate_media_address(self, channel_index):
@@ -205,7 +233,7 @@ class Call(object):
         
     def refresh_media(self):
         if self.media_channels is None:
-            logger.debug("Not media yet to refresh.")
+            self.logger.debug("Not media yet to refresh.")
             return
             
         left_media_legs = self.legs[0].media_legs
@@ -213,13 +241,14 @@ class Call(object):
         right_media_legs = self.legs[-1].media_legs
         rn = len(right_media_legs)
         channel_count = min(ln, rn)  # TODO: max?
-        logger.debug("Refreshing media (%d channels)" % channel_count)
+        self.logger.debug("Refreshing media (%d channels)" % channel_count)
         
         for i in range(channel_count):
             if i < len(self.media_channels):
                 c = self.media_channels[i]
             else:
                 c = MediaChannel(self.mgc)
+                c.set_oid(build_oid(self.oid, "channel", len(self.media_channels)))
                 self.media_channels.append(c)
 
             c.set_legs([ left_media_legs[i], right_media_legs[i] ])
@@ -230,7 +259,7 @@ class Call(object):
         type = action["type"]
         
         if type == "finish":
-            logger.debug("Bridged leg %d finished." % li)
+            self.logger.debug("Bridged leg %d finished." % li)
             self.legs[li] = None
             
             for leg in self.legs:
@@ -238,15 +267,15 @@ class Call(object):
                     break
             else:
                 if any(self.media_channels):
-                    logger.debug("Deleting media channels.")
+                    self.logger.debug("Deleting media channels.")
                     for i, mc in enumerate(self.media_channels):
                         if mc:
                             mc.delete(WeakMethod(self.media_deleted, i))
                 else:
-                    logger.debug("Call is finished.")
-                    self.finish_handler(self)
+                    self.logger.debug("Call is finished.")
+                    self.finish()
         else:
-            logger.debug("Bridging %s from leg %d." % (type, li))
+            self.logger.debug("Bridging %s from leg %d." % (type, li))
             self.legs[lj].do(action)
 
 
@@ -254,8 +283,8 @@ class Call(object):
         self.media_channels[li] = None
         
         if not any(self.media_channels):
-            logger.debug("Call is finished.")
-            self.finish_handler(self)
+            self.logger.debug("Call is finished.")
+            self.finish()
 
 
 # The incoming leg must have a context initialized from the INVITE, then

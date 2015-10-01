@@ -1,18 +1,19 @@
 import socket
 from datetime import timedelta
-import logging
+#import logging
 
 from format import Hop, Addr, parse_structured_message, print_structured_message
 from async import WeakMethod
+from util import Loggable
 
-logger = logging.getLogger(__name__)
+#logger = logging.getLogger(__name__)
 
 
 def indented(text, indent="  "):
     return "\n" + "\n".join(indent + line for line in text.split("\n"))
 
 
-class TestTransport(object):
+class TestTransport(Loggable):
     def __init__(self, metapoll, local_addr, reception):
         self.metapoll
         self.reception = reception
@@ -31,12 +32,12 @@ class TestTransport(object):
         
     def send(self, msg):
         if msg["hop"] != self.hop:
-            logger.debug("This transport can't send this!")
+            self.logger.debug("This transport can't send this!")
             return
         
         sip = print_structured_message(msg)
-        logger.debug("Transport sending by %s:" % (self.hop,))
-        logger.debug("\n" + "\n".join("  %s" % line for line in sip.split("\n")))
+        self.logger.debug("Transport sending by %s:" % (self.hop,))
+        self.logger.debug("\n" + "\n".join("  %s" % line for line in sip.split("\n")))
         
         self.metapoll.register_timeout(timedelta(), self.transmission.rebind(sip))
 
@@ -49,7 +50,7 @@ class TestTransport(object):
         self.reception(msg)
 
 
-class UdpTransport(object):
+class UdpTransport(Loggable):
     def __init__(self, metapoll, local_addr, reception):
         self.metapoll = metapoll
         self.local_addr = local_addr
@@ -70,12 +71,11 @@ class UdpTransport(object):
         hop = msg["hop"]
         
         if hop.local_addr != self.local_addr:
-            logger.debug("This transport can't send this!")
+            self.logger.debug("This transport can't send this!")
             return
         
         sip = print_structured_message(msg)
-        logger.debug("Transport sending from %s to %s:" % (hop.local_addr, hop.remote_addr))
-        logger.debug(indented(sip))
+        self.logger.debug("Sending to %s:\n%s" % (hop.remote_addr, indented(sip)))
         
         sip = sip.encode()
         self.socket.sendto(sip, hop.remote_addr)
@@ -86,8 +86,7 @@ class UdpTransport(object):
         sip = sip.decode()
         
         hop = Hop(local_addr=self.local_addr, remote_addr=Addr(*raddr), interface="eth0")
-        logger.debug("Transport receiving from %s to %s:" % (hop.remote_addr, hop.local_addr))
-        logger.debug(indented(sip))
+        self.logger.debug("Receiving from %s:\n%s" % (hop.remote_addr, indented(sip)))
         
         msg = parse_structured_message(sip)
         msg["hop"] = hop

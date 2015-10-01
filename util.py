@@ -1,5 +1,6 @@
 import socket
 import struct
+import logging
 from format import Addr
 from async import WeakMethod
 import sys, traceback
@@ -78,3 +79,27 @@ def my_exchandler(type, value, tb):
 
 def setup_exchandler():
     sys.excepthook = my_exchandler
+
+
+def build_oid(parent, key, value=None):
+    kv = "%s=%s" % (key, value) if value is not None else key
+    return "%s,%s" % (parent, kv) if parent is not None else kv
+
+
+class Logger(logging.LoggerAdapter):
+    def __init__(self, oid=None):
+        logging.LoggerAdapter.__init__(self, logging.getLogger(), dict(oid=oid))
+        
+        
+    def set_oid(self, oid):
+        # Nasty hack!
+        self.extra['oid'] = oid
+
+
+class Loggable(object):
+    def __init__(self):
+        self.logger = None
+        
+        
+    def set_oid(self, oid):  # TODO: accept oid, key, value=None?
+        self.logger = logging.LoggerAdapter(logging.getLogger(), dict(oid=oid))
