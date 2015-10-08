@@ -47,7 +47,13 @@ class WeakMethod(object):
         self.wself = weakref.ref(bound_method.__self__)
         self.args = bound_args
         self.kwargs = bound_kwargs
+        self.bound_front = False
 
+
+    def bind_front(self):
+        self.bound_front = True
+        return self
+        
 
     def make_selfarg(self):
         return self.wself()
@@ -56,13 +62,17 @@ class WeakMethod(object):
     def __call__(self, *args, **kwargs):
         selfarg = self.make_selfarg()
 
-        if selfarg:
-            args = list(args)
-            args.extend(self.args)
-            kwargs.update(self.kwargs)
-            return self.func(selfarg, *args, **kwargs)
-        else:
+        if not selfarg:
             return None
+            
+        if self.bound_front:
+            args = list(self.args) + list(args)
+            kwargs = dict(self.kwargs, **kwargs)
+        else:
+            args = list(args) + list(self.args)
+            kwargs = dict(kwargs, **self.kwargs)
+            
+        return self.func(selfarg, *args, **kwargs)
 
 
     def __repr__(self):

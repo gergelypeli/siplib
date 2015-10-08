@@ -79,10 +79,10 @@ class UnreachableLeg(PlannedLeg):
     def plan(self, planner):
         self.logger.debug("Unreachable leg created.")
         
-        action = yield from planner.wait_action("dial")
+        yield from planner.wait_action("dial")
         self.logger.debug("Got dial, but not answering anything.")
 
-        action = yield from planner.wait_action("hangup")
+        yield from planner.wait_action("hangup")
         self.logger.debug("And now the caller hung up.")
 
 
@@ -90,7 +90,7 @@ class RejectingLeg(PlannedLeg):
     def plan(self, planner):
         self.logger.debug("Rejecting leg created.")
         
-        action = yield from planner.wait_action("dial")
+        yield from planner.wait_action("dial")
         self.logger.debug("Got dial, but not now rejecting it.")
 
         self.report(dict(type="reject", status=Status(603)))

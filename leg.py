@@ -60,6 +60,10 @@ class Leg(object):
     def refresh_media(self):
         self.call.refresh_media()
         
+        
+    def get_further_legs(self):  # for the sake of internal legs
+        return []
+        
 
 class Session(object):
     def __init__(self):
@@ -314,7 +318,7 @@ class SipLeg(Leg):
                 self.logger.debug("Ignoring %s, already down." % type)
                 return
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
-            if type == "hangup":
+            if type == "cancel":
                 self.send_request(dict(method="CANCEL"), self.invite_state.request)
                 self.change_state(self.DISCONNECTING_OUT)
                 return
@@ -400,7 +404,7 @@ class SipLeg(Leg):
                 
                 self.invite_state = None
                 self.change_state(self.DOWN)
-                self.report(dict(type="hangup"))
+                self.report(dict(type="cancel"))
                 self.finish()
                 return
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):

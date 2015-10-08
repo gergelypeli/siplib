@@ -27,7 +27,7 @@ class Routing(object):
         li = max(self.legs.keys()) + 1 if self.legs else 0
 
         self.legs[li] = leg
-        leg.set_report(WeakMethod(self.process, li))        
+        leg.set_report(WeakMethod(self.process, li).bind_front())
 
 
     def remove_leg(self, li):
@@ -41,74 +41,79 @@ class Routing(object):
         self.report(dict(type="finish"))
         
         
-    def fail_routing(self, exception):  # TODO
-        self.logger.warning("Routing failed: %s" % exception)
-        self.legs[0].do(dict(type="reject", status=Status(500)))
+    def reject(self, status):
+        self.logger.warning("Routing rejected: %s" % (status,))
+        self.legs[0].do(dict(type="reject", status=status))
 
 
-    def anchor_routing(self, li, further_legs):  # TODO: rename to done?
-        left = self.legs.pop(0)
-        right = self.legs.pop(li)
+    def anchor(self, li):
+        these_legs = [ self.legs[0], self.legs[li] ]
+        further_legs = self.legs[li].get_further_legs()
         
-        self.report(dict(type="anchor", legs=[ left, right ] + further_legs))
+        self.report(dict(type="anchor", legs=these_legs + further_legs))
+
+        self.remove_leg(li)
+        self.remove_leg(0)
         
-        if not self.legs:
-            self.finish_routing()
         
-        
-    def process(action, li):
+    def dial(self, action):
         raise NotImplementedError()
         
         
+    def cancel(self, action):
+        for li, leg in self.legs.items():
+            if li > 0 and leg:
+                leg.do(action)
+
+
+    def forward(self, li, action):
+        # Any positive feedback from outgoing legs can be anchored,
+        # because it means that that leg is also anchored itself.
+        # But can't just anchor right after routing, because the
+        # outgoing leg may still be thinking.
+        incoming_leg = self.legs[0]
+        self.anchor(li)
+        incoming_leg.do(action)
+
+
+    def process(self, li, action):
+        type = action["type"]
+        self.logger.debug("Got %s from leg %d." % (type, li))
+
+        if type == "finish":
+            self.remove_leg(li)
+        elif li == 0:
+            if type == "dial":
+                self.dial(action)
+            elif type == "cancel":
+                self.cancel(action)
+            else:
+                raise Exception("Invalid action from incoming leg: %s" % type)
+        else:
+            if type == "reject":
+                self.reject(action["status"])
+            else:
+                self.forward(li, action)
+
+
 class SimpleRouting(Routing):
     def route_call(self, ctx):
         raise NotImplementedError()
 
 
-    def start_routing(self, action):
+    def dial(self, action):
         try:
             outgoing_leg = self.route_call(action["ctx"])
             if not outgoing_leg:
                 raise Exception("Routing failed for an unknown reason!")
-        except Exception as e:
-            self.fail_routing(e)
+        except Exception:
+            self.reject(Status(500))  # TODO
         else:
             oid = self.call.generate_leg_oid()
             outgoing_leg.set_oid(oid)
             self.add_leg(outgoing_leg)
             outgoing_leg.start()
             outgoing_leg.do(action)
-        
-        
-    def process(self, action, li):  # li is second arg because it is bound TODO: use kwargs?
-        type = action["type"]
-        self.logger.debug("Routing %s from leg %d." % (type, li))
-
-        if type == "finish":
-            self.remove_leg(li)
-        elif li == 0:
-            if type == "dial":
-                self.start_routing(action)  # async friendly way
-            elif type == "hangup":
-                outgoing_leg = self.legs[1]
-                outgoing_leg.do(action)
-            else:
-                raise Exception("Invalid action from incoming leg: %s" % type)
-        else:
-            if type == "anchor":
-                self.anchor_routing(li, action["legs"])
-            elif type == "reject":
-                incoming_leg = self.legs[0]
-                incoming_leg.do(action)
-            else:
-                # Any positive feedback from outgoing legs can be anchored,
-                # because it means that that leg is also anchored itself.
-                # But can't just anchor right after routing, because the
-                # outgoing leg may still be thinking.
-                self.logger.debug("Implicit anchoring")
-                incoming_leg = self.legs[0]
-                self.anchor_routing(li, [])
-                incoming_leg.do(action)
 
 
 class PlannedSimpleRouting(SimpleRouting):
@@ -143,7 +148,7 @@ class PlannedSimpleRouting(SimpleRouting):
         outgoing_leg.do(action)
         
 
-    #def process(self, action, li):
+    #def process(self, li, action):
     #    self.planner.resume(PlannedEvent("action", (li, action)))
 
 
