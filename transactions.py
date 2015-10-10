@@ -233,7 +233,7 @@ class AckClientTransaction(PlainClientTransaction):
 class Bastard(object):
     def __init__(self, report_response):
         self.report_response = report_response
-        self.statuses = set()
+        #self.statuses = set()
         self.ack = None
         
 
@@ -285,16 +285,15 @@ class InviteClientTransaction(PlainClientTransaction):
             
             # Don't remember and report 100 responses, as thay may have no remote tag.
             # And they are h2h anyway, so the dialog shouldn't care.
-            if code > 100:
-                if not remote_tag:
-                    self.manager.logger.debug("Invite response without remote tag!")
-                    return
-            
+            if code > 100 and remote_tag:
                 if not him:
+                    # New remote tag, create new bastard
+                    
                     if not self.report_response:
                         raise Error("No report_response when receiving INVITE response with new remote tag!")
                 
-                    self.bastards[remote_tag] = him = Bastard(self.report_response)
+                    him = Bastard(self.report_response)
+                    self.bastards[remote_tag] = him
                     self.report_response = None
 
                 if code >= 300:
@@ -307,7 +306,7 @@ class InviteClientTransaction(PlainClientTransaction):
                 # FIXME: this check is too strict, the same status code may arrive
                 # with different content, either check it fully, or drop this check!
                 if True:  # code not in him.statuses:
-                    him.statuses.add(code)
+                    #him.statuses.add(code)
                     him.report_response(response, self.outgoing_msg)
 
             if self.state != self.WAITING:
