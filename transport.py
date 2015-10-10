@@ -4,7 +4,7 @@ from datetime import timedelta
 
 from format import Hop, Addr, parse_structured_message, print_structured_message
 from async import WeakMethod
-from util import Loggable
+from util import Loggable, resolve
 
 #logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ class UdpTransport(Loggable):
         
     def get_hop(self, uri):
         raddr = Addr(uri.addr.host, uri.addr.port or 5060)
-        return Hop(local_addr=self.local_addr, remote_addr=raddr, interface="eth0")
+        return Hop(local_addr=resolve(self.local_addr), remote_addr=resolve(raddr), interface="eth0")
         
         
     def send(self, msg):

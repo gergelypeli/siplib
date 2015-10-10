@@ -95,16 +95,28 @@ class Dialog(object):
     def is_established(self):
         return self.remote_nameaddr and "tag" in self.remote_nameaddr.params;
         
+        
+    def fix_hop(self, hop):
+        next_uri = self.route[0].uri if self.route else self.peer_contact.uri
+        is_next_uri_usable = True  # TODO: not if URI is local while hop is public
+        
+        if is_next_uri_usable:
+            self.logger.debug("Next URI usable, resolving to hop.")
+            self.hop = self.dialog_manager.get_hop(next_uri)
+        else:
+            self.logger.debug("Next URI fishy, using network hop.")
+            self.hop = hop
+        
 
     def setup_incoming(self, params):
         self.local_nameaddr = params["to"].tagged(generate_tag())
         self.remote_nameaddr = params["from"]
         self.my_contact = self.dialog_manager.get_my_contact()  # TODO: improve
-        self.peer_contact = first(params["contact"])
-        
-        self.route = params["record_route"]
-        self.hop = params["hop"]
         self.call_id = params["call_id"]
+        
+        self.peer_contact = first(params["contact"])
+        self.route = params["record_route"]
+        self.fix_hop(params["hop"])
 
         self.dialog_manager.dialog_established(self)
         
@@ -113,17 +125,19 @@ class Dialog(object):
         self.local_nameaddr = from_nameaddr.tagged(generate_tag())
         self.remote_nameaddr = to_nameaddr
         self.my_contact = self.dialog_manager.get_my_contact()  # TODO: improve
-        self.peer_contact = Nameaddr(request_uri)
-        
-        self.route = route or []
-        self.hop = hop or self.dialog_manager.get_hop(route[0].uri if route else request_uri)
         self.call_id = generate_call_id()
+        
+        self.peer_contact = Nameaddr(request_uri)
+        self.route = route or []
+        self.fix_hop(hop)
 
 
     def setup_outgoing2(self, params):
         self.remote_nameaddr = params["to"]
+        
         self.peer_contact = first(params["contact"])
-        self.route = reversed(params["record_route"])
+        self.route = list(reversed(params["record_route"]))
+        self.fix_hop(params["hop"])
         
         self.dialog_manager.dialog_established(self)
         
@@ -224,6 +238,7 @@ class Dialog(object):
             peer_contact = first(params.get("contact"))
             if peer_contact:
                 self.peer_contact = peer_contact
+                self.fix_hop(params["hop"])
         else:
             if to_tag:
                 raise Error("Unexpected to tag!")
@@ -247,7 +262,7 @@ class Dialog(object):
             "call_id": self.call_id,
             "cseq": request_params["cseq"],
             "method": request_params["method"],  # only for internal use
-            "hop": self.hop
+            "hop": request_params["hop"]
         }
 
         if dialog_params["method"] == "INVITE":
@@ -276,9 +291,8 @@ class Dialog(object):
         if self.is_established() and to_tag != self.remote_nameaddr.params["tag"]:
             raise Error("Mismatching remote tag!")
 
-        if status.code < 300 and to_tag:
-            # Failure responses don't establish a dialog (including 401/407).
-            # Also, provisional responses may not have a to tag.
+        if status.code < 300:
+            # Only successful or early responses create a dialog
 
             if not self.is_established():
                 self.setup_outgoing2(params)
@@ -287,6 +301,7 @@ class Dialog(object):
                 peer_contact = first(params.get("contact"))
                 if peer_contact:
                     self.peer_contact = peer_contact
+                    self.fix_hop(params["hop"])
         elif status.code == 401:
             # Let's try authentication! TODO: 407, too!
             auth = self.dialog_manager.provide_auth(params, related_request)
@@ -366,8 +381,8 @@ class DialogManager(object):
 
     def get_my_contact(self):
         return Nameaddr(Uri(self.local_addr))  # TODO: more flexible?
-        
-        
+
+
     def get_hop(self, uri):
         return self.hopping(uri)
 
