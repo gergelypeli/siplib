@@ -16,8 +16,8 @@ class Planner(object):
     def __init__(self, metapoll, generator_method, finish_handler=None, error_handler=None):
         self.metapoll = metapoll
         self.generator_method = generator_method
-        self.finish_handler = finish_handler
-        self.error_handler = error_handler
+        self.finish_handler = finish_handler  # TODO: disallow return values
+        self.error_handler = error_handler  # TODO: not needed
 
         self.generator = None
         self.timeout_handle = None

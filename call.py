@@ -1,5 +1,5 @@
 from async import WeakMethod, Weak, WeakGeneratorMethod
-from format import Status
+from format import Status, SipError
 from mgc import MediaChannel
 from planner import Planner
 from util import build_oid, Logger
@@ -25,9 +25,16 @@ class Routing(object):
 
     def add_leg(self, leg):
         li = max(self.legs.keys()) + 1 if self.legs else 0
+        leg_oid = self.call.generate_leg_oid()
+
+        if not self.legs:
+            self.set_oid(build_oid(leg_oid, "routing"))
 
         self.legs[li] = leg
         leg.set_report(WeakMethod(self.process, li).bind_front())
+        leg.set_oid(leg_oid)
+        
+        leg.start()
 
 
     def remove_leg(self, li):
@@ -60,10 +67,12 @@ class Routing(object):
         raise NotImplementedError()
         
         
-    def cancel(self, action):
+    def cancel(self):
         for li, leg in self.legs.items():
             if li > 0 and leg:
-                leg.do(action)
+                leg.do(dict(type="cancel"))
+                
+        # Don't forget to reject the incoming leg afterwards, too
 
 
     def forward(self, li, action):
@@ -86,14 +95,16 @@ class Routing(object):
             if type == "dial":
                 self.dial(action)
             elif type == "cancel":
-                self.cancel(action)
+                self.cancel()
             else:
                 raise Exception("Invalid action from incoming leg: %s" % type)
         else:
             if type == "reject":
                 self.reject(action["status"])
-            else:
+            elif type in ("ring", "accept"):
                 self.forward(li, action)
+            else:
+                raise Exception("Invalid action from outgoing leg: %s" % type)
 
 
 class SimpleRouting(Routing):
@@ -109,50 +120,71 @@ class SimpleRouting(Routing):
         except Exception:
             self.reject(Status(500))  # TODO
         else:
-            oid = self.call.generate_leg_oid()
-            outgoing_leg.set_oid(oid)
             self.add_leg(outgoing_leg)
-            outgoing_leg.start()
             outgoing_leg.do(action)
 
 
-class PlannedSimpleRouting(SimpleRouting):
+    def cancel(self):
+        Routing.cancel(self)
+        self.reject(Status(487))
+        
+
+class PlannedRouting(Routing):
+    class CallCancelled(Exception):
+        pass
+        
+        
     class RoutingPlanner(Planner):
         pass
 
             
     def __init__(self, call, report, metapoll):
-        super(PlannedSimpleRouting, self).__init__(call, report)
+        super(PlannedRouting, self).__init__(call, report)
         
         self.metapoll = metapoll
 
 
     def set_oid(self, oid):
-        SimpleRouting.set_oid(self, oid)
+        Routing.set_oid(self, oid)
         self.oid = oid
 
 
-    def start_routing(self, action):
+    def dial(self, action):
         self.planner = self.RoutingPlanner(
             self.metapoll,
             WeakGeneratorMethod(self.plan),
-            finish_handler=WeakMethod(self.routing_finished, action),
-            error_handler=WeakMethod(self.fail_routing)
+            finish_handler=WeakMethod(self.plan_finished, action),
+            error_handler=WeakMethod(self.plan_failed)
         )
         self.planner.set_oid(build_oid(self.oid, "planner"))
         self.planner.start(action["ctx"])
     
     
-    def routing_finished(self, outgoing_leg, action):
+    def cancel(self):
+        self.planner.resume(SipError(Status(487)))
+        
+    
+    def plan_finished(self, outgoing_leg, action):
         self.add_leg(outgoing_leg)
         outgoing_leg.do(action)
+        
+        
+    def plan_failed(self, exception):
+        Routing.cancel(self)
+        
+        try:
+            raise exception
+        except SipError as e:
+            self.reject(e.status)
+        except:
+            self.reject(Status(500))  # TODO
         
 
     #def process(self, li, action):
     #    self.planner.resume(PlannedEvent("action", (li, action)))
 
 
-    def plan(self, planner):
+    def plan(self, planner, ctx):
         raise NotImplementedError()
         
 
@@ -192,13 +224,7 @@ class Call(object):
         
     def start_routing(self, incoming_leg):
         self.routing = self.make_routing()  # just to be sure it's stored
-
-        leg_oid = self.generate_leg_oid()
-        incoming_leg.set_oid(leg_oid)
-        self.routing.set_oid(build_oid(leg_oid, "routing"))
-        
         self.routing.add_leg(incoming_leg)
-        incoming_leg.start()
         
         
     def routed(self, action):

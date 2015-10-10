@@ -13,6 +13,15 @@ class FormatError(Exception):
     pass
 
 
+class SipError(Exception):
+    def __init__(self, status):
+        self.status = status
+        
+        
+    def __str__(self):
+        return "%d %s" % self.status
+        
+
 Addr = collections.namedtuple("Addr", [ "host", "port" ])
 Addr.__new__.__defaults__ = (None,)
 
