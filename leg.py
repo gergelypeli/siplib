@@ -13,8 +13,8 @@ from util import Logger, build_oid
 class Error(Exception): pass
 
 class Leg(object):
-    def __init__(self, call):
-        self.call = call
+    def __init__(self):
+        self.call = None
         self.report = None
         self.ctx = {}
         self.media_legs = []
@@ -29,6 +29,10 @@ class Leg(object):
         self.report = report
         
         
+    def set_call(self, call):
+        self.call = call
+
+
     def start(self):
         pass  # Useful for Leg types that do something by themselves
 
@@ -37,7 +41,6 @@ class Leg(object):
         raise NotImplementedError()
 
 
-    # TODO: these are duplicated from Call/MediaChannel
     def finish(self):
         if any(self.media_legs):
             self.logger.debug("Deleting media legs.")
@@ -181,8 +184,8 @@ class SipLeg(Leg):
     DISCONNECTING_OUT = "DISCONNECTING_OUT"
     
 
-    def __init__(self, call, dialog):
-        super(SipLeg, self).__init__(call)
+    def __init__(self, dialog):
+        super(SipLeg, self).__init__()
 
         self.dialog = dialog
         self.state = self.DOWN
@@ -238,7 +241,7 @@ class SipLeg(Leg):
 
     def preprocess_outgoing_session(self, sdp):
         for i in range(len(self.media_legs), len(sdp.channels)):
-            mgc = self.call.mgc
+            mgc = self.call.switch.mgc
             local_addr = self.call.allocate_media_address(i)  # TODO: deallocate them, too!
             self.media_legs.append(ProxiedMediaLeg(mgc, local_addr))
         
@@ -520,8 +523,8 @@ class PlannedLeg(Leg):
             return action
             
             
-    def __init__(self, call, metapoll):
-        super(PlannedLeg, self).__init__(call)
+    def __init__(self, metapoll):
+        super(PlannedLeg, self).__init__()
         
         self.planner = self.LegPlanner(
             metapoll,
@@ -539,9 +542,9 @@ class PlannedLeg(Leg):
         self.planner.set_oid(build_oid(oid, "planner"))
 
 
-    def plan_finished(self, result):
-        if result is not None:
-            self.logger.error("Plan return value ignored!")
+    def plan_finished(self, exception):
+        if exception is not None:
+            self.logger.error("Leg plan screwed!")
             
         self.finish()
         
@@ -556,6 +559,6 @@ class PlannedLeg(Leg):
 
 def create_uninvited_leg(dialog_manager, invite_params):
     # TODO: real UninvitedLeg class
-    leg = Leg(dialog_manager, None, None, None)
+    leg = Leg(dialog_manager, None, None, None)  # FIXME: this is seriously obsolete!
     leg.dialog.send_request(dict(method="UNINVITE"), invite_params, leg.process)  # strong ref!
     leg.state = leg.DIALING_OUT

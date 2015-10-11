@@ -6,13 +6,13 @@ from util import build_oid, Logger
 
 
 class Routing(object):
-    def __init__(self, call, report):
+    def __init__(self, call):
         # The report handler is for the finish and anchor events.
         # Both may be forwarded by an owning internal leg,
         # or be processed by the owning Call.
         
         self.call = call
-        self.report = report
+        self.report = None
         self.oid = "routing=x"
         self.legs = {}
         #self.logger = logging.LoggerAdapter(logger, {})
@@ -21,6 +21,10 @@ class Routing(object):
     
     def set_oid(self, oid):
         self.logger.set_oid(oid)
+        
+        
+    def set_report(self, report):
+        self.report = report
 
 
     def add_leg(self, leg):
@@ -33,6 +37,7 @@ class Routing(object):
         self.legs[li] = leg
         leg.set_report(WeakMethod(self.process, li).bind_front())
         leg.set_oid(leg_oid)
+        leg.set_call(self.call)
         
         leg.start()
 
@@ -67,12 +72,15 @@ class Routing(object):
         raise NotImplementedError()
         
         
-    def cancel(self):
+    def cancel(self, status=None):
         for li, leg in self.legs.items():
-            if li > 0 and leg:
-                leg.do(dict(type="cancel"))
-                
-        # Don't forget to reject the incoming leg afterwards, too
+            if leg:
+                if li > 0:
+                    leg.do(dict(type="cancel"))
+                else:
+                    # This may not happen, if we cancel after an anchoring,
+                    # then the incoming leg already got a positive response.
+                    self.reject(status or Status(487))
 
 
     def forward(self, li, action):
@@ -83,6 +91,13 @@ class Routing(object):
         incoming_leg = self.legs[0]
         self.anchor(li)
         incoming_leg.do(action)
+        self.cancel()  # the remaining legs only
+
+
+    def dial_out(self, action):
+        leg = self.call.switch.make_outgoing_leg(action["ctx"]["uri"])
+        self.add_leg(leg)
+        leg.do(action)
 
 
     def process(self, li, action):
@@ -93,7 +108,7 @@ class Routing(object):
             self.remove_leg(li)
         elif li == 0:
             if type == "dial":
-                self.dial(action)
+                self.dial_in(action)
             elif type == "cancel":
                 self.cancel()
             else:
@@ -108,26 +123,19 @@ class Routing(object):
 
 
 class SimpleRouting(Routing):
-    def route_call(self, ctx):
+    def route_ctx(self, ctx):
         raise NotImplementedError()
 
 
-    def dial(self, action):
+    def dial_in(self, action):
         try:
-            outgoing_leg = self.route_call(action["ctx"])
-            if not outgoing_leg:
-                raise Exception("Routing failed for an unknown reason!")
+            ctx = action["ctx"].copy()
+            self.route_ctx(ctx)
         except Exception:
             self.reject(Status(500))  # TODO
         else:
-            self.add_leg(outgoing_leg)
-            outgoing_leg.do(action)
+            self.dial_out(dict(action, ctx=ctx))
 
-
-    def cancel(self):
-        Routing.cancel(self)
-        self.reject(Status(487))
-        
 
 class PlannedRouting(Routing):
     class CallCancelled(Exception):
@@ -138,8 +146,8 @@ class PlannedRouting(Routing):
         pass
 
             
-    def __init__(self, call, report, metapoll):
-        super(PlannedRouting, self).__init__(call, report)
+    def __init__(self, call, metapoll):
+        super(PlannedRouting, self).__init__(call)
         
         self.metapoll = metapoll
 
@@ -149,50 +157,54 @@ class PlannedRouting(Routing):
         self.oid = oid
 
 
-    def dial(self, action):
+    def dial_in(self, action):
         self.planner = self.RoutingPlanner(
             self.metapoll,
             WeakGeneratorMethod(self.plan),
-            finish_handler=WeakMethod(self.plan_finished, action),
-            error_handler=WeakMethod(self.plan_failed)
+            finish_handler=WeakMethod(self.plan_finished)
         )
         self.planner.set_oid(build_oid(self.oid, "planner"))
-        self.planner.start(action["ctx"])
+        self.planner.start(action)
     
     
-    def cancel(self):
-        self.planner.resume(SipError(Status(487)))
+    #def cancel(self):
+        # TODO: this may be a bit too strong, why don't we just resume the plan?
+        # FIXME: and why don't we resume with every action???
+    #    self.planner.resume(SipError(Status(487)))
         
     
-    def plan_finished(self, outgoing_leg, action):
-        self.add_leg(outgoing_leg)
-        outgoing_leg.do(action)
-        
-        
-    def plan_failed(self, exception):
-        Routing.cancel(self)
+    def plan_finished(self, exception):
+        status = None
         
         try:
-            raise exception
+            if exception:
+                raise exception
+                
+            if 0 in self.legs:
+                raise Exception("Routing plan completed without anchoring!")
         except SipError as e:
-            self.reject(e.status)
+            status = e.status
         except:
-            self.reject(Status(500))  # TODO
+            status = Status(500)
+            
+        if status:
+            self.cancel(status)
+        
+        
+    def process(self, action):
+        raise NotImplementedError()  # we must resume with all actions
         
 
-    #def process(self, li, action):
-    #    self.planner.resume(PlannedEvent("action", (li, action)))
-
-
-    def plan(self, planner, ctx):
+    def plan(self, planner, action):
         raise NotImplementedError()
         
 
 
 class Call(object):
-    def __init__(self, mgc, finish_handler):
-        self.mgc = mgc
-        self.finish_handler = finish_handler
+    def __init__(self, switch):
+        self.switch = switch
+        #self.mgc = mgc
+        #self.finish_handler = finish_handler
         self.legs = None
         self.media_channels = None
         self.routing = None
@@ -215,15 +227,16 @@ class Call(object):
         
         
     def finish(self):
-        self.finish_handler(self.oid)
+        self.switch.finish_call(self.oid)
         
         
     def make_routing(self):
-        return Routing(Weak(self), WeakMethod(self.routed))
+        return Routing(Weak(self))
         
         
     def start_routing(self, incoming_leg):
         self.routing = self.make_routing()  # just to be sure it's stored
+        self.routing.set_report(WeakMethod(self.routed))
         self.routing.add_leg(incoming_leg)
         
         
@@ -255,11 +268,11 @@ class Call(object):
         
     def allocate_media_address(self, channel_index):
         # TODO: check existing channels
-        return self.mgc.allocate_media_address(channel_index)
+        return self.switch.mgc.allocate_media_address(channel_index)
         
         
     def deallocate_media_address(self, addr):  # TODO: may not be necessary
-        self.mgc.deallocate_media_address(addr)
+        self.switch.mgc.deallocate_media_address(addr)
         
         
     def refresh_media(self):
@@ -278,7 +291,7 @@ class Call(object):
             if i < len(self.media_channels):
                 c = self.media_channels[i]
             else:
-                c = MediaChannel(self.mgc)
+                c = MediaChannel(self.switch.mgc)
                 c.set_oid(build_oid(self.oid, "channel", len(self.media_channels)))
                 self.media_channels.append(c)
 
@@ -290,6 +303,9 @@ class Call(object):
         type = action["type"]
         
         if type == "finish":
+            # TODO: do something if a leg is just screwed up, and another is
+            # still up, thinking that everything is OK!
+            
             self.logger.debug("Bridged leg %d finished." % li)
             self.legs[li] = None
             

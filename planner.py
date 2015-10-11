@@ -13,11 +13,10 @@ PlannedEvent.__new__.__defaults__ = (None,)
 
 
 class Planner(object):
-    def __init__(self, metapoll, generator_method, finish_handler=None, error_handler=None):
+    def __init__(self, metapoll, generator_method, finish_handler=None):
         self.metapoll = metapoll
         self.generator_method = generator_method
-        self.finish_handler = finish_handler  # TODO: disallow return values
-        self.error_handler = error_handler  # TODO: not needed
+        self.finish_handler = finish_handler
 
         self.generator = None
         self.timeout_handle = None
@@ -45,12 +44,12 @@ class Planner(object):
                 self.generator.close()
             except Exception as e:
                 self.logger.warning("Force aborted plan.")
-                if self.error_handler:
-                    self.error_handler(e)
+                if self.finish_handler:
+                    self.finish_handler(e)
             else:
                 self.logger.warning("Force terminated plan.")
-                if self.error_handler:
-                    self.error_handler(None)  # TODO: figure something out here!
+                if self.finish_handler:
+                    self.finish_handler(None)
         
         if self.timeout_handle:
             self.metapoll.unregister_timeout(self.timeout_handle)
@@ -111,16 +110,19 @@ class Planner(object):
             self.logger.debug("Terminated plan.")
             self.generator = None
             
+            if e.value:
+                self.logger.debug("Plan return value ignored!")
+            
             if self.finish_handler:
-                self.finish_handler(e.value)
+                self.finish_handler(None)
         except Exception as e:
-            self.logger.warning("Aborted plan: %s" % e)
+            self.logger.warning("Aborted plan with exception: %s" % e)
             self.generator = None
             
-            if self.error_handler:
-                self.error_handler(e)
-        
-        
+            if self.finish_handler:
+                self.finish_handler(e)
+
+
 def main():
     class Planned(object):
         def __init__(self, metapoll):

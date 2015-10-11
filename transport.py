@@ -53,7 +53,7 @@ class TestTransport(Loggable):
 class UdpTransport(Loggable):
     def __init__(self, metapoll, local_addr, reception):
         self.metapoll = metapoll
-        self.local_addr = local_addr
+        self.local_addr = resolve(local_addr)
         self.reception = reception
         
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -71,7 +71,8 @@ class UdpTransport(Loggable):
         hop = msg["hop"]
         
         if hop.local_addr != self.local_addr:
-            self.logger.debug("This transport can't send this!")
+            self.logger.error("This transport can't send on hop: %s" % (hop,))
+            self.logger.debug("Our local addr is: %s" % (self.local_addr,))
             return
         
         sip = print_structured_message(msg)

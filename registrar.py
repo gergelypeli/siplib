@@ -55,7 +55,11 @@ class Record(object):
 
     def get_contact_hops(self):
         return [ c.hop for c in self.contacts_by_uri.values() ]
-        
+
+
+    def get_contacts(self):
+        return [ (k, v.hop) for k, v in self.contacts_by_uri.items() ]
+                
 
     def process_updates(self, params):
         # TODO: check authname!
@@ -157,7 +161,7 @@ class RecordManager(object):
             # We'd need to know which account is allowed to register which
             return self.reject(403, "Forbidden")
         
-        if record_uri.schema != "sip":
+        if record_uri.scheme != "sip":
             return self.reject(404, "Not Found")
             
         record = self.records_by_uri.get(record_uri)
@@ -192,6 +196,17 @@ class RecordManager(object):
         if record:
             self.logger.debug("Found contact hops for '%s'" % (record_uri,))
             return record.get_contact_hops()
+        else:
+            #self.logger.debug("Not found contact hops: %s" % (record_uri,))
+            return []
+
+
+    def lookup_contacts(self, record_uri):
+        record = self.records_by_uri.get(record_uri)
+        
+        if record:
+            self.logger.debug("Found contacts for '%s'" % (record_uri,))
+            return record.get_contacts()
         else:
             #self.logger.debug("Not found contact hops: %s" % (record_uri,))
             return []

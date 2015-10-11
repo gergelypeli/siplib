@@ -193,15 +193,15 @@ def print_params(params):
     return [ "%s=%s" % (k, v) if v is not True else k for k, v in params.items() if v]
 
 
-class Uri(collections.namedtuple("Uri", "addr user schema params")):
-    def __new__(cls, addr, user=None, schema=None, params=None):
-        return super(Uri, cls).__new__(cls, addr, user, schema or "sip", params or {})
+class Uri(collections.namedtuple("Uri", "addr user scheme params")):
+    def __new__(cls, addr, user=None, scheme=None, params=None):
+        return super(Uri, cls).__new__(cls, addr, user, scheme or "sip", params or {})
 
 
     def __hash__(self):
         # It's unlikely that two URIs differ only in parameters, but even in
         # that case the equality will sort that out, hashing is only a speedup.
-        return hash((self.addr, self.user, self.schema))
+        return hash((self.addr, self.user, self.scheme))
         
         
     def __str__(self):
@@ -214,14 +214,14 @@ class Uri(collections.namedtuple("Uri", "addr user schema params")):
         parts = [ hostport ] + print_params(self.params)
         rest = ";".join(parts)
         rest = "%s@%s" % (self.user, rest) if self.user else rest
-        uri = "%s:%s" % (self.schema, rest)
+        uri = "%s:%s" % (self.scheme, rest)
 
         return uri
 
 
     @classmethod
     def parse(cls, uri):
-        schema, rest = uri.split(':', 1)
+        scheme, rest = uri.split(':', 1)
         
         if "@" in rest:
             user, rest = rest.split('@', 1)
@@ -240,7 +240,7 @@ class Uri(collections.namedtuple("Uri", "addr user schema params")):
         
         params = parse_parts(parts[1:])
 
-        return cls(Addr(host, port), user, schema, params)
+        return cls(Addr(host, port), user, scheme, params)
 
 
 class Nameaddr(collections.namedtuple("Nameaddr", "uri name params")):
