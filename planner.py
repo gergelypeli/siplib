@@ -116,7 +116,7 @@ class Planner(object):
             if self.finish_handler:
                 self.finish_handler(None)
         except Exception as e:
-            self.logger.warning("Aborted plan with exception: %s" % e)
+            self.logger.warning("Aborted plan with exception!", exc_info=True)
             self.generator = None
             
             if self.finish_handler:

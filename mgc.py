@@ -16,6 +16,14 @@ class MediaLeg(object):
         self.sid = None
 
 
+    def realize(self):
+        if not self.sid:
+            # This shouldn't happen, unless one Leg was lazy
+            self.refresh({})
+
+        return self.sid
+        
+
     def refresh(self, params):
         if not self.sid:
             self.sid = self.mgc.generate_leg_sid(self.affinity)
@@ -105,13 +113,23 @@ class MediaChannel(object):
         
     def refresh(self):
         # TODO: implement leg deletion
+        #leg_labels = []
+        
+        #for leg in self.legs:
+        #    if not leg.sid:
+        #        raise Exception("Bridged media leg is not created yet!")
+                
+        #    leg_labels.append(leg.sid.label)
+        
+        leg_sids = [ leg.realize() for leg in self.legs ]
+        
         params = {
             'type': 'proxy',
-            'legs': [ leg.sid.label for leg in self.legs ]
+            'legs': [ sid.label for sid in leg_sids ]
         }
         
         if not self.sid:
-            leg_addrs = set(leg.sid.addr for leg in self.legs)
+            leg_addrs = set(sid.addr for sid in leg_sids)
             if len(leg_addrs) != 1:
                 raise Exception("Multiple addresses among media legs!")
                 

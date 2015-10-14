@@ -11,7 +11,7 @@ from transport import UdpTransport
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
 from leg import SipLeg, PlannedLeg, create_uninvited_leg
-from call import Call, SimpleRouting
+from call import Call, SimpleRouting, PlannedRouting
 from sdp import Sdp
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
@@ -111,14 +111,15 @@ class CalleeLeg(PlannedLeg):
         
         yield from planner.sleep(1)
         answer = self.make_answer(self.offer)
-        self.report(dict(type="accept", answer=answer))
         self.media_legs.append(PlayerMediaLeg(self.call.switch.mgc))
+        self.report(dict(type="accept", answer=answer))
+        # It shouldn't be legal to answer without channels existing already!
         self.media_legs[0].play("playback.wav", ("PCMA", 8000), volume=0.2, fade=3)
-        self.refresh_media()
+        #self.refresh_media()
         
         yield from planner.sleep(3)
         self.media_legs[0].play(volume=0, fade=3)
-        self.refresh_media()
+        #self.refresh_media()
         
         yield from planner.sleep(3)
         self.report(dict(type="hangup"))
@@ -414,7 +415,15 @@ class SwitchA(Switch):
 
 class SwitchB(Switch):
     class CallClass(TestCall):
-        class RoutingClass(TestRouting):
+        class RoutingClass(PlannedRouting):
+            def plan(self, planner, action):
+                self.logger.debug("Routing plan started.")
+                self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:callee"))))
+                li, action = yield from planner.wait_leg_action()
+                self.forward(li, action)
+                
+                
+        class XRoutingClass(TestRouting):
             def route_ctx(self, ctx):
                 # For the phone call only
                 if ctx["to"].uri.user == PHONE_NUMBER:

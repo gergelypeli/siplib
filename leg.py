@@ -41,27 +41,27 @@ class Leg(object):
         raise NotImplementedError()
 
 
-    def finish(self):
+    def finish(self, error=None):
         if any(self.media_legs):
             self.logger.debug("Deleting media legs.")
             for i, ml in enumerate(self.media_legs):
                 if ml:
-                    ml.delete(WeakMethod(self.media_deleted, i))
+                    ml.delete(WeakMethod(self.media_deleted, i, error))
         else:
             self.logger.debug("Leg is finished.")
-            self.report(dict(type="finish"))
+            self.report(dict(type="finish", error=error))
             
             
-    def media_deleted(self, li):
+    def media_deleted(self, li, error):
         self.media_legs[li] = None
         
         if not any(self.media_legs):
             self.logger.debug("Leg is finished.")
-            self.report(dict(type="finish"))
+            self.report(dict(type="finish", error=error))
 
     
-    def refresh_media(self):
-        self.call.refresh_media()
+    #def refresh_media(self):
+    #    self.call.refresh_media()
         
         
     def get_further_legs(self):  # for the sake of internal legs
@@ -236,7 +236,7 @@ class SipLeg(Leg):
                 recv_formats=extract_formats(lc)
             )
             
-        super().refresh_media()
+        #super().refresh_media()
         
 
     def preprocess_outgoing_session(self, sdp):
@@ -513,11 +513,11 @@ class SipLeg(Leg):
 
 class PlannedLeg(Leg):
     class LegPlanner(Planner):
-        def wait_action(self, action_type, timeout=None):
+        def wait_action(self, action_type=None, timeout=None):
             planned_event = yield from self.suspend(expect="action", timeout=timeout)
             action = planned_event.event
             
-            if action["type"] != action_type:
+            if action_type and action["type"] != action_type:
                 raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
                 
             return action
@@ -542,11 +542,11 @@ class PlannedLeg(Leg):
         self.planner.set_oid(build_oid(oid, "planner"))
 
 
-    def plan_finished(self, exception):
-        if exception is not None:
+    def plan_finished(self, error):
+        if error:
             self.logger.error("Leg plan screwed!")
             
-        self.finish()
+        self.finish(error)
         
 
     def do(self, action):

@@ -1,7 +1,7 @@
 from async import WeakMethod, Weak, WeakGeneratorMethod
 from format import Status, SipError
 from mgc import MediaChannel
-from planner import Planner
+from planner import Planner, PlannedEvent
 from util import build_oid, Logger
 
 
@@ -54,11 +54,14 @@ class Routing(object):
         
         
     def reject(self, status):
-        self.logger.warning("Routing rejected: %s" % (status,))
+        self.logger.warning("Rejecting with status %s" % (status,))
+        
         self.legs[0].do(dict(type="reject", status=status))
 
 
     def anchor(self, li):
+        self.logger.debug("Anchoring to leg %d." % li)
+        
         these_legs = [ self.legs[0], self.legs[li] ]
         further_legs = self.legs[li].get_further_legs()
         
@@ -68,11 +71,9 @@ class Routing(object):
         self.remove_leg(0)
         
         
-    def dial(self, action):
-        raise NotImplementedError()
-        
-        
     def cancel(self, status=None):
+        self.logger.debug("Cancelling.")
+        
         for li, leg in self.legs.items():
             if leg:
                 if li > 0:
@@ -88,19 +89,23 @@ class Routing(object):
         # because it means that that leg is also anchored itself.
         # But can't just anchor right after routing, because the
         # outgoing leg may still be thinking.
+        self.logger.debug("Forwarding %s to incoming leg." % action["type"])
+        
         incoming_leg = self.legs[0]
         self.anchor(li)
         incoming_leg.do(action)
         self.cancel()  # the remaining legs only
 
 
-    def dial_out(self, action):
-        leg = self.call.switch.make_outgoing_leg(action["ctx"]["uri"])
+    def dial(self, action):
+        uri = action["ctx"]["uri"]
+        self.logger.debug("Dialing out to: %s" % (uri,))
+        leg = self.call.switch.make_outgoing_leg(uri)
         self.add_leg(leg)
         leg.do(action)
 
 
-    def process(self, li, action):
+    def default_process(self, li, action):
         type = action["type"]
         self.logger.debug("Got %s from leg %d." % (type, li))
 
@@ -108,7 +113,7 @@ class Routing(object):
             self.remove_leg(li)
         elif li == 0:
             if type == "dial":
-                self.dial_in(action)
+                raise Exception("Should have handled dial before default_process!")
             elif type == "cancel":
                 self.cancel()
             else:
@@ -116,10 +121,14 @@ class Routing(object):
         else:
             if type == "reject":
                 self.reject(action["status"])
-            elif type in ("ring", "accept"):
+            elif type in ("ring", "accept", "session"):
                 self.forward(li, action)
             else:
                 raise Exception("Invalid action from outgoing leg: %s" % type)
+
+
+    def process(self, li, action):
+        raise NotImplementedError()
 
 
 class SimpleRouting(Routing):
@@ -127,46 +136,36 @@ class SimpleRouting(Routing):
         raise NotImplementedError()
 
 
-    def dial_in(self, action):
-        try:
-            ctx = action["ctx"].copy()
-            self.route_ctx(ctx)
-        except Exception:
-            self.reject(Status(500))  # TODO
+    def process(self, li, action):
+        if action["type"] == "dial":
+            try:
+                ctx = action["ctx"].copy()
+                self.route_ctx(ctx)
+            except Exception:
+                self.reject(Status(500))  # TODO
+            else:
+                self.dial(dict(action, ctx=ctx))
         else:
-            self.dial_out(dict(action, ctx=ctx))
+            self.default_process(li, action)
 
 
 class PlannedRouting(Routing):
-    class CallCancelled(Exception):
-        pass
-        
-        
     class RoutingPlanner(Planner):
-        pass
+        def wait_leg_action(self, action_type=None, timeout=None):
+            planned_event = yield from self.suspend(expect="action", timeout=timeout)
+            li, action = planned_event.event
+            
+            if action_type and action["type"] != action_type:
+                raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
+                
+            return li, action
 
             
-    def __init__(self, call, metapoll):
-        super(PlannedRouting, self).__init__(call)
-        
-        self.metapoll = metapoll
-
-
     def set_oid(self, oid):
         Routing.set_oid(self, oid)
         self.oid = oid
 
 
-    def dial_in(self, action):
-        self.planner = self.RoutingPlanner(
-            self.metapoll,
-            WeakGeneratorMethod(self.plan),
-            finish_handler=WeakMethod(self.plan_finished)
-        )
-        self.planner.set_oid(build_oid(self.oid, "planner"))
-        self.planner.start(action)
-    
-    
     #def cancel(self):
         # TODO: this may be a bit too strong, why don't we just resume the plan?
         # FIXME: and why don't we resume with every action???
@@ -191,8 +190,17 @@ class PlannedRouting(Routing):
             self.cancel(status)
         
         
-    def process(self, action):
-        raise NotImplementedError()  # we must resume with all actions
+    def process(self, li, action):
+        if action["type"] == "dial":
+            self.planner = self.RoutingPlanner(
+                self.call.switch.metapoll,
+                WeakGeneratorMethod(self.plan),
+                finish_handler=WeakMethod(self.plan_finished)
+            )
+            self.planner.set_oid(build_oid(self.oid, "planner"))
+            self.planner.start(action)
+        else:
+            self.planner.resume(PlannedEvent("action", (li, action)))
         
 
     def plan(self, planner, action):
@@ -258,10 +266,10 @@ class Call(object):
 
             # TODO: let the Routing connect them to each other?
             for i, leg in enumerate(self.legs):
-                leg.set_report(WeakMethod(self.process, i))
+                leg.set_report(WeakMethod(self.process, i).bind_front())
                 
             self.media_channels = []
-            self.refresh_media()
+            #self.refresh_media()
         else:
             self.logger.debug("Unknown routing event %s!" % type)
         
@@ -284,6 +292,10 @@ class Call(object):
         ln = len(left_media_legs)
         right_media_legs = self.legs[-1].media_legs
         rn = len(right_media_legs)
+        
+        if ln != rn:
+            raise Exception("Media leg count mismatch, left has %d but right has %d!" % (ln, rn))
+        
         channel_count = min(ln, rn)  # TODO: max?
         self.logger.debug("Refreshing media (%d channels)" % channel_count)
         
@@ -298,8 +310,7 @@ class Call(object):
             c.set_legs([ left_media_legs[i], right_media_legs[i] ])
         
         
-    def process(self, action, li):  # li is second arg because it is bound
-        lj = 1 - li
+    def process(self, li, action):
         type = action["type"]
         
         if type == "finish":
@@ -309,10 +320,13 @@ class Call(object):
             self.logger.debug("Bridged leg %d finished." % li)
             self.legs[li] = None
             
-            for leg in self.legs:
-                if leg:
-                    break
-            else:
+            if action.get("error"):
+                self.logger.warning("Leg screwed, tearing down others!")
+                for leg in self.legs:
+                    if leg:
+                        leg.do(dict(type="hangup"))
+            
+            if not any(self.legs):
                 if any(self.media_channels):
                     self.logger.debug("Deleting media channels.")
                     for i, mc in enumerate(self.media_channels):
@@ -322,8 +336,13 @@ class Call(object):
                     self.logger.debug("Call is finished.")
                     self.finish()
         else:
-            self.logger.debug("Bridging %s from leg %d." % (type, li))
+            lj = 1 - li
+            self.logger.debug("Bridging %s from leg %d to %d." % (type, li, lj))
             self.legs[lj].do(action)
+            
+            if "answer" in action:
+                self.refresh_media()
+            
 
 
     def media_deleted(self, li):
@@ -332,10 +351,3 @@ class Call(object):
         if not any(self.media_channels):
             self.logger.debug("Call is finished.")
             self.finish()
-
-
-# The incoming leg must have a context initialized from the INVITE, then
-# this leg passed to the routing, which returns the outgoing leg, whose
-# context is initialized there. The outgoing leg uses its context to
-# reconstruct the dial.
-# Es ne kelljen a konstruktor-parametereket a legfelsobb szintig feltolni.
