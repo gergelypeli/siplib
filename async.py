@@ -351,14 +351,12 @@ class Reconnector(object):
     call the given callback with the created socket, and stops. Must be restarted manually
     after the user thinks the connection is broken.
     """
-    def __init__(self, type, metapoll, addr, timeout, connected_handler):
+    def __init__(self, type, metapoll, addr, connected_handler):
         self.type = type
         self.metapoll = metapoll
         self.addr = addr
-        self.timeout = timeout
         self.connected_handler = connected_handler
         self.socket = None
-        self.reconnecting_handle = None
         self.local_addr = (os.environ.get('VFTESTHOST', ''), 0)
 
 
@@ -371,15 +369,7 @@ class Reconnector(object):
             return
 
         # If currently scheduled, then cancel that and try immediately
-        if self.reconnecting_handle:
-            self.metapoll.unregister_timeout(self.reconnecting_handle)
-        else:
-            logging.info("Started %s reconnection to %s" % (self.type, self.addr))
-
-        if self.timeout:
-            self.reconnecting_handle = self.metapoll.register_timeout(
-                    self.timeout, WeakMethod(self.reconnect), repeat=True)
-
+        logging.info("Started %s reconnection to %s" % (self.type, self.addr))
         self.reconnect()
 
 
@@ -415,15 +405,12 @@ class Reconnector(object):
         self.metapoll.register_writer(self.socket, None)
 
         if self.socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) != 0:
-            logging.debug("%s connection attempt to %s failed, %s retry" %
-                    (self.type, self.addr, "will" if self.timeout else "won't"))
-            self.socket = None
+            logging.debug("%s connection attempt to %s failed, will retry" %
+                    (self.type, self.addr))
+            self.reconnect()
             return
 
         logging.debug("Successful %s reconnection to %s" % (self.type, self.addr))
-
-        if self.timeout:
-            self.metapoll.unregister_timeout(self.reconnecting_handle)
 
         s = self.socket
         self.socket = None
