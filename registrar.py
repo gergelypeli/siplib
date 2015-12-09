@@ -8,11 +8,9 @@ import collections
 from format import Nameaddr, Status
 from async import WeakMethod, Weak
 from transactions import make_simple_response
-from util import Logger
+from util import Loggable
 
 MAXFWD = 50
-#logger = logging.getLogger(__name__)
-
 
 class Error(Exception):
     pass
@@ -128,15 +126,12 @@ class Record(object):
             self.process_updates(params)
 
 
-class RecordManager(object):
+class RecordManager(Loggable):
     def __init__(self, transmission):
+        Loggable.__init__(self)
+
         self.transmission = transmission
         self.records_by_uri = {}
-        self.logger = Logger()
-        
-        
-    def set_oid(self, oid):
-        self.logger.set_oid(oid)
         
         
     def reject_request(self, msg, status):
@@ -306,17 +301,14 @@ class Registration(object):
             self.process(params)
 
 
-class RegistrationManager(object):
+class RegistrationManager(Loggable):
     def __init__(self, transmission, hopping, authing):
+        Loggable.__init__(self)
+
         self.transmission = transmission
         self.hopping = hopping
         self.authing = authing
         self.registrations_by_id = {}
-        self.logger = Logger()
-        
-        
-    def set_oid(self, oid):
-        self.logger.set_oid(oid)
         
         
     def get_hop(self, uri):

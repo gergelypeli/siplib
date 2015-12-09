@@ -3,7 +3,7 @@ from __future__ import unicode_literals, print_function
 import uuid
 import hashlib
 from format import Auth, WwwAuth
-from util import Logger
+from util import Loggable
 
 # Note: ha1 = md5("authname:realm:password")
 
@@ -30,15 +30,12 @@ def digest(method, uri, ha1, nonce, qop=None, cnonce=None, nc=None):
         
 
 
-class Authority(object):
+class Authority(Loggable):
     def __init__(self):
+        Loggable.__init__(self)
+
         self.nonces = set()
-        self.logger = Logger()
 
-
-    def set_oid(self, oid):
-        self.logger.set_oid(oid)
-        
 
     def get_realm(self, params):
         return params["to"].uri.addr.host

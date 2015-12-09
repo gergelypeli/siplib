@@ -2,11 +2,13 @@ from async import WeakMethod, Weak, WeakGeneratorMethod
 from format import Status, SipError
 from mgc import MediaChannel
 from planner import Planner, PlannedEvent
-from util import build_oid, Logger
+from util import build_oid, Loggable
 
 
-class Routing(object):
+class Routing(Loggable):
     def __init__(self, call):
+        Loggable.__init__(self)
+
         # The report handler is for the finish and anchor events.
         # Both may be forwarded by an owning internal leg,
         # or be processed by the owning Call.
@@ -15,14 +17,8 @@ class Routing(object):
         self.report = None
         self.oid = "routing=x"
         self.legs = {}
-        #self.logger = logging.LoggerAdapter(logger, {})
-        self.logger = Logger()
     
     
-    def set_oid(self, oid):
-        self.logger.set_oid(oid)
-        
-        
     def set_report(self, report):
         self.report = report
 
@@ -208,25 +204,19 @@ class PlannedRouting(Routing):
         
 
 
-class Call(object):
+class Call(Loggable):
     def __init__(self, switch):
+        Loggable.__init__(self)
+
         self.switch = switch
         #self.mgc = mgc
         #self.finish_handler = finish_handler
         self.legs = None
         self.media_channels = None
         self.routing = None
-        self.oid = "call=x"
         self.leg_count = 0
 
-        self.logger = Logger()
 
-
-    def set_oid(self, oid):
-        self.oid = oid
-        self.logger.set_oid(oid)
-        
-        
     def generate_leg_oid(self):
         leg_oid = build_oid(self.oid, "leg", self.leg_count)
         self.leg_count += 1

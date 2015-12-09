@@ -2,18 +2,18 @@
 
 import collections
 from async import Metapoll, Weak, WeakMethod
-from util import Logger
+from util import Loggable
 #import logging
-
-#logger = logging.getLogger(__name__)
 
 
 PlannedEvent = collections.namedtuple("PlannedEvent", [ "tag", "event" ])
 PlannedEvent.__new__.__defaults__ = (None,)
 
 
-class Planner(object):
+class Planner(Loggable):
     def __init__(self, metapoll, generator_method, finish_handler=None):
+        Loggable.__init__(self)
+
         self.metapoll = metapoll
         self.generator_method = generator_method
         self.finish_handler = finish_handler
@@ -21,12 +21,6 @@ class Planner(object):
         self.generator = None
         self.timeout_handle = None
         self.event_queue = []
-        
-        self.logger = Logger()
-
-
-    def set_oid(self, oid):
-        self.logger.set_oid(oid)
 
 
     def start(self, *args, **kwargs):

@@ -16,7 +16,7 @@ from sdp import Sdp
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
 from account import Account, AccountManager
-from util import resolve, setup_exchandler, build_oid, Logger
+from util import resolve, setup_exchandler, build_oid, Loggable
 from mgw import MediaGateway
 from mgc import Controller, PlayerMediaLeg
 
@@ -71,8 +71,6 @@ MGC1_ADDR = Addr(MGC1_HOST, 20001)
 MGC2_ADDR = Addr(MGC2_HOST, 20002)
 
 MEDIA_HOST = "otthon"
-
-#logger = logging.getLogger()
 
 
 class UnreachableLeg(PlannedLeg):
@@ -204,10 +202,12 @@ class TestCall(Call):
         return self.RoutingClass(Weak(self))
     
 
-class Switch(object):
+class Switch(Loggable):
     CallClass = TestCall
     
     def __init__(self, metapoll, local_addr, mgc_addr, mgw_addr, media_ports):
+        Loggable.__init__(self)
+
         self.metapoll = metapoll
         self.transport = UdpTransport(metapoll, local_addr, WeakMethod(self.reception))
         self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
@@ -230,14 +230,11 @@ class Switch(object):
         self.calls_by_oid = {}
         self.call_count = 0
         
-        self.logger = Logger()
-
         metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
 
 
     def set_oid(self, oid):
-        self.oid = oid
-        self.logger.set_oid(oid)
+        Loggable.set_oid(self, oid)
 
         self.account_manager.set_oid(build_oid(oid, "accman"))
         self.authority.set_oid(build_oid(oid, "authority"))

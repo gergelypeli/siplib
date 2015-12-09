@@ -5,9 +5,7 @@ from async import WeakMethod, WeakGeneratorMethod
 from format import Status, make_virtual_response
 from planner import Planner, PlannedEvent
 from mgc import ProxiedMediaLeg
-from util import Logger, build_oid, Loggable
-
-#logger = logging.getLogger(__name__)
+from util import build_oid, Loggable
 
 
 class Error(Exception): pass

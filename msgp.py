@@ -6,7 +6,7 @@ import socket
 import errno
 
 from async import TcpReconnector, TcpListener, WeakMethod
-from util import Logger, Loggable
+from util import Loggable
 
 
 def generate_id():
@@ -348,8 +348,10 @@ class MsgpStream(object):
             item.response_handler(None, None)
             
 
-class MsgpDispatcher(object):
+class MsgpDispatcher(Loggable):
     def __init__(self, metapoll, request_handler, status_handler):
+        Loggable.__init__(self)
+        
         self.metapoll = metapoll
         self.request_handler = request_handler
         self.status_handler = status_handler
@@ -357,14 +359,8 @@ class MsgpDispatcher(object):
         self.streams_by_id = {}
         self.unidentified_pipes_by_id = {}
         self.local_id = generate_id()
-        self.logger = Logger()
         
         
-    def set_oid(self, oid):
-        self.logger.set_oid(oid)
-        self.oid = oid
-
-
     def add_unidentified_pipe(self, socket):
         self.logger.debug("Adding unidentified pipe.")
         

@@ -2,8 +2,8 @@ from __future__ import unicode_literals, print_function
 
 from async import WeakMethod
 #from msgp import JsonMsgp, Sid
-from msgp2b import MsgpClient
-from util import vacuum, Logger, build_oid, Loggable
+from msgp import MsgpClient
+from util import vacuum, build_oid, Loggable
 
         
 class MediaLeg(Loggable):
@@ -157,10 +157,12 @@ class MediaChannel(Loggable):
             handler()
 
 
-class Controller(object):
+class Controller(Loggable):
     last_mgc_number = 0
     
     def __init__(self, metapoll, mgw_addr):
+        Loggable.__init__(self)
+
         self.metapoll = metapoll
 
         Controller.last_mgc_number += 1
@@ -172,11 +174,9 @@ class Controller(object):
         #self.msgp = JsonMsgp(metapoll, mgc_addr, WeakMethod(self.process_request))
         self.msgp = MsgpClient(metapoll, WeakMethod(self.process_request), WeakMethod(self.status_changed), mgw_addr)
         
-        self.logger = Logger()
-        
         
     def set_oid(self, oid):
-        self.logger.set_oid(oid)
+        Loggable.set_oid(self, oid)
         self.msgp.set_oid(build_oid(oid, "msgp"))
         
         

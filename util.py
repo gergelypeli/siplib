@@ -86,16 +86,6 @@ def build_oid(parent, key, value=None):
     return "%s,%s" % (parent, kv) if parent is not None else kv
 
 
-class Logger(logging.LoggerAdapter):
-    def __init__(self, oid=None):
-        logging.LoggerAdapter.__init__(self, logging.getLogger(), dict(oid=oid))
-        
-        
-    def set_oid(self, oid):
-        # Nasty hack!
-        self.extra['oid'] = oid
-
-
 class Loggable(object):
     def __init__(self):
         self.logger = None

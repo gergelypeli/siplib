@@ -6,8 +6,6 @@ from format import Hop, Addr, parse_structured_message, print_structured_message
 from async import WeakMethod
 from util import Loggable, resolve
 
-#logger = logging.getLogger(__name__)
-
 
 def indented(text, indent="  "):
     return "\n" + "\n".join(indent + line for line in text.split("\n"))

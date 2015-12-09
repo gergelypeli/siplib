@@ -7,11 +7,9 @@ from weakref import WeakValueDictionary
 from format import Uri, Nameaddr
 from sdp import Origin
 from async import WeakMethod
-from util import resolve, Logger
+from util import resolve, Loggable
 
 MAXFWD = 50
-#logger = logging.getLogger(__name__)
-
 
 class Error(Exception):
     pass
@@ -56,8 +54,10 @@ def identify_incoming_request(params):
     return did
     
 
-class Dialog(object):
+class Dialog(Loggable):
     def __init__(self, dialog_manager):
+        Loggable.__init__(self)
+
         self.dialog_manager = dialog_manager
         self.report = None
     
@@ -81,12 +81,6 @@ class Dialog(object):
         self.local_sdp_session_host = resolve(self.dialog_manager.get_local_addr())[0]
         self.remote_sdp_session_version = None
 
-        self.logger = Logger()
-
-
-    def set_oid(self, oid):
-        self.logger.set_oid(oid)
-        
 
     def set_report(self, report):
         self.report = report
@@ -360,20 +354,16 @@ class Dialog(object):
             self.report(response)
 
 
-class DialogManager(object):
+class DialogManager(Loggable):
     def __init__(self, local_addr, transmission, hopping, authing):
+        Loggable.__init__(self)
+
         self.local_addr = local_addr
         self.transmission = transmission
         self.hopping = hopping
         self.authing = authing
         self.dialogs_by_id = WeakValueDictionary()
 
-        self.logger = Logger()
-        
-        
-    def set_oid(self, oid):
-        self.logger.set_oid(oid)
-        
         
     def get_local_addr(self):
         return self.local_addr

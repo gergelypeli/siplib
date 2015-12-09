@@ -7,11 +7,9 @@ import datetime
 import wave
 
 import g711
-import msgp2b
+from msgp import MsgpServer
 from async import WeakMethod
-from util import Logger, build_oid
-
-#logger = logging.getLogger(__name__)
+from util import Loggable, build_oid
 
 
 class Error(Exception): pass
@@ -159,11 +157,13 @@ class RtpPlayer(object):
             self.handle = None
 
 
-class Thing(object):
+class Thing(Loggable):
     def __init__(self, oid, label, owner_sid):
+        Loggable.__init__(self)
+
         self.label = label
         self.owner_sid = owner_sid
-        self.logger = Logger(oid)
+        self.set_oid(oid)
         
         
     def modify(self, params):
@@ -379,20 +379,19 @@ class Context(Thing):
         leg.send_format(format, packet)
 
 
-class MediaGateway(object):
+class MediaGateway(Loggable):
     def __init__(self, metapoll, mgw_addr):
+        Loggable.__init__(self)
+
         self.metapoll = metapoll
         self.contexts_by_label = {}
         self.legs_by_label = {}
         #self.msgp = msgp.JsonMsgp(metapoll, mgw_addr, WeakMethod(self.process_request))
-        self.msgp = msgp2b.MsgpServer(metapoll, WeakMethod(self.process_request), None, mgw_addr)
-
-        self.logger = Logger()
+        self.msgp = MsgpServer(metapoll, WeakMethod(self.process_request), None, mgw_addr)
 
 
     def set_oid(self, oid):
-        self.oid = oid
-        self.logger.set_oid(oid)
+        Loggable.set_oid(self, oid)
         self.msgp.set_oid(build_oid(oid, "msgp"))
         
     
@@ -406,8 +405,6 @@ class MediaGateway(object):
         if thing.label in things:
             raise Error("Duplicate %s!" % thing.__class__)
         
-        #sid = (thing.owner_sid, thing.label)
-        #self.msgp.add_stream(sid)
         things[thing.label] = thing
         return thing
         
@@ -418,19 +415,12 @@ class MediaGateway(object):
         
         
     def delete_thing(self, things, label):
-        thing = things.pop(label)
-        #old_sid = (thing.owner_sid, thing.label)
-        #self.msgp.remove_stream(old_sid)
+        things.pop(label)
 
 
     def take_thing(self, things, label, owner_sid):
         thing = things[label]
-        #old_sid = (thing.owner_sid, thing.label)
-        #self.msgp.remove_stream(old_sid)
-        
         thing.owner_sid = owner_sid
-        #new_sid = (thing.owner_sid, thing.label)
-        #self.msgp.add_stream(new_sid)
     
     
     # Contexts

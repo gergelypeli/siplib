@@ -5,7 +5,7 @@ import uuid
 import datetime
 #import logging
 from async import Weak
-from util import Logger
+from util import Loggable
 
 from format import Via, Status, make_simple_response, make_ack, make_virtual_response, make_timeout_nak, make_timeout_response, is_virtual_response
 
@@ -50,7 +50,6 @@ from format import Via, Status, make_simple_response, make_ack, make_virtual_res
 
 # sending the ACK should destroy the sent INVITE, even if keeping its branch
 
-#logger = logging.getLogger(__name__)
 
 class Error(Exception): pass
 
@@ -391,20 +390,16 @@ class AckServerTransaction(PlainServerTransaction):
             raise Error("Nonvirtual response to AckServerTransaction!")
 
 
-class TransactionManager(object):
+class TransactionManager(Loggable):
     def __init__(self, local_addr, transmission):
+        Loggable.__init__(self)
+
         self.local_addr = local_addr
         self.transmission = transmission
         self.client_transactions = {}  # by (branch, method)
         self.server_transactions = {}  # by (branch, method)
 
-        self.logger = Logger()
         
-        
-    def set_oid(self, oid):
-        self.logger.set_oid(oid)
-        
-
     def transmit(self, msg):
         self.transmission(msg)
         
