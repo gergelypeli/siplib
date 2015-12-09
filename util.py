@@ -99,7 +99,9 @@ class Logger(logging.LoggerAdapter):
 class Loggable(object):
     def __init__(self):
         self.logger = None
+        self.oid = None
         
         
     def set_oid(self, oid):  # TODO: accept oid, key, value=None?
         self.logger = logging.LoggerAdapter(logging.getLogger(), dict(oid=oid))
+        self.oid = oid

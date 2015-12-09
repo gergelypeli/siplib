@@ -2,41 +2,50 @@ from __future__ import unicode_literals, print_function
 #import logging
 
 from async import WeakMethod
-from msgp import JsonMsgp, Sid
-from util import vacuum, Logger, build_oid
+#from msgp import JsonMsgp, Sid
+from msgp2b import MsgpClient
+from util import vacuum, Logger, build_oid, Loggable
 
 #logger = logging.getLogger(__name__)
 
+
+# TODO: sid-s no longer contain a name, so use oid-s for legs and contexts!
         
-class MediaLeg(object):
-    def __init__(self, mgc, type, affinity=None):
+class MediaLeg(Loggable):
+    def __init__(self, mgc, sid, type):
+        Loggable.__init__(self)
+        
         self.mgc = mgc
+        self.sid = sid
         self.type = type
-        self.affinity = affinity
-        self.sid = None
+        self.is_created = False
 
 
     def realize(self):
-        if not self.sid:
+        if not self.is_created:
             # This shouldn't happen, unless one Leg was lazy
             self.refresh({})
 
-        return self.sid
+        return self.oid
         
 
     def refresh(self, params):
-        if not self.sid:
-            self.sid = self.mgc.generate_leg_sid(self.affinity)
-            params = dict(params, type=self.type)
-            self.mgc.create_leg(self.sid, params, response_handler=lambda x, y, z: None)  # TODO
+        if not self.is_created:
+            self.is_created = True
+            #self.sid = self.mgc.generate_leg_sid(self.affinity)
+            #self.sid = self.mgc.select_gateway_sid(self.affinity)
+            params = dict(params, id=self.oid, type=self.type)
+            self.mgc.create_leg(self.sid, params, response_handler=lambda x, y: None)  # TODO
         else:
-            self.mgc.modify_leg(self.sid, params, response_handler=lambda x, y, z: None)  # TODO
+            params = dict(params, id=self.oid)
+            self.mgc.modify_leg(self.sid, params, response_handler=lambda x, y: None)  # TODO
         
         
     def delete(self, handler=None):
-        if self.sid:
-            response_handler = lambda sid, source, body: handler()  # TODO
-            self.mgc.delete_leg(self.sid, response_handler=response_handler)
+        if self.is_created:
+            params = dict(id=self.oid)
+            response_handler = lambda msgid, params: handler()  # TODO
+            self.mgc.delete_leg(self.sid, params, response_handler=response_handler)
         else:
             handler()
         
@@ -47,8 +56,8 @@ class MediaLeg(object):
 
 
 class PlayerMediaLeg(MediaLeg):
-    def __init__(self, mgc):
-        super(PlayerMediaLeg, self).__init__(mgc, "player")
+    def __init__(self, mgc, sid):
+        super(PlayerMediaLeg, self).__init__(mgc, sid, "player")
         
 
     def play(self, filename=None, format=None, volume=1, fade=0):
@@ -63,8 +72,8 @@ class PlayerMediaLeg(MediaLeg):
 
 
 class ProxiedMediaLeg(MediaLeg):
-    def __init__(self, mgc, local_addr):
-        super(ProxiedMediaLeg, self).__init__(mgc, "net", affinity=local_addr)
+    def __init__(self, mgc, sid, local_addr):
+        super(ProxiedMediaLeg, self).__init__(mgc, sid, "net")
 
         self.local_addr = local_addr
         self.committed = {}
@@ -77,18 +86,15 @@ class ProxiedMediaLeg(MediaLeg):
         self.refresh(changes)
         
         
-class MediaChannel(object):
+class MediaChannel(Loggable):
     def __init__(self, mgc):
+        Loggable.__init__(self)
+        
         self.mgc = mgc
         self.sid = None
         self.legs = [ None, None ]
+        self.is_created = False
         
-        self.logger = Logger()
-        
-        
-    def set_oid(self, oid):
-        self.logger.set_oid(oid)
-
 
     def set_legs(self, legs):
         changed = legs[0] and legs[1] and (legs[0] != self.legs[0] or legs[1] != self.legs[1])
@@ -100,15 +106,15 @@ class MediaChannel(object):
             self.logger.debug("Context not changed.")
 
         
-    def process_mgw_request(self, sid, seq, params, target):
-        self.logger.debug("Huh, MGW %s sent a %s message!" % (sid, target))
+    #def process_mgw_request(self, sid, seq, params, target):
+    #    self.logger.debug("Huh, MGW %s sent a %s message!" % (sid, target))
         
         
-    def process_mgw_response(self, sid, seq, params, purpose):
+    def process_mgw_response(self, msgid, params):
         if params == "ok":
-            self.logger.debug("Huh, MGW %s is OK for %s!" % (sid, purpose))
+            self.logger.debug("Huh, MGW %s is OK for %s!" % msgid)
         else:
-            self.logger.debug("Oops, MGW %s error for %s!" % (sid, purpose))
+            self.logger.debug("Oops, MGW %s error for %s!" % msgid)
         
         
     def refresh(self):
@@ -121,35 +127,37 @@ class MediaChannel(object):
                 
         #    leg_labels.append(leg.sid.label)
         
-        leg_sids = [ leg.realize() for leg in self.legs ]
+        leg_oids = [ leg.realize() for leg in self.legs ]
         
         params = {
+            'id': self.oid,
             'type': 'proxy',
-            'legs': [ sid.label for sid in leg_sids ]
+            'legs': leg_oids
         }
         
-        if not self.sid:
-            leg_addrs = set(sid.addr for sid in leg_sids)
-            if len(leg_addrs) != 1:
-                raise Exception("Multiple addresses among media legs!")
+        if not self.is_created:
+            self.is_created = True
+            leg_sids = set(leg.sid for leg in self.legs)
+            if len(leg_sids) != 1:
+                raise Exception("Multiple sids among media legs!")
                 
-            addr = leg_addrs.pop()
-            self.sid = self.mgc.generate_context_sid(addr)
-            self.logger.debug("Creating context %s" % (self.sid,))
+            self.sid = leg_sids.pop()
+            self.logger.debug("Creating context %s" % (self.oid,))
             
-            request_handler = WeakMethod(self.process_mgw_request)
-            response_handler = WeakMethod(self.process_mgw_response, "cctx")
-            self.mgc.create_context(self.sid, params, response_handler=response_handler, request_handler=request_handler)
+            #request_handler = WeakMethod(self.process_mgw_request)
+            response_handler = WeakMethod(self.process_mgw_response)
+            self.mgc.create_context(self.sid, params, response_handler=response_handler)
         else:
-            self.logger.debug("Modifying context %s" % (self.sid,))
-            response_handler = WeakMethod(self.process_mgw_response, "mctx")
-            self.mgc.modify_context(self.context_sid, params, response_handler=response_handler)
+            self.logger.debug("Modifying context %s" % (self.oid,))
+            response_handler = WeakMethod(self.process_mgw_response)
+            self.mgc.modify_context(self.sid, params, response_handler=response_handler)
     
 
     def delete(self, handler=None):
-        if self.sid:
-            response_handler = lambda sid, source, body: handler()  # TODO
-            self.mgc.delete_context(self.sid, response_handler=response_handler)
+        if self.is_created:
+            params = dict(id=self.oid)
+            response_handler = lambda msgid, params: handler()  # TODO
+            self.mgc.delete_context(self.sid, params, response_handler=response_handler)
         else:
             handler()
 
@@ -157,15 +165,17 @@ class MediaChannel(object):
 class Controller(object):
     last_mgc_number = 0
     
-    def __init__(self, metapoll, mgc_addr):
-        self.mgc_addr = mgc_addr
+    def __init__(self, metapoll, mgw_addr):
         self.metapoll = metapoll
 
         Controller.last_mgc_number += 1
+        self.mgw_sid = None
+        
         self.mgc_number = Controller.last_mgc_number
         self.last_leg_number = 0
         self.last_context_number = 0  # keep this unique even across MGW-s for logging!
-        self.msgp = JsonMsgp(metapoll, mgc_addr, WeakMethod(self.process_request))
+        #self.msgp = JsonMsgp(metapoll, mgc_addr, WeakMethod(self.process_request))
+        self.msgp = MsgpClient(metapoll, WeakMethod(self.process_request), WeakMethod(self.status_changed), mgw_addr)
         
         self.logger = Logger()
         
@@ -176,15 +186,18 @@ class Controller(object):
         
         
     def send_message(self, sid, target, params, response_handler):
-        self.msgp.send_message(sid, target, params, response_handler=response_handler)
+        if not params.get('id'):
+            raise Exception("An id is missing here...")
+            
+        msgid = (sid, target)
+        self.msgp.send(msgid, params, response_handler=response_handler)
         
         
-    def process_request(self, sid, seq, params, target):
+    def process_request(self, target, msgid, params):
         self.logger.debug("Unsolicited request from the MGW!")
         
         
-    def create_context(self, sid, params, response_handler=None, request_handler=None):
-        self.msgp.add_stream(sid, request_handler)
+    def create_context(self, sid, params, response_handler=None):
         self.send_message(sid, "create_context", params, response_handler)
 
 
@@ -192,13 +205,11 @@ class Controller(object):
         self.send_message(sid, "modify_context", params, response_handler)
 
 
-    def delete_context(self, sid, response_handler=None):
-        self.send_message(sid, "delete_context", None, response_handler)
-        self.msgp.remove_stream(sid)
+    def delete_context(self, sid, params, response_handler=None):
+        self.send_message(sid, "delete_context", params, response_handler)
         
         
-    def create_leg(self, sid, params, response_handler=None, request_handler=None):
-        self.msgp.add_stream(sid, request_handler)
+    def create_leg(self, sid, params, response_handler=None):
         self.send_message(sid, "create_leg", params, response_handler)
 
 
@@ -206,35 +217,44 @@ class Controller(object):
         self.send_message(sid, "modify_leg", params, response_handler)
 
 
-    def delete_leg(self, sid, response_handler=None):
-        self.send_message(sid, "delete_leg", None, response_handler)
-        self.msgp.remove_stream(sid)
+    def delete_leg(self, sid, params, response_handler=None):
+        self.send_message(sid, "delete_leg", params, response_handler)
 
+
+    def status_changed(self, sid, remote_addr):
+        self.mgw_sid = sid if remote_addr else None
+
+
+    def select_gateway_sid(self):
+        if not self.mgw_sid:
+            raise Exception("Sorry, no mgw_sid yet!")
+        else:
+            return self.mgw_sid
+            
         
-    def generate_leg_sid(self, affinity=None):
-        addr = self.select_gateway_address(affinity)
-        self.last_leg_number += 1
-        label = "leg-%s-%s" % (chr(96 + self.mgc_number), self.last_leg_number)
-        sid = Sid(addr, label)
-        return sid
+    #def generate_leg_sid(self, affinity=None):
+    #    addr = self.select_gateway_address(affinity)
+    #    self.last_leg_number += 1
+    #    label = "leg-%s-%s" % (chr(96 + self.mgc_number), self.last_leg_number)
+    #    sid = Sid(addr, label)
+    #    return sid
         
 
-    def generate_context_sid(self, affinity=None):
-        addr = self.select_gateway_address(affinity)
-        self.last_context_number += 1
-        label = "ctx-%s-%s" % (chr(96 + self.mgc_number), self.last_context_number)
-        sid = Sid(addr, label)
-        return sid
-    
+    #def generate_context_sid(self, affinity=None):
+    #    addr = self.select_gateway_address(affinity)
+    #    self.last_context_number += 1
+    #    label = "ctx-%s-%s" % (chr(96 + self.mgc_number), self.last_context_number)
+    #    sid = Sid(addr, label)
+    #    return sid
 
-    def allocate_media_address(self, channel_index):
+
+    def allocate_media_addr(self, sid):
         raise NotImplementedError()
 
 
-    def deallocate_media_address(self, addr):
+    def deallocate_media_addr(self, sid, addr):
         raise NotImplementedError()
         
         
-    def select_gateway_address(self, affinity=None):
-        raise NotImplementedError()
-        
+    #def select_gateway_address(self, affinity=None):
+    #    raise NotImplementedError()

@@ -72,10 +72,10 @@ class Routing(object):
         
         
     def cancel(self, status=None):
-        self.logger.debug("Cancelling.")
-        
         for li, leg in self.legs.items():
             if leg:
+                self.logger.debug("Cancelling leg %s" % li)
+                
                 if li > 0:
                     leg.do(dict(type="cancel"))
                 else:
@@ -274,13 +274,17 @@ class Call(object):
             self.logger.debug("Unknown routing event %s!" % type)
         
         
-    def allocate_media_address(self, channel_index):
+    def select_gateway_sid(self, channel_index):
         # TODO: check existing channels
-        return self.switch.mgc.allocate_media_address(channel_index)
+        return self.switch.mgc.select_gateway_sid()
         
         
-    def deallocate_media_address(self, addr):  # TODO: may not be necessary
-        self.switch.mgc.deallocate_media_address(addr)
+    def allocate_media_addr(self, sid):
+        return self.switch.mgc.allocate_media_addr(sid)
+        
+        
+    def deallocate_media_addr(self, sid, addr):  # TODO: may not be necessary
+        self.switch.mgc.deallocate_media_addr(sid, addr)
         
         
     def refresh_media(self):

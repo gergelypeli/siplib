@@ -7,7 +7,7 @@ import datetime
 import wave
 
 import g711
-import msgp
+import msgp2b
 from async import WeakMethod
 from util import Logger, build_oid
 
@@ -160,9 +160,9 @@ class RtpPlayer(object):
 
 
 class Thing(object):
-    def __init__(self, oid, label, owner_addr):
+    def __init__(self, oid, label, owner_sid):
         self.label = label
-        self.owner_addr = owner_addr
+        self.owner_sid = owner_sid
         self.logger = Logger(oid)
         
         
@@ -171,8 +171,8 @@ class Thing(object):
 
     
 class Leg(Thing):
-    def __init__(self, oid, label, owner_addr, type):
-        super().__init__(oid, label, owner_addr)
+    def __init__(self, oid, label, owner_sid, type):
+        super().__init__(oid, label, owner_sid)
         
         self.type = type
         self.forward_handler = None
@@ -197,8 +197,8 @@ class Leg(Thing):
 
 
 class NetLeg(Leg):
-    def __init__(self, oid, label, owner_addr, metapoll):
-        super(NetLeg, self).__init__(oid, label, owner_addr, "net")
+    def __init__(self, oid, label, owner_sid, metapoll):
+        super(NetLeg, self).__init__(oid, label, owner_sid, "net")
         self.local_addr = None
         self.remote_addr = None
         self.socket = None
@@ -256,7 +256,10 @@ class NetLeg(Leg):
                 return
         
         if addr != self.remote_addr:
-            self.context.detected(self.index, addr)
+            params = { 'id': self.label, 'remote_addr': addr }
+            msgid = (self.owner_sid, "detected")
+            self.context.manager.msgp.send(msgid, params)
+            
             self.remote_addr = addr
             
         pt = get_payload_type(packet)
@@ -287,8 +290,8 @@ class NetLeg(Leg):
 
 
 class EchoLeg(Leg):
-    def __init__(self, oid, label, owner_addr):
-        super(EchoLeg, self).__init__(oid, label, owner_addr, "echo")
+    def __init__(self, oid, label, owner_sid):
+        super(EchoLeg, self).__init__(oid, label, owner_sid, "echo")
 
 
     def send_format(self, format, packet):
@@ -298,8 +301,8 @@ class EchoLeg(Leg):
 
 
 class PlayerLeg(Leg):
-    def __init__(self, oid, label, owner_addr, metapoll):
-        super(PlayerLeg, self).__init__(oid, label, owner_addr, "player")
+    def __init__(self, oid, label, owner_sid, metapoll):
+        super(PlayerLeg, self).__init__(oid, label, owner_sid, "player")
         
         self.metapoll = metapoll
         self.rtp_player = None
@@ -339,8 +342,8 @@ class PlayerLeg(Leg):
 
 
 class Context(Thing):
-    def __init__(self, oid, label, owner_addr, manager):
-        super().__init__(oid, label, owner_addr)
+    def __init__(self, oid, label, owner_sid, manager):
+        super().__init__(oid, label, owner_sid)
 
         self.manager = manager
         self.legs = []
@@ -363,11 +366,6 @@ class Context(Thing):
             leg.set_forward_handler(WeakMethod(self.forward, i))
 
 
-    def detected(self, li, remote_addr):
-        sid = (self.owner_addr, self.label)
-        self.manager.detected(sid, li, remote_addr)
-        
-    
     def forward(self, format, packet, li):  # li is bound
         lj = (1 if li == 0 else 0)
         
@@ -386,7 +384,8 @@ class MediaGateway(object):
         self.metapoll = metapoll
         self.contexts_by_label = {}
         self.legs_by_label = {}
-        self.msgp = msgp.JsonMsgp(metapoll, mgw_addr, WeakMethod(self.process_request))
+        #self.msgp = msgp.JsonMsgp(metapoll, mgw_addr, WeakMethod(self.process_request))
+        self.msgp = msgp2b.MsgpServer(metapoll, WeakMethod(self.process_request), None, mgw_addr)
 
         self.logger = Logger()
 
@@ -407,8 +406,8 @@ class MediaGateway(object):
         if thing.label in things:
             raise Error("Duplicate %s!" % thing.__class__)
         
-        sid = (thing.owner_addr, thing.label)
-        self.msgp.add_stream(sid)
+        #sid = (thing.owner_sid, thing.label)
+        #self.msgp.add_stream(sid)
         things[thing.label] = thing
         return thing
         
@@ -420,26 +419,26 @@ class MediaGateway(object):
         
     def delete_thing(self, things, label):
         thing = things.pop(label)
-        old_sid = (thing.owner_addr, thing.label)
-        self.msgp.remove_stream(old_sid)
+        #old_sid = (thing.owner_sid, thing.label)
+        #self.msgp.remove_stream(old_sid)
 
 
-    def take_thing(self, things, label, owner_addr):
+    def take_thing(self, things, label, owner_sid):
         thing = things[label]
-        old_sid = (thing.owner_addr, thing.label)
-        self.msgp.remove_stream(old_sid)
+        #old_sid = (thing.owner_sid, thing.label)
+        #self.msgp.remove_stream(old_sid)
         
-        thing.owner_addr = owner_addr
-        new_sid = (thing.owner_addr, thing.label)
-        self.msgp.add_stream(new_sid)
+        thing.owner_sid = owner_sid
+        #new_sid = (thing.owner_sid, thing.label)
+        #self.msgp.add_stream(new_sid)
     
     
     # Contexts
 
-    def create_context(self, label, owner_addr, type):
+    def create_context(self, label, owner_sid, type):
         if type == "proxy":
             oid = build_oid(self.oid, "context", label)
-            context = Context(oid, label, owner_addr, weakref.proxy(self))
+            context = Context(oid, label, owner_sid, weakref.proxy(self))
         else:
             raise Error("Invalid context type %s!" % type)
             
@@ -454,21 +453,21 @@ class MediaGateway(object):
         self.delete_thing(self.contexts_by_label, label)
 
 
-    def take_context(self, label, owner_addr):
-        self.take_thing(self.contexts_by_label, label, owner_addr)
+    def take_context(self, label, owner_sid):
+        self.take_thing(self.contexts_by_label, label, owner_sid)
         
         
     # Legs
 
-    def create_leg(self, label, owner_addr, type):
+    def create_leg(self, label, owner_sid, type):
         oid = build_oid(self.oid, "leg", label)
         
         if type == "net":
-            leg = NetLeg(oid, label, owner_addr, self.metapoll)
+            leg = NetLeg(oid, label, owner_sid, self.metapoll)
         elif type == "echo":
-            leg = EchoLeg(oid, label, owner_addr)
+            leg = EchoLeg(oid, label, owner_sid)
         elif type == "player":
-            leg = PlayerLeg(oid, label, owner_addr, self.metapoll)
+            leg = PlayerLeg(oid, label, owner_sid, self.metapoll)
         else:
             raise Error("Invalid leg type '%s'!" % type)
 
@@ -483,42 +482,37 @@ class MediaGateway(object):
         self.delete_thing(self.legs_by_label, label)
 
 
-    def take_leg(self, label, owner_addr):
-        self.take_thing(self.legs_by_label, label, owner_addr)
+    def take_leg(self, label, owner_sid):
+        self.take_thing(self.legs_by_label, label, owner_sid)
         
         
-    def process_request(self, sid, seq, params, target):
+    def process_request(self, target, msgid, params):
         try:
-            owner_addr, label = sid
+            owner_sid, seq = msgid
+            label = params["id"]
             
             if target == "create_context":
-                self.create_context(label, owner_addr, params["type"])
+                self.create_context(label, owner_sid, params["type"])
                 self.modify_context(label, params)  # fake modification
             elif target == "modify_context":
                 self.modify_context(label, params)
             elif target == "delete_context":
                 self.delete_context(label)
             elif target == "take_context":
-                self.take_context(label, owner_addr)
+                self.take_context(label, owner_sid)
             elif target == "create_leg":
-                self.create_leg(label, owner_addr, params["type"])
+                self.create_leg(label, owner_sid, params["type"])
                 self.modify_leg(label, params)  # fake modification
             elif target == "modify_leg":
                 self.modify_leg(label, params)
             elif target == "delete_leg":
                 self.delete_leg(label)
             elif target == "take_leg":
-                self.take_leg(label, owner_addr)
+                self.take_leg(label, owner_sid)
             else:
                 raise Error("Invalid target %s!" % target)
         except Exception as e:
             self.logger.debug("Processing error: %s" % e, exc_info=True)
-            self.msgp.send_message(sid, seq, "error")
+            self.msgp.send(msgid, "error")
         else:
-            self.msgp.send_message(sid, seq, "ok")
-        
-
-    def detected(self, sid, li, remote_addr):  # TODO: this should be leg-specific!
-        params = { 'legs': { li: { 'remote_addr': remote_addr } } }
-        self.msgp.send_message(sid, "detected", params)
-
+            self.msgp.send(msgid, "ok")

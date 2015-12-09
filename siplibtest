@@ -111,7 +111,10 @@ class CalleeLeg(PlannedLeg):
         
         yield from planner.sleep(1)
         answer = self.make_answer(self.offer)
-        self.media_legs.append(PlayerMediaLeg(self.call.switch.mgc))
+        sid = self.call.select_gateway_sid(0)
+        media_leg = PlayerMediaLeg(self.call.switch.mgc, sid)
+        media_leg.set_oid(build_oid(self.oid, "media", len(self.media_legs)))
+        self.media_legs.append(media_leg)
         self.report(dict(type="accept", answer=answer))
         # It shouldn't be legal to answer without channels existing already!
         self.media_legs[0].play("playback.wav", ("PCMA", 8000), volume=0.2, fade=3)
@@ -160,28 +163,24 @@ class TestAuthority(Authority):
 
 
 class TestController(Controller):
-    def __init__(self, metapoll, mgc_addr, mgw_addr, ports):
-        super().__init__(metapoll, mgc_addr)
+    def __init__(self, metapoll, mgw_addr, ports):
+        super().__init__(metapoll, mgw_addr)
         
-        self.mgw_addr = resolve(mgw_addr)
+        #self.mgw_addr = resolve(mgw_addr)
         
         # Must use IP4 addresses or FQDN in SDP, so let's go with IP4
         # Media host may be different from the signaling host
         self.media_addresses = set(resolve(Addr(MEDIA_HOST, port)) for port in ports)
         
     
-    def allocate_media_address(self, channel_index):
+    def allocate_media_addr(self, sid):
         return self.media_addresses.pop()
     
     
-    def deallocate_media_address(self, addr):
+    def deallocate_media_addr(self, sid, addr):
         self.media_addresses.add(addr)
         
         
-    def select_gateway_address(self, affinity=None):
-        return self.mgw_addr
-        
-    
 class TestRouting(SimpleRouting):
     def route_ctx(self, ctx):
         to_uri = ctx["to"].uri
@@ -225,7 +224,7 @@ class Switch(object):
             WeakMethod(self.transport.get_hop),
             WeakMethod(self.authing)
         )
-        self.mgc = TestController(metapoll, mgc_addr, mgw_addr, media_ports)
+        self.mgc = TestController(metapoll, mgw_addr, media_ports)
         self.account_manager = AccountManager()
 
         self.calls_by_oid = {}
@@ -239,6 +238,8 @@ class Switch(object):
     def set_oid(self, oid):
         self.oid = oid
         self.logger.set_oid(oid)
+
+        self.account_manager.set_oid(build_oid(oid, "accman"))
         self.authority.set_oid(build_oid(oid, "authority"))
         self.record_manager.set_oid(build_oid(oid, "recman"))
         self.registration_manager.set_oid(build_oid(oid, "regman"))
@@ -523,6 +524,7 @@ def main():
             }
         }
     })
+    
     logging.debug("Hello!")
 
     metapoll = Metapoll()
@@ -545,6 +547,13 @@ def main():
         except KeyboardInterrupt:
             #raise
             break
+
+    del switch_b
+    del switch_a
+    del mgw
+    del metapoll
+    
+    logging.debug("Bye!")
 
 
 main()

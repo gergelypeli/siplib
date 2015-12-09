@@ -5,26 +5,23 @@ from async import WeakMethod, WeakGeneratorMethod
 from format import Status, make_virtual_response
 from planner import Planner, PlannedEvent
 from mgc import ProxiedMediaLeg
-from util import Logger, build_oid
+from util import Logger, build_oid, Loggable
 
 #logger = logging.getLogger(__name__)
 
 
 class Error(Exception): pass
 
-class Leg(object):
+class Leg(Loggable):
     def __init__(self):
+        Loggable.__init__(self)
+        
         self.call = None
         self.report = None
         self.ctx = {}
         self.media_legs = []
-        self.logger = Logger()
     
     
-    def set_oid(self, oid):
-        self.logger.set_oid(oid)
-        
-
     def set_report(self, report):
         self.report = report
         
@@ -242,8 +239,11 @@ class SipLeg(Leg):
     def preprocess_outgoing_session(self, sdp):
         for i in range(len(self.media_legs), len(sdp.channels)):
             mgc = self.call.switch.mgc
-            local_addr = self.call.allocate_media_address(i)  # TODO: deallocate them, too!
-            self.media_legs.append(ProxiedMediaLeg(mgc, local_addr))
+            sid = self.call.select_gateway_sid(i)
+            local_addr = self.call.allocate_media_addr(sid)  # TODO: deallocate them, too!
+            media_leg = ProxiedMediaLeg(mgc, sid, local_addr)
+            media_leg.set_oid(build_oid(self.oid, "media", len(self.media_legs)))
+            self.media_legs.append(media_leg)
         
         for i in range(len(sdp.channels)):
             # No need to make a copy again here

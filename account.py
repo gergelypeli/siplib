@@ -1,3 +1,5 @@
+from util import Loggable
+
 
 class Account(object):
     AUTH_NEVER = "AUTH_NEVER"
@@ -12,8 +14,10 @@ class Account(object):
         self.ha1 = ha1
         
 
-class AccountManager(object):
+class AccountManager(Loggable):
     def __init__(self):
+        Loggable.__init__(self)
+        
         self.accounts_by_uri = {}
         self.our_credentials = None  # TODO: improve!
         
@@ -26,6 +30,9 @@ class AccountManager(object):
 
 
     def get_account_auth_policy(self, uri):
+        #self.logger.debug("get_account_auth_policy for %s" % str(uri))
+        #self.logger.debug("but have %s" % str(self.accounts_by_uri.keys()))
+        
         account = self.accounts_by_uri.get(uri)
         return account.auth_policy if account else None
 
