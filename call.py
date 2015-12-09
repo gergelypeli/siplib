@@ -279,12 +279,12 @@ class Call(object):
         return self.switch.mgc.select_gateway_sid()
         
         
-    def allocate_media_addr(self, sid):
-        return self.switch.mgc.allocate_media_addr(sid)
+    def allocate_media_address(self, sid):
+        return self.switch.mgc.allocate_media_address(sid)
         
         
-    def deallocate_media_addr(self, sid, addr):  # TODO: may not be necessary
-        self.switch.mgc.deallocate_media_addr(sid, addr)
+    def deallocate_media_address(self, sid, addr):  # TODO: may not be necessary
+        self.switch.mgc.deallocate_media_address(sid, addr)
         
         
     def refresh_media(self):

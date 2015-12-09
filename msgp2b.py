@@ -255,9 +255,8 @@ class MsgpStream(object):
             item = self.outgoing_items_by_seq.get(tseq)
             
             if not item:
-                if sseq:
-                    logging.warning("Response ignored!")  # FIXME: use logger
-                    
+                #if sseq:
+                #    logging.warning("Response ignored!")  # FIXME: use logger
                 return
             
             if sseq:

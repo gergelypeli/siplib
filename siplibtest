@@ -173,11 +173,11 @@ class TestController(Controller):
         self.media_addresses = set(resolve(Addr(MEDIA_HOST, port)) for port in ports)
         
     
-    def allocate_media_addr(self, sid):
+    def allocate_media_address(self, sid):
         return self.media_addresses.pop()
     
     
-    def deallocate_media_addr(self, sid, addr):
+    def deallocate_media_address(self, sid, addr):
         self.media_addresses.add(addr)
         
         

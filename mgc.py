@@ -1,15 +1,10 @@
 from __future__ import unicode_literals, print_function
-#import logging
 
 from async import WeakMethod
 #from msgp import JsonMsgp, Sid
 from msgp2b import MsgpClient
 from util import vacuum, Logger, build_oid, Loggable
 
-#logger = logging.getLogger(__name__)
-
-
-# TODO: sid-s no longer contain a name, so use oid-s for legs and contexts!
         
 class MediaLeg(Loggable):
     def __init__(self, mgc, sid, type):
@@ -231,30 +226,10 @@ class Controller(object):
         else:
             return self.mgw_sid
             
-        
-    #def generate_leg_sid(self, affinity=None):
-    #    addr = self.select_gateway_address(affinity)
-    #    self.last_leg_number += 1
-    #    label = "leg-%s-%s" % (chr(96 + self.mgc_number), self.last_leg_number)
-    #    sid = Sid(addr, label)
-    #    return sid
-        
 
-    #def generate_context_sid(self, affinity=None):
-    #    addr = self.select_gateway_address(affinity)
-    #    self.last_context_number += 1
-    #    label = "ctx-%s-%s" % (chr(96 + self.mgc_number), self.last_context_number)
-    #    sid = Sid(addr, label)
-    #    return sid
-
-
-    def allocate_media_addr(self, sid):
+    def allocate_media_address(self, sid):
         raise NotImplementedError()
 
 
-    def deallocate_media_addr(self, sid, addr):
+    def deallocate_media_address(self, sid, addr):
         raise NotImplementedError()
-        
-        
-    #def select_gateway_address(self, affinity=None):
-    #    raise NotImplementedError()
