@@ -158,27 +158,23 @@ class MediaChannel(Loggable):
 
 
 class Controller(Loggable):
-    last_mgc_number = 0
-    
-    def __init__(self, metapoll, mgw_addr):
+    def __init__(self, metapoll):
         Loggable.__init__(self)
 
         self.metapoll = metapoll
-
-        Controller.last_mgc_number += 1
-        self.mgw_sid = None
+        self.mgw_sid = None  # FIXME: Msgp can handle multiple connections already!
         
-        self.mgc_number = Controller.last_mgc_number
-        self.last_leg_number = 0
-        self.last_context_number = 0  # keep this unique even across MGW-s for logging!
-        #self.msgp = JsonMsgp(metapoll, mgc_addr, WeakMethod(self.process_request))
-        self.msgp = MsgpClient(metapoll, WeakMethod(self.process_request), WeakMethod(self.status_changed), mgw_addr)
+        self.msgp = MsgpClient(metapoll, WeakMethod(self.process_request), WeakMethod(self.status_changed))
         
         
     def set_oid(self, oid):
         Loggable.set_oid(self, oid)
         self.msgp.set_oid(build_oid(oid, "msgp"))
-        
+
+
+    def add_mgw_addr(self, addr):
+        self.msgp.add_mgw_addr(addr)
+                
         
     def send_message(self, sid, target, params, response_handler):
         if not params.get('id'):

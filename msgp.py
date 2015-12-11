@@ -444,11 +444,16 @@ class MsgpServer(MsgpDispatcher):
 
 
 class MsgpClient(MsgpDispatcher):
-    def __init__(self, metapoll, request_handler, status_handler, addr):
+    def __init__(self, metapoll, request_handler, status_handler):
         MsgpDispatcher.__init__(self, metapoll, request_handler, status_handler)
 
-        self.reconnector = TcpReconnector(metapoll, addr, datetime.timedelta(seconds=1), WeakMethod(self.connected))
-        self.reconnector.start()
+        self.reconnectors_by_addr = {}
+        
+        
+    def add_mgw_addr(self, mgw_addr):
+        reconnector = TcpReconnector(self.metapoll, mgw_addr, datetime.timedelta(seconds=1), WeakMethod(self.connected))
+        reconnector.start()
+        self.reconnectors_by_addr[mgw_addr] = reconnector
         
         
     def connected(self, socket):

@@ -1,6 +1,5 @@
 #! /usr/bin/python3
 
-from __future__ import print_function, unicode_literals
 from datetime import timedelta
 import logging
 import logging.config
@@ -8,17 +7,18 @@ from async import Metapoll, WeakMethod, Weak
 
 from format import Addr, Uri, Nameaddr, Status
 from transport import UdpTransport
-from transactions import TransactionManager, make_simple_response
-from dialog import Dialog, DialogManager
-from leg import SipLeg, PlannedLeg, create_uninvited_leg
+from transactions import TransactionManager
+#from dialog import Dialog, DialogManager
+from leg import PlannedLeg
 from call import Call, SimpleRouting, PlannedRouting
 from sdp import Sdp
 from authority import Authority
-from registrar import RegistrationManager, RecordManager
-from account import Account, AccountManager
-from util import resolve, setup_exchandler, build_oid, Loggable
+from registrar import RecordManager
+from account import Account
+from util import resolve, setup_exchandler, build_oid
 from mgw import MediaGateway
 from mgc import Controller, PlayerMediaLeg
+from switch import Switch
 
 HOST = "otthon"
 A_ADDR = Addr(HOST, 5060)
@@ -64,11 +64,11 @@ a=rtpmap:99 h263-1998/90000
 """)
 
 MGW_HOST = "localhost"
-MGC1_HOST = "localhost"
-MGC2_HOST = "localhost"
+#MGC1_HOST = "localhost"
+#MGC2_HOST = "localhost"
 MGW_ADDR = Addr(MGW_HOST, 20000)
-MGC1_ADDR = Addr(MGC1_HOST, 20001)
-MGC2_ADDR = Addr(MGC2_HOST, 20002)
+#MGC1_ADDR = Addr(MGC1_HOST, 20001)
+#MGC2_ADDR = Addr(MGC2_HOST, 20002)
 
 MEDIA_HOST = "otthon"
 
@@ -161,8 +161,8 @@ class TestAuthority(Authority):
 
 
 class TestController(Controller):
-    def __init__(self, metapoll, mgw_addr, ports):
-        super().__init__(metapoll, mgw_addr)
+    def __init__(self, metapoll, ports):
+        super().__init__(metapoll)
         
         #self.mgw_addr = resolve(mgw_addr)
         
@@ -194,202 +194,62 @@ class TestRouting(SimpleRouting):
             raise Exception("Routing failed!")
 
 
-class TestCall(Call):
-    RoutingClass = TestRouting
-    
-    
-    def make_routing(self):
-        return self.RoutingClass(Weak(self))
-    
-
-class Switch(Loggable):
-    CallClass = TestCall
-    
-    def __init__(self, metapoll, local_addr, mgc_addr, mgw_addr, media_ports):
-        Loggable.__init__(self)
-
-        self.metapoll = metapoll
-        self.transport = UdpTransport(metapoll, local_addr, WeakMethod(self.reception))
-        self.transaction_manager = TransactionManager(local_addr, WeakMethod(self.transport.send))
-        self.record_manager = TestRecordManager(WeakMethod(self.transaction_manager.send_message))
-        self.authority = TestAuthority()
-        self.registration_manager = RegistrationManager(
-            WeakMethod(self.transaction_manager.send_message),
-            WeakMethod(self.transport.get_hop),
-            WeakMethod(self.authing)
-        )
-        self.dialog_manager = DialogManager(
-            local_addr,
-            WeakMethod(self.transaction_manager.send_message),
-            WeakMethod(self.transport.get_hop),
-            WeakMethod(self.authing)
-        )
-        self.mgc = TestController(metapoll, mgw_addr, media_ports)
-        self.account_manager = AccountManager()
-
-        self.calls_by_oid = {}
-        self.call_count = 0
+class TestSwitch(Switch):
+    def __init__(self, metapoll, local_addr, mgw_addr, media_ports, routing_class):
+        self.routing_class = routing_class
         
+        transport = UdpTransport(metapoll, local_addr, WeakMethod(self.reception))
+        transaction_manager = TransactionManager(local_addr, WeakMethod(transport.send))
+        record_manager = TestRecordManager(WeakMethod(transaction_manager.send_message))
+        authority = TestAuthority()
+        #self.registration_manager = RegistrationManager(
+        #    WeakMethod(self.transaction_manager.send_message),
+        #    WeakMethod(self.transport.get_hop),
+        #    WeakMethod(self.authing)
+        #)
+        #self.dialog_manager = DialogManager(
+        #    local_addr,
+        #    WeakMethod(self.transaction_manager.send_message),
+        #    WeakMethod(self.transport.get_hop),
+        #    WeakMethod(self.authing)
+        #)
+        mgc = TestController(metapoll, media_ports)
+        mgc.add_mgw_addr(mgw_addr)
+        #self.account_manager = AccountManager()
+
+        Switch.__init__(
+            self, local_addr, metapoll,
+            transport=transport, transaction_manager=transaction_manager,
+            record_manager=record_manager, authority=authority, registration_manager=None,
+            dialog_manager=None, mgc=mgc, account_manager=None
+        )
+
         metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
 
 
-    def set_oid(self, oid):
-        Loggable.set_oid(self, oid)
-
-        self.account_manager.set_oid(build_oid(oid, "accman"))
-        self.authority.set_oid(build_oid(oid, "authority"))
-        self.record_manager.set_oid(build_oid(oid, "recman"))
-        self.registration_manager.set_oid(build_oid(oid, "regman"))
-        self.transport.set_oid(build_oid(oid, "transport"))
-        self.dialog_manager.set_oid(build_oid(oid, "diaman"))
-        self.mgc.set_oid(build_oid(oid, "mgc"))
-
-
-    def authing(self, response, request):
-        creds = self.account_manager.get_our_credentials()
-        return self.authority.provide_auth(response, request, creds)
-        
-    
-    def reject_request(self, msg, status):
-        if msg:
-            response = make_simple_response(msg, status)
-            self.transaction_manager.send_message(response, msg)
-
-
-    def challenge_request(self, msg, challenge):
-        if msg:
-            response = make_simple_response(msg, Status(401, "Hey"), challenge)
-            self.transaction_manager.send_message(response, msg)
-
-
     def make_outgoing_leg(self, uri):
-        if uri.scheme == "sip":
-            outgoing_dialog = Dialog(Weak(self.dialog_manager))
-            outgoing_leg = SipLeg(outgoing_dialog)
-            return outgoing_leg
-        elif uri.scheme == "builtin":
+        if uri.scheme == "builtin":
             if uri.addr.host == "callee":
                 return CalleeLeg(self.metapoll)
             else:
                 raise Exception("Unknown builtin URI '%s'!" % uri.addr.host)
         else:
-            raise Exception("Unknown URI scheme '%s'!" % uri.scheme)
+            return Switch.make_outgoing_leg(self, uri)
 
 
     def make_call(self):
-        return self.CallClass(Weak(self))
+        RoutingClass = self.routing_class
         
-        
-    def start_call(self, params):  # TODO: params unused
-        call = self.make_call()
-        
-        oid = build_oid(self.oid, "call", self.call_count)
-        self.call_count += 1
-        call.set_oid(oid)
-        
-        self.calls_by_oid[oid] = call
-
-        incoming_dialog = Dialog(Weak(self.dialog_manager))
-        incoming_leg = SipLeg(incoming_dialog)
-        
-        call.start_routing(incoming_leg)
-        return WeakMethod(incoming_dialog.recv_request)
-    
-
-    def finish_call(self, oid):
-        # TODO: Call should be smarter! Hm, are we now?
-        
-        def ugly_delayed_finish():
-            self.logger.debug("Finishing call")
-            self.calls_by_oid.pop(oid)
-            
-        self.metapoll.register_timeout(timedelta(seconds=1), ugly_delayed_finish)
+        class MyCall(Call):
+            def make_routing(self):
+                return RoutingClass(Weak(self))
+                
+        return MyCall(Weak(self))
         
 
-    def process_request(self, params):
-        method = params["method"]
-        request_uri = params["uri"]
-        from_uri = params["from"].uri
-        #to_uri = params["to"].uri
-        hop = params["hop"]
-        
-        if request_uri.scheme != "sip":  # TODO: add some addr checks, too
-            return WeakMethod(self.reject_request, Status(404, "Not found"))
-
-        auth_policy = self.account_manager.get_account_auth_policy(from_uri)
-        must_auth = None
-        
-        if method in ("CANCEL", "ACK"):
-            must_auth = False
-            self.logger.debug("Accepting request because it can't be authenticated anyway")
-        elif not auth_policy:
-            self.logger.debug("Rejecting request because account is unknown")
-            return WeakMethod(self.reject_request, Status(403, "Forbidden"))
-        elif auth_policy == Account.AUTH_NEVER:
-            must_auth = False
-            self.logger.debug("Accepting request because authentication is never needed")
-        elif auth_policy == Account.AUTH_ALWAYS:
-            must_auth = True
-            self.logger.debug("Challenging request because authentication is always needed")
-        elif auth_policy == Account.AUTH_IF_UNREGISTERED:
-            must_auth = (hop not in self.record_manager.lookup_contact_hops(from_uri))
-            if must_auth:
-                self.logger.debug("Challenging request because account is not registered")
-            else:
-                self.logger.debug("Accepting request because account is registered")
-        elif auth_policy == Account.AUTH_BY_ADDRESS:
-            if hop not in self.record_manager.lookup_contact_hops(from_uri):
-                self.logger.debug("Rejecting request because hop address is not allowed")
-                return WeakMethod(self.reject_request, Status(403, "Forbidden"))
-            else:
-                must_auth = False
-                self.logger.debug("Accepting request because hop address is allowed")
-        else:
-            raise Exception("WTF?")
-
-        if must_auth:
-            creds = self.account_manager.get_account_credentials(from_uri)
-            challenge = self.authority.require_auth(params, creds)
-            
-            if challenge:
-                self.logger.debug("Rejecting request without proper authentication")
-                return WeakMethod(self.challenge_request, challenge)
-            else:
-                self.logger.debug("Accepting request with proper authentication")
-
-        if method == "REGISTER":
-            # If the From URI was OK, then the To URI is as well, because
-            # we don't support third party registrations now.
-            return self.record_manager.match_incoming_request(params)
-
-        report = self.dialog_manager.match_incoming_request(params)
-        if report:
-            return report
-    
-        if method == "INVITE" and "tag" not in params["to"].params:
-            return self.start_call(params)
-    
-        return WeakMethod(self.reject_request, Status(400, "Bad request"))
-        
-
-    def reception(self, params):
-        #print("Got message from transport.")
-        #print("Req params: %s" % req_params)
-        uninvite_params = self.transaction_manager.match_uninvited_response(params)
-        if uninvite_params:
-            create_uninvited_leg(uninvite_params)
-    
-        if self.transaction_manager.match_incoming_message(params):
-            return
-
-        report = self.process_request(params)
-        
-        self.transaction_manager.create_incoming_request(params, report)
-
-
-class SwitchA(Switch):
+class SwitchA(TestSwitch):
     def __init__(self, metapoll, *args):
-        super(SwitchA, self).__init__(metapoll, *args)
+        super(SwitchA, self).__init__(metapoll, *args, routing_class=TestRouting)
         
         player_uri = Uri(Addr(A_DOMAIN, None), PHONE_NUMBER)
         phone_uri = Uri(Addr(A_DOMAIN, None), PHONE_CALLERID)
@@ -402,6 +262,14 @@ class SwitchA(Switch):
         #metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_dialing))
         
         
+    #def make_call(self):
+    #    class CallA(Call):
+    #        def make_routing(self):
+    #            return TestRouting(Weak(self))
+    #            
+    #    return CallA(Weak(self))
+        
+        
     def test_dialing(self):
         self.logger.debug("Dialing begins.")
 
@@ -411,33 +279,32 @@ class SwitchA(Switch):
         #incoming_leg.dial()
     
 
-class SwitchB(Switch):
-    class CallClass(TestCall):
-        class RoutingClass(PlannedRouting):
-            def plan(self, planner, action):
-                self.logger.debug("Routing plan started.")
-                self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:callee"))))
-                li, action = yield from planner.wait_leg_action()
-                self.forward(li, action)
-                
-                
-        class XRoutingClass(TestRouting):
-            def route_ctx(self, ctx):
-                # For the phone call only
-                if ctx["to"].uri.user == PHONE_NUMBER:
-                    self.logger.debug("Routing to CalleeLeg for %s" % PHONE_NUMBER)
-                    ctx["uri"] = Uri.parse("builtin:callee")
-                    #return CalleeLeg(self.call, self.switch.metapoll)
-                    #self.logger.debug("Returning UnreachableLeg for %s" % PHONE_NUMBER)
-                    #return UnreachableLeg(self.call, self.switch.metapoll)
-                    #self.logger.debug("Returning RejectingLeg for %s" % PHONE_NUMBER)
-                    #return RejectingLeg(self.call, self.switch.metapoll)
-                else:
-                    TestRouting.route_call(self, ctx)
+class SwitchB(TestSwitch):
+    class RoutingClass(PlannedRouting):
+        def plan(self, planner, action):
+            self.logger.debug("Routing plan started.")
+            self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:callee"))))
+            li, action = yield from planner.wait_leg_action()
+            self.forward(li, action)
+            
+            
+    class XRoutingClass(TestRouting):
+        def route_ctx(self, ctx):
+            # For the phone call only
+            if ctx["to"].uri.user == PHONE_NUMBER:
+                self.logger.debug("Routing to CalleeLeg for %s" % PHONE_NUMBER)
+                ctx["uri"] = Uri.parse("builtin:callee")
+                #return CalleeLeg(self.call, self.switch.metapoll)
+                #self.logger.debug("Returning UnreachableLeg for %s" % PHONE_NUMBER)
+                #return UnreachableLeg(self.call, self.switch.metapoll)
+                #self.logger.debug("Returning RejectingLeg for %s" % PHONE_NUMBER)
+                #return RejectingLeg(self.call, self.switch.metapoll)
+            else:
+                TestRouting.route_call(self, ctx)
 
 
     def __init__(self, metapoll, *args):
-        super(SwitchB, self).__init__(metapoll, *args)
+        super(SwitchB, self).__init__(metapoll, *args, routing_class=self.RoutingClass)
         
         phone_uri = Uri(Addr(A_DOMAIN, None), PHONE_CALLERID)
         
@@ -446,6 +313,16 @@ class SwitchB(Switch):
         self.account_manager.set_our_credentials(*B_CRED)
 
         metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
+
+
+    #def make_call(self):
+    #    RoutingClass = self.RoutingClass
+    #    
+    #    class CallB(Call):
+    #        def make_routing(self):
+    #            return RoutingClass(Weak(self))
+    #            
+    #    return CallB(Weak(self))
 
 
     def test_registering(self):
@@ -529,10 +406,10 @@ def main():
     mgw = MediaGateway(metapoll, MGW_ADDR)
     mgw.set_oid("mgw")
 
-    switch_a = SwitchA(Weak(metapoll), A_ADDR, MGC1_ADDR, MGW_ADDR, range(30000, 30020, 2))
+    switch_a = SwitchA(Weak(metapoll), A_ADDR, MGW_ADDR, range(30000, 30020, 2))
     switch_a.set_oid(build_oid(None, "switch", "a"))
     
-    switch_b = SwitchB(Weak(metapoll), B_ADDR, MGC2_ADDR, MGW_ADDR, range(40000, 40020, 2))
+    switch_b = SwitchB(Weak(metapoll), B_ADDR, MGW_ADDR, range(40000, 40020, 2))
     switch_b.set_oid(build_oid(None, "switch", "b"))
 
     #switch_a.transport.set_peer(switch_b.transport)
