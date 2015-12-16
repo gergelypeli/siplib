@@ -19,6 +19,7 @@ class Planner(Loggable):
         self.finish_handler = finish_handler
 
         self.generator = None
+        self.is_executing = False
         self.timeout_handle = None
         self.event_queue = []
 
@@ -92,26 +93,42 @@ class Planner(Loggable):
     def resume(self, planned_event):
         if not self.generator:
             raise Exception("Plan already finished!")
+        elif self.is_executing:
+            # During the wilderness of event handling, the code may try to resume
+            # a Plan that is already executing, and it results in a
+            # ValueError: generator already executing
+            # so we must work around that thing using our is_executing flag.
+            self.logger.debug("Already executing, queueing planned event '%s'." % planned_event.tag)
+            self.event_queue.append(planned_event)
+            return
     
         try:
+            self.is_executing = True
+            
             if isinstance(planned_event, Exception):
                 self.generator.throw(planned_event)
             else:
                 # This just returns if the plan is suspended again, or
                 # raises StopIteration if it ended.
                 self.generator.send(planned_event)
+                
+            self.is_executing = False
         except StopIteration as e:
             self.logger.debug("Terminated plan.")
             self.generator = None
+            self.is_executing = False
             
             if e.value:
                 self.logger.debug("Plan return value ignored!")
             
             if self.finish_handler:
+                self.logger.debug("Plan finish handler start")
                 self.finish_handler(None)
+                self.logger.debug("Plan finish handler end")
         except Exception as e:
             self.logger.warning("Aborted plan with exception!", exc_info=True)
             self.generator = None
+            self.is_executing = False
             
             if self.finish_handler:
                 self.finish_handler(e)

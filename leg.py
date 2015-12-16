@@ -544,6 +544,7 @@ class PlannedLeg(Leg):
         if error:
             self.logger.error("Leg plan screwed!")
             
+        self.logger.debug("Planned leg finished, error: %s" % error)
         self.finish(error)
         
 

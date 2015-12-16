@@ -173,6 +173,7 @@ class PlannedRouting(Routing):
         
         try:
             if exception:
+                self.logger.debug("Routing plan finished with: %s" % exception)
                 raise exception
                 
             if 0 in self.legs:
@@ -187,6 +188,8 @@ class PlannedRouting(Routing):
         
         
     def process(self, li, action):
+        self.logger.debug("Planned routing processing a %s" % action["type"])
+        
         if action["type"] == "dial":
             self.planner = self.RoutingPlanner(
                 self.call.switch.metapoll,
@@ -197,6 +200,10 @@ class PlannedRouting(Routing):
             self.planner.start(action)
         else:
             self.planner.resume(PlannedEvent("action", (li, action)))
+        # TODO: default_process, ha mar nem fut a plan?
+        # TODO: az auto cancel kisse meredek, ha nem tudjuk, hogy kikuldtuk-e mar.
+        # TODO: a plan_finished dolgozza fel a queue-ben rekedteket!
+        # TODO: legyen a Planner ososztaly, ne belso objektum?
         
 
     def plan(self, planner, action):

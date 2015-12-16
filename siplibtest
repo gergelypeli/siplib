@@ -80,7 +80,7 @@ class UnreachableLeg(PlannedLeg):
         yield from planner.wait_action("dial")
         self.logger.debug("Got dial, but not answering anything.")
 
-        yield from planner.wait_action("hangup")
+        yield from planner.wait_action("cancel")
         self.logger.debug("And now the caller hung up.")
 
 
@@ -196,7 +196,11 @@ class TestRouting(SimpleRouting):
 
 class TestSwitch(Switch):
     def __init__(self, metapoll, local_addr, mgw_addr, media_ports, routing_class):
-        self.routing_class = routing_class
+        class TestCall(Call):
+            def make_routing(self):
+                return routing_class(Weak(self))
+                
+        self.call_class = TestCall
         
         transport = UdpTransport(metapoll, local_addr, WeakMethod(self.reception))
         transaction_manager = TransactionManager(local_addr, WeakMethod(transport.send))
@@ -229,8 +233,12 @@ class TestSwitch(Switch):
 
     def make_outgoing_leg(self, uri):
         if uri.scheme == "builtin":
-            if uri.addr.host == "callee":
+            subtype = uri.addr.host
+            
+            if subtype == "callee":
                 return CalleeLeg(self.metapoll)
+            elif subtype == "unreachable":
+                return UnreachableLeg(self.metapoll)
             else:
                 raise Exception("Unknown builtin URI '%s'!" % uri.addr.host)
         else:
@@ -238,13 +246,7 @@ class TestSwitch(Switch):
 
 
     def make_call(self):
-        RoutingClass = self.routing_class
-        
-        class MyCall(Call):
-            def make_routing(self):
-                return RoutingClass(Weak(self))
-                
-        return MyCall(Weak(self))
+        return self.call_class(Weak(self))
         
 
 class SwitchA(TestSwitch):
@@ -262,14 +264,6 @@ class SwitchA(TestSwitch):
         #metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_dialing))
         
         
-    #def make_call(self):
-    #    class CallA(Call):
-    #        def make_routing(self):
-    #            return TestRouting(Weak(self))
-    #            
-    #    return CallA(Weak(self))
-        
-        
     def test_dialing(self):
         self.logger.debug("Dialing begins.")
 
@@ -283,6 +277,7 @@ class SwitchB(TestSwitch):
     class RoutingClass(PlannedRouting):
         def plan(self, planner, action):
             self.logger.debug("Routing plan started.")
+            self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:unreachable"))))
             self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:callee"))))
             li, action = yield from planner.wait_leg_action()
             self.forward(li, action)
@@ -313,16 +308,6 @@ class SwitchB(TestSwitch):
         self.account_manager.set_our_credentials(*B_CRED)
 
         metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
-
-
-    #def make_call(self):
-    #    RoutingClass = self.RoutingClass
-    #    
-    #    class CallB(Call):
-    #        def make_routing(self):
-    #            return RoutingClass(Weak(self))
-    #            
-    #    return CallB(Weak(self))
 
 
     def test_registering(self):
