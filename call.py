@@ -162,13 +162,14 @@ class PlannedRouting(Routing):
         self.oid = oid
 
 
-    #def cancel(self):
-        # TODO: this may be a bit too strong, why don't we just resume the plan?
-        # FIXME: and why don't we resume with every action???
-    #    self.planner.resume(SipError(Status(487)))
-        
-    
     def plan_finished(self, exception):
+        while self.planner.event_queue:
+            planned_event = self.planner.event_queue.pop(0)
+            
+            if planned_event.tag == "action":
+                li, action = planned_event.event
+                self.default_process(li, action)
+                
         status = None
         
         try:
@@ -198,11 +199,11 @@ class PlannedRouting(Routing):
             )
             self.planner.set_oid(build_oid(self.oid, "planner"))
             self.planner.start(action)
-        else:
+        elif self.planner.generator:
             self.planner.resume(PlannedEvent("action", (li, action)))
-        # TODO: default_process, ha mar nem fut a plan?
+        else:
+            self.default_process(li, action)
         # TODO: az auto cancel kisse meredek, ha nem tudjuk, hogy kikuldtuk-e mar.
-        # TODO: a plan_finished dolgozza fel a queue-ben rekedteket!
         # TODO: legyen a Planner ososztaly, ne belso objektum?
         
 

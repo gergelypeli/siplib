@@ -122,9 +122,9 @@ class Planner(Loggable):
                 self.logger.debug("Plan return value ignored!")
             
             if self.finish_handler:
-                self.logger.debug("Plan finish handler start")
+                #self.logger.debug("Plan finish handler start")
                 self.finish_handler(None)
-                self.logger.debug("Plan finish handler end")
+                #self.logger.debug("Plan finish handler end")
         except Exception as e:
             self.logger.warning("Aborted plan with exception!", exc_info=True)
             self.generator = None
