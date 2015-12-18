@@ -74,21 +74,21 @@ MEDIA_HOST = "otthon"
 
 
 class UnreachableLeg(PlannedLeg):
-    def plan(self, planner):
+    def plan(self):
         self.logger.debug("Unreachable leg created.")
         
-        yield from planner.wait_action("dial")
+        yield from self.wait_action("dial")
         self.logger.debug("Got dial, but not answering anything.")
 
-        yield from planner.wait_action("cancel")
+        yield from self.wait_action("cancel")
         self.logger.debug("And now the caller hung up.")
 
 
 class RejectingLeg(PlannedLeg):
-    def plan(self, planner):
+    def plan(self):
         self.logger.debug("Rejecting leg created.")
         
-        yield from planner.wait_action("dial")
+        yield from self.wait_action("dial")
         self.logger.debug("Got dial, but not now rejecting it.")
 
         self.report(dict(type="reject", status=Status(603)))
@@ -97,17 +97,17 @@ class RejectingLeg(PlannedLeg):
 
 
 class CalleeLeg(PlannedLeg):
-    def plan(self, planner):
+    def plan(self):
         self.logger.debug("Callee created.")
         
-        action = yield from planner.wait_action("dial")
+        action = yield from self.wait_action("dial")
         self.offer = action.get("offer")
         self.logger.debug("Got offer:\n%s" % repr(self.offer))
         
-        yield from planner.sleep(1)
+        yield from self.sleep(1)
         self.report(dict(type="ring"))
         
-        yield from planner.sleep(1)
+        yield from self.sleep(1)
         answer = self.make_answer(self.offer)
         sid = self.call.select_gateway_sid(0)
         media_leg = PlayerMediaLeg(self.call.switch.mgc, sid)
@@ -118,11 +118,11 @@ class CalleeLeg(PlannedLeg):
         self.media_legs[0].play("playback.wav", ("PCMA", 8000), volume=0.2, fade=3)
         #self.refresh_media()
         
-        yield from planner.sleep(3)
+        yield from self.sleep(3)
         self.media_legs[0].play(volume=0, fade=3)
         #self.refresh_media()
         
-        yield from planner.sleep(3)
+        yield from self.sleep(3)
         self.report(dict(type="hangup"))
 
         self.logger.debug("Callee done.")
@@ -133,22 +133,22 @@ class CalleeLeg(PlannedLeg):
 
 
 class CallerLeg(PlannedLeg):
-    def plan(self, planner):
+    def plan(self):
         self.logger.debug("Caller created")
         
-        yield from planner.sleep(0)
+        yield from self.sleep(0)
         self.ctx["from"] = CALLER_NAMEADDR
         self.ctx["to"] = Nameaddr(CALLEE_NAMEADDR.uri)
         self.report(dict(type="dial", ctx=self.ctx, offer=CALLER_SDP))
 
-        action = yield from planner.wait_action("accept")
+        action = yield from self.wait_action("accept")
         self.logger.debug("Accepted with SDP:\n%s" % repr(action.get("answer")))
 
-        action = yield from planner.expect("action")
+        action = yield from self.expect("action")
         assert action["type"] == "hangup"
         
         self.logger.debug("Caller done.")
-        #yield from planner.sleep(3)
+        #yield from self.sleep(3)
         #self.leg.do(dict(type="hangup"))
 
 
@@ -275,11 +275,11 @@ class SwitchA(TestSwitch):
 
 class SwitchB(TestSwitch):
     class RoutingClass(PlannedRouting):
-        def plan(self, planner, action):
+        def plan(self, action):
             self.logger.debug("Routing plan started.")
             self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:unreachable"))))
             self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:callee"))))
-            li, action = yield from planner.wait_leg_action()
+            li, action = yield from self.wait_action()
             self.forward(li, action)
             
             

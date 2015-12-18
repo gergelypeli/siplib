@@ -1,7 +1,7 @@
 from async import WeakMethod, Weak, WeakGeneratorMethod
 from format import Status, SipError
 from mgc import MediaChannel
-from planner import Planner, PlannedEvent
+from planner import Planned
 from util import build_oid, Loggable
 
 
@@ -145,29 +145,35 @@ class SimpleRouting(Routing):
             self.default_process(li, action)
 
 
-class PlannedRouting(Routing):
-    class RoutingPlanner(Planner):
-        def wait_leg_action(self, action_type=None, timeout=None):
-            planned_event = yield from self.suspend(expect="action", timeout=timeout)
-            li, action = planned_event.event
-            
-            if action_type and action["type"] != action_type:
-                raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
-                
-            return li, action
+class PlannedRouting(Planned, Routing):
+    def __init__(self, call):
+        Planned.__init__(self,
+                call.switch.metapoll,
+                WeakGeneratorMethod(self.plan),
+                finish_handler=WeakMethod(self.plan_finished)
+        )
+        Routing.__init__(self, call)
+        
+        
+    def wait_action(self, leg_index=None, action_type=None, timeout=None):
+        tag, event = yield from self.suspend(expect="action", timeout=timeout)
+        li, action = event
 
-            
-    def set_oid(self, oid):
-        Routing.set_oid(self, oid)
-        self.oid = oid
+        if leg_index is not None and li != leg_index:
+            raise Exception("Expected action from %s, got from %s!" % (leg_index, li))
+
+        if action_type and action["type"] != action_type:
+            raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
+        
+        return li, action
 
 
     def plan_finished(self, exception):
-        while self.planner.event_queue:
-            planned_event = self.planner.event_queue.pop(0)
+        while self.event_queue:
+            tag, event = self.event_queue.pop(0)
             
-            if planned_event.tag == "action":
-                li, action = planned_event.event
+            if tag == "action":
+                li, action = event
                 self.default_process(li, action)
                 
         status = None
@@ -192,22 +198,15 @@ class PlannedRouting(Routing):
         self.logger.debug("Planned routing processing a %s" % action["type"])
         
         if action["type"] == "dial":
-            self.planner = self.RoutingPlanner(
-                self.call.switch.metapoll,
-                WeakGeneratorMethod(self.plan),
-                finish_handler=WeakMethod(self.plan_finished)
-            )
-            self.planner.set_oid(build_oid(self.oid, "planner"))
-            self.planner.start(action)
-        elif self.planner.generator:
-            self.planner.resume(PlannedEvent("action", (li, action)))
+            self.start(action)
+        elif self.generator:
+            self.resume("action", (li, action))
         else:
             self.default_process(li, action)
         # TODO: az auto cancel kisse meredek, ha nem tudjuk, hogy kikuldtuk-e mar.
-        # TODO: legyen a Planner ososztaly, ne belso objektum?
         
 
-    def plan(self, planner, action):
+    def plan(self, action):
         raise NotImplementedError()
         
 

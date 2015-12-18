@@ -3,7 +3,7 @@ from copy import deepcopy
 
 from async import WeakMethod, WeakGeneratorMethod
 from format import Status, make_virtual_response
-from planner import Planner, PlannedEvent
+from planner import Planned
 from mgc import ProxiedMediaLeg
 from util import build_oid, Loggable
 
@@ -509,50 +509,42 @@ class SipLeg(Leg):
         raise Error("Weirdness!")
 
 
-class PlannedLeg(Leg):
-    class LegPlanner(Planner):
-        def wait_action(self, action_type=None, timeout=None):
-            planned_event = yield from self.suspend(expect="action", timeout=timeout)
-            action = planned_event.event
-            
-            if action_type and action["type"] != action_type:
-                raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
-                
-            return action
-            
-            
+class PlannedLeg(Planned, Leg):
     def __init__(self, metapoll):
-        super(PlannedLeg, self).__init__()
-        
-        self.planner = self.LegPlanner(
+        Planned.__init__(self,
             metapoll,
             WeakGeneratorMethod(self.plan),
             finish_handler=WeakMethod(self.plan_finished)
         )
+        Leg.__init__(self)
         
+        
+    def wait_action(self, action_type=None, timeout=None):
+        tag, event = yield from self.suspend(expect="action", timeout=timeout)
+        action = event
+        
+        if action_type and action["type"] != action_type:
+            raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
+            
+        return action
+            
         
     def start(self):
-        self.planner.start()
-
-
-    def set_oid(self, oid):
-        Leg.set_oid(self, oid)
-        self.planner.set_oid(build_oid(oid, "planner"))
+        Planned.start(self)
 
 
     def plan_finished(self, error):
         if error:
-            self.logger.error("Leg plan screwed!")
+            self.logger.error("Leg plan screwed with %s!" % error)
             
-        self.logger.debug("Planned leg finished, error: %s" % error)
         self.finish(error)
         
 
     def do(self, action):
-        self.planner.resume(PlannedEvent("action", action))
+        self.resume("action", action)
 
 
-    def plan(self, planner):
+    def plan(self):
         raise NotImplementedError()
         
 
