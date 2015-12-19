@@ -297,7 +297,7 @@ class TcpListener(Listener):
     A specialization for TCP sockets. Can be used with fake identification.
     """
     def __init__(self, *args):
-        super(TcpListener, self).__init__("TCP", *args)
+        Listener.__init__(self, "TCP", *args)
 
 
     def create_socket(self):
@@ -324,7 +324,7 @@ class UnixListener(Listener):
         #if os.path.exists(addr):
         #    os.unlink(addr)
 
-        super(UnixListener, self).__init__("UNIX", *args)
+        Listener.__init__(self, "UNIX", *args)
 
         os.chmod(self.addr, 0o666)
 
@@ -439,7 +439,7 @@ class Reconnector(object):
 
 class TcpReconnector(Reconnector):
     def __init__(self, *args):
-        super(TcpReconnector, self).__init__("TCP", *args)
+        Reconnector.__init__(self, "TCP", *args)
 
 
     def create_socket(self):

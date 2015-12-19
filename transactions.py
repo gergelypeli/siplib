@@ -154,7 +154,7 @@ class Transaction(object):
 
 class PlainClientTransaction(Transaction):
     def __init__(self, manager, branch, report_response):
-        super(PlainClientTransaction, self).__init__(manager, branch)
+        super().__init__(manager, branch)
         
         self.report_response = report_response
         
@@ -164,7 +164,7 @@ class PlainClientTransaction(Transaction):
             raise Error("Don't mess with the request Via headers!")
             
         msg["via"] = [ Via(self.manager.get_local_addr(), self.branch) ]
-        super(PlainClientTransaction, self).transmit(msg)
+        super().transmit(msg)
 
 
     def send(self, request):
@@ -189,7 +189,7 @@ class PlainClientTransaction(Transaction):
 
 class PlainServerTransaction(Transaction):
     def __init__(self, manager, branch, report_request):
-        super(PlainServerTransaction, self).__init__(manager, branch)
+        super().__init__(manager, branch)
         
         self.report_request = report_request
         self.incoming_via = None
@@ -200,7 +200,7 @@ class PlainServerTransaction(Transaction):
             raise Error("Don't mess with the response Via headers!")
             
         msg["via"] = self.incoming_via
-        super(PlainServerTransaction, self).transmit(msg)
+        super().transmit(msg)
 
 
     def process(self, request):
@@ -238,7 +238,7 @@ class Bastard(object):
 
 class InviteClientTransaction(PlainClientTransaction):
     def __init__(self, *args, **kwargs):
-        super(InviteClientTransaction, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
         # Oh my god! They let an INVITE create multiple dialogs! You bastards!
         self.bastards = {}
@@ -357,7 +357,7 @@ class InviteServerTransaction(PlainServerTransaction):
         if self.state == self.WAITING:
             self.send(self.trying_response)
             
-        return super(InviteServerTransaction, self).maintain(now)
+        return super().maintain(now)
         
 
     def expired(self):

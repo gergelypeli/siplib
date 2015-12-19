@@ -55,7 +55,7 @@ class Status(collections.namedtuple("Status", [ "code", "reason" ])):
     
     def __new__(cls, code, reason=None):
         reason = reason or cls.REASONS_BY_CODE.get(code) or "Just because"
-        return super(Status, cls).__new__(cls, code, reason)
+        return super().__new__(cls, code, reason)
 
 
 class Via(collections.namedtuple("Via", [ "addr", "branch" ])):
@@ -111,7 +111,7 @@ class WwwAuth(collections.namedtuple("WwwAuth",
     [ "realm", "nonce", "domain", "opaque", "algorithm", "stale", "qop" ]
 )):
     def __new__(cls, realm, nonce, domain=None, opaque=None, algorithm=None, stale=None, qop=None):
-        return super(WwwAuth, cls).__new__(cls, realm, nonce, domain, opaque, algorithm, stale, qop)
+        return super().__new__(cls, realm, nonce, domain, opaque, algorithm, stale, qop)
 
 
     def print(self):
@@ -144,7 +144,7 @@ class Auth(collections.namedtuple("Auth",
     [ "realm", "nonce", "username", "uri", "response", "opaque", "algorithm", "qop", "cnonce", "nc" ]
 )):
     def __new__(cls, realm, nonce, username, uri, response, opaque=None, algorithm=None, qop=None, cnonce=None, nc=None):
-        self = super(Auth, cls).__new__(cls, realm, nonce, username, uri, response, opaque, algorithm, qop, cnonce, nc)
+        self = super().__new__(cls, realm, nonce, username, uri, response, opaque, algorithm, qop, cnonce, nc)
         self.stale = False  # internally used attribute
         return self
 
@@ -195,7 +195,7 @@ def print_params(params):
 
 class Uri(collections.namedtuple("Uri", "addr user scheme params")):
     def __new__(cls, addr, user=None, scheme=None, params=None):
-        return super(Uri, cls).__new__(cls, addr, user, scheme or "sip", params or {})
+        return super().__new__(cls, addr, user, scheme or "sip", params or {})
 
 
     def __hash__(self):
@@ -245,7 +245,7 @@ class Uri(collections.namedtuple("Uri", "addr user scheme params")):
 
 class Nameaddr(collections.namedtuple("Nameaddr", "uri name params")):
     def __new__(cls, uri, name=None, params=None):
-        return super(Nameaddr, cls).__new__(cls, uri, name, params or {})
+        return super().__new__(cls, uri, name, params or {})
 
 
     def print(self):

@@ -198,7 +198,7 @@ class Leg(Thing):
 
 class NetLeg(Leg):
     def __init__(self, oid, label, owner_sid, metapoll):
-        super(NetLeg, self).__init__(oid, label, owner_sid, "net")
+        super().__init__(oid, label, owner_sid, "net")
         self.local_addr = None
         self.remote_addr = None
         self.socket = None
@@ -213,7 +213,7 @@ class NetLeg(Leg):
             
         
     def modify(self, params):
-        super(NetLeg, self).modify(params)
+        super().modify(params)
 
         #print("Setting leg: %s" % (params,))
         
@@ -291,7 +291,7 @@ class NetLeg(Leg):
 
 class EchoLeg(Leg):
     def __init__(self, oid, label, owner_sid):
-        super(EchoLeg, self).__init__(oid, label, owner_sid, "echo")
+        super().__init__(oid, label, owner_sid, "echo")
 
 
     def send_format(self, format, packet):
@@ -302,7 +302,7 @@ class EchoLeg(Leg):
 
 class PlayerLeg(Leg):
     def __init__(self, oid, label, owner_sid, metapoll):
-        super(PlayerLeg, self).__init__(oid, label, owner_sid, "player")
+        super().__init__(oid, label, owner_sid, "player")
         
         self.metapoll = metapoll
         self.rtp_player = None
@@ -311,7 +311,7 @@ class PlayerLeg(Leg):
 
 
     def modify(self, params):
-        super(PlayerLeg, self).modify(params)
+        super().modify(params)
 
         # This is temporary, don't remember it across calls
         fade = 0

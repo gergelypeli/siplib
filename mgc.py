@@ -47,12 +47,12 @@ class MediaLeg(Loggable):
 
 #class EchoedMediaLeg(MediaLeg):
 #    def __init__(self):
-#        super(EchoedMediaLeg, self).__init__(type="echo")
+#        super().__init__(type="echo")
 
 
 class PlayerMediaLeg(MediaLeg):
     def __init__(self, mgc, sid):
-        super(PlayerMediaLeg, self).__init__(mgc, sid, "player")
+        super().__init__(mgc, sid, "player")
         
 
     def play(self, filename=None, format=None, volume=1, fade=0):
@@ -68,7 +68,7 @@ class PlayerMediaLeg(MediaLeg):
 
 class ProxiedMediaLeg(MediaLeg):
     def __init__(self, mgc, sid, local_addr):
-        super(ProxiedMediaLeg, self).__init__(mgc, sid, "net")
+        super().__init__(mgc, sid, "net")
 
         self.local_addr = local_addr
         self.committed = {}

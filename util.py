@@ -95,3 +95,61 @@ class Loggable(object):
     def set_oid(self, oid):  # TODO: accept oid, key, value=None?
         self.logger = logging.LoggerAdapter(logging.getLogger(), dict(oid=oid))
         self.oid = oid
+
+
+def setup_logging():
+    class OidLogFilter(logging.Filter):
+        def filter(self, record):
+            if not hasattr(record, 'oid'):
+                record.oid = record.name
+            
+            #if "/" in record.oid:
+                #record.oid = ".".join(
+                #    x[:1] if not x.isdigit() else x for x in record.oid.split(".")
+                #)
+            #    record.oid = "/".join(
+            #        "%s=%s" % (k[:1], v) for k, v in (x.split("=") for x in record.oid.split("/"))
+            #    )
+            
+            return True
+    
+    logging.config.dictConfig({
+        'version': 1,
+        'disable_existing_loggers': False,
+        'formatters': {
+            'default': {
+                #'format': '%(asctime)s.%(msecs)03d  %(name)s  %(levelname)s  %(message)s',
+                #'format': '%(name)-10s | %(message)s',
+                'format': '%(oid)s | %(message)s',
+                'datefmt': '%F %T'
+            }
+        },
+        'filters': {
+            'oidfilter': {
+                '()': OidLogFilter
+            }
+        },
+        'handlers': {
+            'console': {
+                'class': 'logging.StreamHandler',
+                'formatter': 'default',
+                'filters': [ 'oidfilter' ]
+            },
+            'file': {
+                'class': 'logging.FileHandler',
+                'formatter': 'default',
+                'filters': [ 'oidfilter' ],
+                'filename': 'siplibtest.log',
+                'mode': 'w'
+            }
+        },
+        'loggers': {
+            '': {
+                'level': logging.DEBUG,
+                'handlers': [ 'console', 'file' ]
+            },
+            'msgp': {
+                'level': logging.INFO
+            }
+        }
+    })

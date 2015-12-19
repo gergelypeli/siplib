@@ -180,7 +180,7 @@ class SipLeg(Leg):
     
 
     def __init__(self, dialog):
-        super(SipLeg, self).__init__()
+        super().__init__()
 
         self.dialog = dialog
         self.state = self.DOWN
@@ -231,8 +231,6 @@ class SipLeg(Leg):
                 recv_formats=extract_formats(lc)
             )
             
-        #super().refresh_media()
-        
 
     def preprocess_outgoing_session(self, sdp):
         for i in range(len(self.media_legs), len(sdp.channels)):
