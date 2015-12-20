@@ -45,9 +45,9 @@ class MediaLeg(Loggable):
             handler()
         
 
-#class EchoedMediaLeg(MediaLeg):
-#    def __init__(self):
-#        super().__init__(type="echo")
+class EchoMediaLeg(MediaLeg):
+    def __init__(self, mgc, sid):
+        super().__init__(mgc, sid, "echo")
 
 
 class PlayerMediaLeg(MediaLeg):

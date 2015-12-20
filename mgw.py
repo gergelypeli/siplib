@@ -292,12 +292,18 @@ class NetLeg(Leg):
 class EchoLeg(Leg):
     def __init__(self, oid, label, owner_sid):
         super().__init__(oid, label, owner_sid, "echo")
+        
+        self.buffer = []
 
 
     def send_format(self, format, packet):
         # We don't care about payload types
-        self.logger.debug("Echoing %s packet on %s" % (format, self.name))
-        self.recv_format(format, packet)
+        #self.logger.debug("Echoing %s packet on %s" % (format, self.label))
+        self.buffer.append((format, packet))
+        
+        if len(self.buffer) > 10:
+            f, p = self.buffer.pop(0)
+            self.recv_format(f, p)
 
 
 class PlayerLeg(Leg):

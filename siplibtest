@@ -17,7 +17,7 @@ from registrar import RecordManager
 from account import Account
 from util import resolve, setup_exchandler, setup_logging, build_oid
 from mgw import MediaGateway
-from mgc import Controller, PlayerMediaLeg
+from mgc import Controller, PlayerMediaLeg, EchoMediaLeg
 from switch import Switch
 
 HOST = "otthon"
@@ -110,16 +110,17 @@ class CalleeLeg(PlannedLeg):
         yield from self.sleep(1)
         answer = self.make_answer(self.offer)
         sid = self.call.select_gateway_sid(0)
-        media_leg = PlayerMediaLeg(self.call.switch.mgc, sid)
-        media_leg.set_oid(build_oid(self.oid, "media", len(self.media_legs)))
-        self.media_legs.append(media_leg)
+        #media_leg = PlayerMediaLeg(self.call.switch.mgc, sid)
+        media_leg = EchoMediaLeg(self.call.switch.mgc, sid)
+        self.append_media_leg(media_leg)
         self.report(dict(type="accept", answer=answer))
-        # It shouldn't be legal to answer without channels existing already!
-        self.media_legs[0].play("playback.wav", ("PCMA", 8000), volume=0.2, fade=3)
+        # TODO: It shouldn't be legal to answer without channels existing already!
+        
+        #self.media_legs[0].play("playback.wav", ("PCMA", 8000), volume=0.2, fade=3)
         #self.refresh_media()
         
         yield from self.sleep(3)
-        self.media_legs[0].play(volume=0, fade=3)
+        #self.media_legs[0].play(volume=0, fade=3)
         #self.refresh_media()
         
         yield from self.sleep(3)

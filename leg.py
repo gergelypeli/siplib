@@ -45,8 +45,13 @@ class Leg(Loggable):
         else:
             self.logger.debug("Leg is finished.")
             self.report(dict(type="finish", error=error))
-            
-            
+
+
+    def append_media_leg(self, media_leg):
+        media_leg.set_oid(build_oid(self.oid, "media", len(self.media_legs)))
+        self.media_legs.append(media_leg)
+
+
     def media_deleted(self, li, error):
         self.media_legs[li] = None
         
