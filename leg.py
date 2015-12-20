@@ -339,19 +339,29 @@ class SipLeg(Leg):
                 self.change_state(self.UP)
                 return
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
+            session_changed = False
+            
             if self.invite_state.responded_session:
                 sdp = self.invite_state.responded_session
             else:
                 sdp = answer if self.invite_state.had_offer_in_request else offer
                 if sdp:
+                    session_changed = True
                     self.invite_state.responded_session = sdp
                 
             if type == "ring":
+                already_ringing = (self.state == self.DIALING_IN_RINGING)
+                if not session_changed and already_ringing:
+                    return
+                
                 invite_response = dict(status=Status(180, "Ringing"), sdp=sdp)
                 self.send_response(invite_response, self.invite_state.request)
                 self.change_state(self.DIALING_IN_RINGING)
                 return
             elif type == "session":
+                if not session_changed:
+                    return
+                    
                 already_ringing = (self.state == self.DIALING_IN_RINGING)
                 status = Status(180, "Ringing") if already_ringing else Status(183, "Session Progress")
                 invite_response = dict(status=status, sdp=sdp)

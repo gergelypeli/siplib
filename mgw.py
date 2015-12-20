@@ -190,6 +190,8 @@ class Leg(Thing):
     def recv_format(self, format, packet):
         if self.forward_handler:
             self.forward_handler(format, packet)
+        else:
+            self.logger.warning("No context to forward media to!")
 
 
     def send_format(self, format, packet):
@@ -317,6 +319,7 @@ class PlayerLeg(Leg):
 
 
     def modify(self, params):
+        self.logger.debug("Player leg modified: %s" % params)
         super().modify(params)
 
         # This is temporary, don't remember it across calls

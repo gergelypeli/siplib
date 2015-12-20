@@ -17,6 +17,7 @@ class Routing(Loggable):
         self.report = None
         self.oid = "routing=x"
         self.legs = {}
+        self.queued_actions = {}
     
     
     def set_report(self, report):
@@ -31,6 +32,8 @@ class Routing(Loggable):
             self.set_oid(build_oid(leg_oid, "routing"))
 
         self.legs[li] = leg
+        self.queued_actions[li] = []
+        
         leg.set_report(WeakMethod(self.process, li).bind_front())
         leg.set_oid(leg_oid)
         leg.set_call(self.call)
@@ -40,13 +43,13 @@ class Routing(Loggable):
 
     def remove_leg(self, li):
         self.legs[li] = None  # keep entry to keep on counting the legs
-        
-        if not any(self.legs.values()):
-            self.finish_routing()
+        self.queued_actions[li] = None
+        self.may_finish()
             
 
-    def finish_routing(self):
-        self.report(dict(type="finish"))
+    def may_finish(self):
+        if not any(self.legs.values()):
+            self.report(dict(type="finish"))
         
         
     def reject(self, status):
@@ -55,14 +58,27 @@ class Routing(Loggable):
         self.legs[0].do(dict(type="reject", status=status))
 
 
+    def forward(self, action):
+        self.logger.debug("Forwarding %s to incoming leg." % action["type"])
+        
+        if self.legs[0]:
+            # Pre-anchoring - do it directly
+            self.legs[0].do(action)
+        else:
+            # Post-anchoring - ask the Call
+            self.report(dict(type="forward", action=action))
+
+        
     def anchor(self, li):
         self.logger.debug("Anchoring to leg %d." % li)
         
         these_legs = [ self.legs[0], self.legs[li] ]
         further_legs = self.legs[li].get_further_legs()
-        
         self.report(dict(type="anchor", legs=these_legs + further_legs))
 
+        for action in self.queued_actions[li]:
+            self.forward(action)
+        
         self.remove_leg(li)
         self.remove_leg(0)
         
@@ -78,19 +94,6 @@ class Routing(Loggable):
                     # This may not happen, if we cancel after an anchoring,
                     # then the incoming leg already got a positive response.
                     self.reject(status or Status(487))
-
-
-    def forward(self, li, action):
-        # Any positive feedback from outgoing legs can be anchored,
-        # because it means that that leg is also anchored itself.
-        # But can't just anchor right after routing, because the
-        # outgoing leg may still be thinking.
-        self.logger.debug("Forwarding %s to incoming leg." % action["type"])
-        
-        incoming_leg = self.legs[0]
-        self.anchor(li)
-        incoming_leg.do(action)
-        self.cancel()  # the remaining legs only
 
 
     def dial(self, action):
@@ -117,8 +120,19 @@ class Routing(Loggable):
         else:
             if type == "reject":
                 self.reject(action["status"])
-            elif type in ("ring", "accept", "session"):
-                self.forward(li, action)
+            elif type == "ring":
+                self.logger.debug("Queueing ring from leg %s." % li)
+                self.queued_actions[li].append(action)
+                
+                self.logger.debug("Forwarding bare ring to incoming leg.")
+                self.forward(dict(type="ring"))
+            elif type == "session":
+                self.logger.debug("Queueing session from leg %s." % li)
+                self.queued_actions[li].append(action)
+            elif type == "accept":
+                self.anchor(li)
+                self.forward(action)
+                self.cancel()  # the remaining legs
             else:
                 raise Exception("Invalid action from outgoing leg: %s" % type)
 
@@ -168,6 +182,11 @@ class PlannedRouting(Planned, Routing):
         return li, action
 
 
+    def may_finish(self):
+        if not self.generator:
+            Routing.may_finish(self)
+            
+
     def plan_finished(self, exception):
         while self.event_queue:
             tag, event = self.event_queue.pop(0)
@@ -182,16 +201,22 @@ class PlannedRouting(Planned, Routing):
             if exception:
                 self.logger.debug("Routing plan finished with: %s" % exception)
                 raise exception
-                
-            if 0 in self.legs:
-                raise Exception("Routing plan completed without anchoring!")
+            
+            # Let's see if the default processing can anchor itself    
+            #if 0 in self.legs:
+            #    raise Exception("Routing plan completed without anchoring!")
         except SipError as e:
+            self.logger.error("Routing plan aborted with SIP error: %s" % e)
             status = e.status
         except:
+            self.logger.error("Routing plan aborted with exception: %s" % e)
             status = Status(500)
             
         if status:
+            # TODO: must handle double events for this to work well!
             self.cancel(status)
+            
+        self.may_finish()
         
         
     def process(self, li, action):
@@ -203,7 +228,6 @@ class PlannedRouting(Planned, Routing):
             self.resume("action", (li, action))
         else:
             self.default_process(li, action)
-        # TODO: az auto cancel kisse meredek, ha nem tudjuk, hogy kikuldtuk-e mar.
         
 
     def plan(self, action):
@@ -267,6 +291,9 @@ class Call(Loggable):
                 
             self.media_channels = []
             #self.refresh_media()
+        elif type == "forward":
+            # Post-anchoring forwarded leg actions only come from our leg 1
+            self.process(1, action["action"])
         else:
             self.logger.debug("Unknown routing event %s!" % type)
         

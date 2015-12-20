@@ -33,6 +33,8 @@ class Planned(Loggable):
         
         self.logger.debug("Starting plan.")
         self.generator = self.generator_method(*args, **kwargs)
+        if not self.generator:
+            raise Exception("Couldn't create plan generator!")
         self.resume(None, None)
 
 

@@ -92,8 +92,20 @@ class RejectingLeg(PlannedLeg):
         self.logger.debug("Got dial, but not now rejecting it.")
 
         self.report(dict(type="reject", status=Status(603)))
-
         self.logger.debug("And now done.")
+
+
+class RingingLeg(PlannedLeg):
+    def plan(self):
+        self.logger.debug("Ringing leg created.")
+        
+        yield from self.wait_action("dial")
+        self.logger.debug("Got dial, now ringing forever.")
+
+        self.report(dict(type="ring"))
+
+        yield from self.wait_action("cancel")
+        self.logger.debug("And now the caller hung up.")
 
 
 class CalleeLeg(PlannedLeg):
@@ -110,18 +122,16 @@ class CalleeLeg(PlannedLeg):
         yield from self.sleep(1)
         answer = self.make_answer(self.offer)
         sid = self.call.select_gateway_sid(0)
-        #media_leg = PlayerMediaLeg(self.call.switch.mgc, sid)
-        media_leg = EchoMediaLeg(self.call.switch.mgc, sid)
+        media_leg = PlayerMediaLeg(self.call.switch.mgc, sid)
+        #media_leg = EchoMediaLeg(self.call.switch.mgc, sid)
         self.append_media_leg(media_leg)
         self.report(dict(type="accept", answer=answer))
         # TODO: It shouldn't be legal to answer without channels existing already!
         
-        #self.media_legs[0].play("playback.wav", ("PCMA", 8000), volume=0.2, fade=3)
-        #self.refresh_media()
+        media_leg.play("playback.wav", ("PCMA", 8000), volume=0.2, fade=3)
         
         yield from self.sleep(3)
-        #self.media_legs[0].play(volume=0, fade=3)
-        #self.refresh_media()
+        media_leg.play(volume=0, fade=3)
         
         yield from self.sleep(3)
         self.report(dict(type="hangup"))
@@ -278,10 +288,12 @@ class SwitchB(TestSwitch):
     class RoutingClass(PlannedRouting):
         def plan(self, action):
             self.logger.debug("Routing plan started.")
+            yield from self.sleep(0)  # yield necessary in a generator
+            
             self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:unreachable"))))
             self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:callee"))))
-            li, action = yield from self.wait_action()
-            self.forward(li, action)
+            #li, action = yield from self.wait_action()
+            #self.forward(li, action)
             
             
     class XRoutingClass(TestRouting):
