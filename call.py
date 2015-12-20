@@ -104,7 +104,7 @@ class Routing(Loggable):
         leg.do(action)
 
 
-    def default_process(self, li, action):
+    def process(self, li, action):
         type = action["type"]
         self.logger.debug("Got %s from leg %d." % (type, li))
 
@@ -112,7 +112,7 @@ class Routing(Loggable):
             self.remove_leg(li)
         elif li == 0:
             if type == "dial":
-                raise Exception("Should have handled dial before default_process!")
+                raise Exception("Should have handled dial in a subclass!")
             elif type == "cancel":
                 self.cancel()
             else:
@@ -137,10 +137,6 @@ class Routing(Loggable):
                 raise Exception("Invalid action from outgoing leg: %s" % type)
 
 
-    def process(self, li, action):
-        raise NotImplementedError()
-
-
 class SimpleRouting(Routing):
     def route_ctx(self, ctx):
         raise NotImplementedError()
@@ -156,7 +152,7 @@ class SimpleRouting(Routing):
             else:
                 self.dial(dict(action, ctx=ctx))
         else:
-            self.default_process(li, action)
+            Routing.process(self, li, action)
 
 
 class PlannedRouting(Planned, Routing):
@@ -193,7 +189,7 @@ class PlannedRouting(Planned, Routing):
             
             if tag == "action":
                 li, action = event
-                self.default_process(li, action)
+                Routing.process(self, li, action)
                 
         status = None
         
@@ -227,7 +223,7 @@ class PlannedRouting(Planned, Routing):
         elif self.generator:
             self.resume("action", (li, action))
         else:
-            self.default_process(li, action)
+            Routing.process(self, li, action)
         
 
     def plan(self, action):

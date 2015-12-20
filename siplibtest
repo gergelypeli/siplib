@@ -250,6 +250,8 @@ class TestSwitch(Switch):
                 return CalleeLeg(self.metapoll)
             elif subtype == "unreachable":
                 return UnreachableLeg(self.metapoll)
+            elif subtype == "ringing":
+                return RingingLeg(self.metapoll)
             else:
                 raise Exception("Unknown builtin URI '%s'!" % uri.addr.host)
         else:
@@ -291,6 +293,7 @@ class SwitchB(TestSwitch):
             yield from self.sleep(0)  # yield necessary in a generator
             
             self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:unreachable"))))
+            self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:ringing"))))
             self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:callee"))))
             #li, action = yield from self.wait_action()
             #self.forward(li, action)
