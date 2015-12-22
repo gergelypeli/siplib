@@ -5,7 +5,8 @@ import datetime
 import socket
 import errno
 
-from async import TcpReconnector, TcpListener, WeakMethod
+from async import WeakMethod
+from async_net import TcpReconnector, TcpListener
 from util import Loggable
 
 

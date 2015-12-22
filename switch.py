@@ -3,7 +3,8 @@ from format import Status
 from transport import UdpTransport
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
-from leg import SipLeg, create_uninvited_leg
+from leg import create_uninvited_leg
+from leg_sip import SipLeg
 from call import Call
 from authority import Authority
 from registrar import RegistrationManager, RecordManager

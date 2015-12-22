@@ -1,7 +1,4 @@
-# This needs at least Python 3.3 because of yield from!
-
-import collections
-from async import Metapoll, Weak, WeakMethod
+from async import WeakMethod
 from util import Loggable
 
 
@@ -144,27 +141,3 @@ class Planned(Loggable):
             
             if self.finish_handler:
                 self.finish_handler(e)
-
-
-def main():
-    class Planned(object):
-        def __init__(self, metapoll):
-            self.planner = Planner(metapoll, self.plan)
-            self.planner.start()
-        
-    
-        def plan(self, planner):
-            print("One.")
-            yield from planner.poll(timeout=2)
-            print("Two.")
-            yield from planner.poll(timeout=2)
-            print("Three.")
-        
-
-    metapoll = Metapoll()
-    s = Planned(metapoll)
-
-    while True:
-        metapoll.do_poll()
-        
-    del s
