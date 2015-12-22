@@ -15,7 +15,7 @@ class Routing(Loggable):
         
         self.call = call
         self.report = None
-        self.oid = "routing=x"
+        self.leg_count = 0
         self.legs = {}
         self.queued_actions = {}
     
@@ -25,7 +25,8 @@ class Routing(Loggable):
 
 
     def add_leg(self, leg):
-        li = max(self.legs.keys()) + 1 if self.legs else 0
+        li = self.leg_count
+        self.leg_count += 1
         leg_oid = self.call.generate_leg_oid()
 
         if not self.legs:
@@ -42,31 +43,58 @@ class Routing(Loggable):
 
 
     def remove_leg(self, li):
-        self.legs[li] = None  # keep entry to keep on counting the legs
-        self.queued_actions[li] = None
+        self.legs.pop(li)
+        self.queued_actions.pop(li)
         self.may_finish()
             
 
     def may_finish(self):
-        if not any(self.legs.values()):
+        if not self.legs:
             self.report(dict(type="finish"))
-        
-        
-    def reject(self, status):
-        self.logger.warning("Rejecting with status %s" % (status,))
-        
-        self.legs[0].do(dict(type="reject", status=status))
 
 
-    def forward(self, action):
-        self.logger.debug("Forwarding %s to incoming leg." % action["type"])
+    def queue(self, li, action):
+        self.logger.debug("Queueing %s from leg %s." % (action["type"], li))
+        self.queued_actions[li].append(action)
+
+
+    def unqueue(self, li):
+        self.logger.debug("Unqueueing %d actions from leg %s." % (len(self.queued_actions[li]), li))
+        for action in self.queued_actions[li]:
+            self.respond(action)
+
         
-        if self.legs[0]:
+    def respond(self, action):
+        self.logger.debug("Responding %s to incoming leg." % action["type"])
+        
+        if 0 in self.legs:
             # Pre-anchoring - do it directly
             self.legs[0].do(action)
         else:
             # Post-anchoring - ask the Call
             self.report(dict(type="forward", action=action))
+
+
+    def reject(self, status):
+        self.logger.warning("Rejecting with status %s" % (status,))
+        self.respond(dict(type="reject", status=status))
+            
+            
+    def ringback(self):
+        self.logger.debug("Making artificial ringback.")
+        self.respond(dict(type="ring"))
+
+        
+    def cancel(self, status=None):
+        for li, leg in list(self.legs.items()):
+            self.logger.debug("Cancelling leg %s" % li)
+            
+            if li > 0:
+                leg.do(dict(type="cancel"))
+            else:
+                # This may not happen, if we cancel after an anchoring,
+                # then the incoming leg already got a positive response.
+                self.reject(status or Status(487))
 
         
     def anchor(self, li):
@@ -76,25 +104,11 @@ class Routing(Loggable):
         further_legs = self.legs[li].get_further_legs()
         self.report(dict(type="anchor", legs=these_legs + further_legs))
 
-        for action in self.queued_actions[li]:
-            self.forward(action)
-        
-        self.remove_leg(li)
         self.remove_leg(0)
+        self.unqueue(li)
+        self.remove_leg(li)
+        self.cancel()  # the remaining legs
         
-        
-    def cancel(self, status=None):
-        for li, leg in self.legs.items():
-            if leg:
-                self.logger.debug("Cancelling leg %s" % li)
-                
-                if li > 0:
-                    leg.do(dict(type="cancel"))
-                else:
-                    # This may not happen, if we cancel after an anchoring,
-                    # then the incoming leg already got a positive response.
-                    self.reject(status or Status(487))
-
 
     def dial(self, action):
         uri = action["ctx"]["uri"]
@@ -121,18 +135,13 @@ class Routing(Loggable):
             if type == "reject":
                 self.reject(action["status"])
             elif type == "ring":
-                self.logger.debug("Queueing ring from leg %s." % li)
-                self.queued_actions[li].append(action)
-                
-                self.logger.debug("Forwarding bare ring to incoming leg.")
-                self.forward(dict(type="ring"))
+                self.queue(li, action)
+                self.ringback()
             elif type == "session":
-                self.logger.debug("Queueing session from leg %s." % li)
-                self.queued_actions[li].append(action)
+                self.queue(li, action)
             elif type == "accept":
+                self.queue(li, action)
                 self.anchor(li)
-                self.forward(action)
-                self.cancel()  # the remaining legs
             else:
                 raise Exception("Invalid action from outgoing leg: %s" % type)
 
@@ -184,13 +193,12 @@ class PlannedRouting(Planned, Routing):
             
 
     def plan_finished(self, exception):
-        while self.event_queue:
-            tag, event = self.event_queue.pop(0)
-            
+        for tag, event in self.event_queue:
             if tag == "action":
                 li, action = event
                 Routing.process(self, li, action)
                 
+        self.event_queue = None
         status = None
         
         try:
@@ -198,9 +206,8 @@ class PlannedRouting(Planned, Routing):
                 self.logger.debug("Routing plan finished with: %s" % exception)
                 raise exception
             
-            # Let's see if the default processing can anchor itself    
-            #if 0 in self.legs:
-            #    raise Exception("Routing plan completed without anchoring!")
+            if len(self.legs) < 2:
+                raise Exception("Routing plan completed without creating outgoing legs!")
         except SipError as e:
             self.logger.error("Routing plan aborted with SIP error: %s" % e)
             status = e.status
@@ -236,8 +243,6 @@ class Call(Loggable):
         Loggable.__init__(self)
 
         self.switch = switch
-        #self.mgc = mgc
-        #self.finish_handler = finish_handler
         self.legs = None
         self.media_channels = None
         self.routing = None
@@ -364,7 +369,7 @@ class Call(Loggable):
             self.logger.debug("Bridging %s from leg %d to %d." % (type, li, lj))
             self.legs[lj].do(action)
             
-            if "answer" in action:
+            if action.get("answer"):
                 self.refresh_media()
             
 

@@ -292,6 +292,8 @@ class SipLeg(Leg):
         
 
     def do(self, action):
+        self.logger.debug("Doing %s" % action)
+        
         type = action["type"]
         offer = action.get("offer")
         answer = action.get("answer")
@@ -352,6 +354,7 @@ class SipLeg(Leg):
             if type == "ring":
                 already_ringing = (self.state == self.DIALING_IN_RINGING)
                 if not session_changed and already_ringing:
+                    self.logger.debug("Already ringing and session unchanged, skipping 180.")
                     return
                 
                 invite_response = dict(status=Status(180, "Ringing"), sdp=sdp)
@@ -360,6 +363,7 @@ class SipLeg(Leg):
                 return
             elif type == "session":
                 if not session_changed:
+                    self.logger.debug("Session unchanged, skipping 180/183.")
                     return
                     
                 already_ringing = (self.state == self.DIALING_IN_RINGING)
