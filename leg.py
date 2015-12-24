@@ -42,9 +42,18 @@ class Leg(Loggable):
             self.report(dict(type="finish", error=error))
 
 
-    def append_media_leg(self, media_leg):
-        media_leg.set_oid(build_oid(self.oid, "media", len(self.media_legs)))
-        self.media_legs.append(media_leg)
+    def make_media_leg(self, channel_index, type):
+        media_leg = self.call.make_media_leg(channel_index, type)
+        media_leg.set_oid(build_oid(self.oid, "media", channel_index))
+        
+        if channel_index < len(self.media_legs):
+            self.media_legs[channel_index] = media_leg
+        elif channel_index == len(self.media_legs):
+            self.media_legs.append(media_leg)
+        else:
+            raise Exception("Invalid media leg index!")
+            
+        return media_leg
 
 
     def media_deleted(self, li, error):
@@ -194,7 +203,51 @@ class PlannedLeg(Planned, Leg):
 
     def plan(self):
         raise NotImplementedError()
+
+
+class DialOutLeg(Leg):
+    def __init__(self):
+        Leg.__init__(self)
+        # Hm. Lehet, hogy a Routing-nak nem is kene call, csak a Leg-nek?
+        # Elvegre a Leg meg a Call minden megbeszelhetne egymassal kozvetlenul.
+        # De ehhez a Routing.dial absztrakt kell, hogy legyen, es a Switch-ben
+        # definialni egy Routing alosztalyt.
         
+        
+    def start_routing(self, incoming_leg):
+        self.routing = self.call.make_routing()
+        self.routing.set_report(WeakMethod(self.routed))
+        self.routing.add_leg(incoming_leg)
+        
+        
+    def routed(self, action):
+        type = action["type"]
+        
+        if type == "finish":
+            self.routing = None
+            
+            if self.legs:
+                self.logger.debug("Routing finished")
+            else:
+                self.logger.debug("Oops, routing finished without success!")
+                self.finish()
+                # TODO
+        elif type == "anchor":
+            self.logger.debug("Yay, anchored.")
+            self.legs = action["legs"]
+
+            # TODO: let the Routing connect them to each other?
+            for i, leg in enumerate(self.legs):
+                leg.set_report(WeakMethod(self.process, i).bind_front())
+                
+            self.media_channels = []
+            #self.refresh_media()
+        elif type == "forward":
+            # Post-anchoring forwarded leg actions only come from our leg 1
+            self.process(1, action["action"])
+        else:
+            self.logger.debug("Unknown routing event %s!" % type)
+
 
 def create_uninvited_leg(dialog_manager, invite_params):
     # TODO: real UninvitedLeg class

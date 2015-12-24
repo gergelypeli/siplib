@@ -297,19 +297,25 @@ class Call(Loggable):
             self.process(1, action["action"])
         else:
             self.logger.debug("Unknown routing event %s!" % type)
+
+
+    def make_media_leg(self, channel_index, type):
+        # TODO
+        sid_affinity = None
+        return self.switch.mgc.make_media_leg(sid_affinity, type)
         
         
-    def select_gateway_sid(self, channel_index):
-        # TODO: check existing channels
-        return self.switch.mgc.select_gateway_sid()
+    #def select_gateway_sid(self, channel_index):
+    #    # TODO: check existing channels
+    #    return self.switch.mgc.select_gateway_sid()
         
         
-    def allocate_media_address(self, sid):
-        return self.switch.mgc.allocate_media_address(sid)
+    #def allocate_media_address(self, sid):
+    #    return self.switch.mgc.allocate_media_address(sid)
         
         
-    def deallocate_media_address(self, sid, addr):  # TODO: may not be necessary
-        self.switch.mgc.deallocate_media_address(sid, addr)
+    #def deallocate_media_address(self, sid, addr):  # TODO: may not be necessary
+    #    self.switch.mgc.deallocate_media_address(sid, addr)
         
         
     def refresh_media(self):

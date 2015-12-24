@@ -1,12 +1,13 @@
 from __future__ import unicode_literals, print_function
 
-from async import WeakMethod
+from async import WeakMethod, Weak
 #from msgp import JsonMsgp, Sid
 from msgp import MsgpClient
 from util import vacuum, build_oid, Loggable
 
         
 class MediaLeg(Loggable):
+    # TODO: call, mi, type; minden mast a MediaLeg intezzen!
     def __init__(self, mgc, sid, type):
         Loggable.__init__(self)
         
@@ -221,7 +222,7 @@ class Controller(Loggable):
             raise Exception("Sorry, no mgw_sid yet!")
         else:
             return self.mgw_sid
-            
+    
 
     def allocate_media_address(self, sid):
         raise NotImplementedError()
@@ -229,3 +230,17 @@ class Controller(Loggable):
 
     def deallocate_media_address(self, sid, addr):
         raise NotImplementedError()
+
+    
+    def make_media_leg(self, sid_affinity, type):
+        sid = sid_affinity or self.select_gateway_sid()
+        
+        if type == "echo":
+            return EchoMediaLeg(Weak(self), sid)
+        elif type == "player":
+            return PlayerMediaLeg(Weak(self), sid)
+        elif type == "net":
+            local_addr = self.allocate_media_address(sid)
+            return ProxiedMediaLeg(Weak(self), sid, local_addr)
+        else:
+            raise Exception("No such media leg type: %s!" % type)

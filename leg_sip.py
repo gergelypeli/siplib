@@ -3,7 +3,7 @@ from copy import deepcopy
 
 from async import WeakMethod
 from format import Status, make_virtual_response
-from mgc import ProxiedMediaLeg
+#from mgc import ProxiedMediaLeg
 from util import build_oid
 from leg import Leg, Session, Error
 
@@ -85,12 +85,13 @@ class SipLeg(Leg):
 
     def preprocess_outgoing_session(self, sdp):
         for i in range(len(self.media_legs), len(sdp.channels)):
-            mgc = self.call.switch.mgc
-            sid = self.call.select_gateway_sid(i)
-            local_addr = self.call.allocate_media_address(sid)  # TODO: deallocate them, too!
-            media_leg = ProxiedMediaLeg(mgc, sid, local_addr)
-            media_leg.set_oid(build_oid(self.oid, "media", len(self.media_legs)))
-            self.media_legs.append(media_leg)
+            #mgc = self.call.switch.mgc
+            #sid = self.call.select_gateway_sid(i)
+            #local_addr = self.call.allocate_media_address(sid)  # TODO: deallocate them, too!
+            #media_leg = ProxiedMediaLeg(mgc, sid, local_addr)
+            #media_leg.set_oid(build_oid(self.oid, "media", len(self.media_legs)))
+            #self.media_legs.append(media_leg)
+            self.make_media_leg(i, "net")
         
         for i in range(len(sdp.channels)):
             # No need to make a copy again here
