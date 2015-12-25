@@ -27,16 +27,14 @@ class Routing(Loggable):
     def add_leg(self, leg):
         li = self.leg_count
         self.leg_count += 1
-        leg_oid = self.call.generate_leg_oid()  # TODO: let the leg name itself, like dialout
 
         if not self.legs:
-            self.set_oid(build_oid(leg_oid, "routing"))
+            self.set_oid(build_oid(leg.oid, "routing"))
 
         self.legs[li] = leg
         self.queued_actions[li] = []
         
         leg.set_report(WeakMethod(self.process, li).bind_front())
-        leg.set_oid(leg_oid)
         leg.set_call(self.call)
         
         leg.start()
@@ -59,30 +57,23 @@ class Routing(Loggable):
 
 
     def unqueue(self, li):
+        if 0 in self.legs:
+            raise Exception("Unqueueing actions before anchoring!")
+            
         self.logger.debug("Unqueueing %d actions from leg %s." % (len(self.queued_actions[li]), li))
         for action in self.queued_actions[li]:
-            self.respond(action)
+            # Report it via the Call
+            self.legs[li].report(action)
 
         
-    def respond(self, action):
-        self.logger.debug("Responding %s to incoming leg." % action["type"])
-        
-        if 0 in self.legs:
-            # Pre-anchoring - do it directly
-            self.legs[0].do(action)
-        else:
-            # Post-anchoring - ask the Call
-            self.report(dict(type="forward", action=action))
-
-
     def reject(self, status):
         self.logger.warning("Rejecting with status %s" % (status,))
-        self.respond(dict(type="reject", status=status))
+        self.legs[0].do(dict(type="reject", status=status))
             
             
     def ringback(self):
         self.logger.debug("Making artificial ringback.")
-        self.respond(dict(type="ring"))
+        self.legs[0].do(dict(type="ring"))
 
         
     def cancel(self, status=None):
@@ -113,7 +104,7 @@ class Routing(Loggable):
     def dial(self, action):
         uri = action["ctx"]["uri"]
         self.logger.debug("Dialing out to: %s" % (uri,))
-        leg = self.call.switch.make_outgoing_leg(uri)
+        leg = self.call.make_outgoing_leg(uri)
         self.add_leg(leg)
         leg.do(action)
 
@@ -252,8 +243,15 @@ class Call(Loggable):
     def generate_leg_oid(self):
         leg_oid = build_oid(self.oid, "leg", self.leg_count)
         self.leg_count += 1
-
+        
         return leg_oid
+
+
+    def make_outgoing_leg(self, uri):
+        leg = self.switch.make_outgoing_leg(uri)
+        leg.set_oid(self.generate_leg_oid())
+
+        return leg
         
         
     def finish(self):
@@ -265,36 +263,33 @@ class Call(Loggable):
         
         
     def start_routing(self, incoming_leg):
+        incoming_leg.set_oid(self.generate_leg_oid())
+        
         self.routing = self.make_routing()  # just to be sure it's stored
-        self.routing.set_report(WeakMethod(self.routed))
+        self.routing.set_report(WeakMethod(self.reported))
         self.routing.add_leg(incoming_leg)
         
         
-    def routed(self, action):
+    def reported(self, action):
         type = action["type"]
         
         if type == "finish":
             self.routing = None
             
             if self.legs:
-                self.logger.debug("Routing finished")
+                self.logger.debug("Routing finished after anchoring.")
             else:
                 self.logger.debug("Oops, routing finished without success!")
                 self.finish()
                 # TODO
         elif type == "anchor":
-            self.logger.debug("Yay, anchored.")
             self.legs = action["legs"]
+            self.logger.debug("Yay, anchored %d legs." % len(self.legs))
 
-            # TODO: let the Routing connect them to each other?
             for i, leg in enumerate(self.legs):
-                leg.set_report(WeakMethod(self.process, i).bind_front())
+                leg.set_report(WeakMethod(self.forward, i).bind_front())
                 
             self.media_channels = []
-            #self.refresh_media()
-        elif type == "forward":
-            # Post-anchoring forwarded leg actions only come from our leg 1
-            self.process(1, action["action"])
         else:
             self.logger.debug("Unknown routing event %s!" % type)
 
@@ -345,13 +340,10 @@ class Call(Loggable):
             c.set_legs([ left_media_legs[i], right_media_legs[i] ])
         
         
-    def process(self, li, action):
+    def forward(self, li, action):
         type = action["type"]
         
         if type == "finish":
-            # TODO: do something if a leg is just screwed up, and another is
-            # still up, thinking that everything is OK!
-            
             self.logger.debug("Bridged leg %d finished." % li)
             self.legs[li] = None
             
@@ -368,11 +360,10 @@ class Call(Loggable):
                         if mc:
                             mc.delete(WeakMethod(self.media_deleted, i))
                 else:
-                    self.logger.debug("Call is finished.")
-                    self.finish()
+                    self.media_deleted(None)
         else:
             lj = 1 - li
-            self.logger.debug("Bridging %s from leg %d to %d." % (type, li, lj))
+            self.logger.debug("Forwarding %s from leg %d to %d." % (type, li, lj))
             self.legs[lj].do(action)
             
             if action.get("answer"):
@@ -381,7 +372,8 @@ class Call(Loggable):
 
 
     def media_deleted(self, li):
-        self.media_channels[li] = None
+        if li is not None:
+            self.media_channels[li] = None
         
         if not any(self.media_channels):
             self.logger.debug("Call is finished.")

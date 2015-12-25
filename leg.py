@@ -1,4 +1,4 @@
-from async import WeakMethod, WeakGeneratorMethod
+from async import WeakMethod, WeakGeneratorMethod, Weak
 from planner import Planned
 from util import build_oid, Loggable
 
@@ -211,10 +211,13 @@ class DialInLeg(Leg):
         
         
     def do(self, action):
-        self.dial_out_leg.process(action)
+        self.dial_out_leg.bridge(action)
+
+        if action["type"] in ("hangup", "reject"):
+            self.report(dict(type="finish"))
         
         
-    def process(self, action):
+    def bridge(self, action):
         self.report(action)
         
 
@@ -223,31 +226,31 @@ class DialOutLeg(Leg):
         Leg.__init__(self)
 
         dial_in_leg = DialInLeg(Weak(self))
+        dial_in_leg.set_oid(self.call.generate_leg_oid())
         self.dial_in_leg = Weak(dial_in_leg)
 
         self.routing = self.call.make_routing()
-        self.routing.set_report(WeakMethod(self.routed))
+        self.routing.set_report(WeakMethod(self.reported))
         self.routing.add_leg(dial_in_leg)
+        
+        self.legs = None
 
 
     def do(self, action):
-        self.dial_in_leg.process(action)
-
-        if action["type"] in ("accept", "reject"):
-            self.report(dict(type="finish"))
+        self.dial_in_leg.bridge(action)
         
         
-    def process(self, action):
+    def bridge(self, action):
         self.report(action)
         
         
-    def routed(self, action):
+    def reported(self, action):
         type = action["type"]
         
         if type == "finish":
             self.routing = None
             
-            if self.further_legs:
+            if self.legs:
                 self.logger.debug("Dialout routing finished")
             else:
                 self.logger.debug("Oops, dialout routing finished without success!")
@@ -255,17 +258,33 @@ class DialOutLeg(Leg):
                 # TODO
         elif type == "anchor":
             self.logger.debug("Yay, dialout anchored.")
-            self.further_legs = action["legs"]
+            self.legs = action["legs"]
 
             for i, leg in enumerate(self.legs):
-                leg.set_report(None)  # FIXME: what to do here?
-        elif type == "forward":
-            # Post-anchoring forwarded leg actions only come from our leg 1
-            # FIXME: this is awkward, make the Routing forward postanchoring
-            # actions, and make the legs notify the call after receiving an answer?
-            self.process(1, action["action"])
+                leg.set_report(WeakMethod(self.forward, i).bind_front())  # FIXME: what to do here?
         else:
             self.logger.debug("Unknown dialout routing event %s!" % type)
+
+
+    def forward(self, li, action):
+        type = action["type"]
+        
+        if type == "finish":
+            self.logger.debug("Bridged leg %d finished." % li)
+            self.legs[li] = None
+            
+            if action.get("error"):
+                self.logger.warning("Leg screwed, tearing down others!")
+                for leg in self.legs:
+                    if leg:
+                        leg.do(dict(type="hangup"))  # TODO: abort? It may not be accepted yet
+            
+            if not any(self.legs):
+                self.finish()
+        else:
+            lj = 1 - li
+            self.logger.debug("Forwarding %s from leg %d to %d." % (type, li, lj))
+            self.legs[lj].do(action)
 
 
 def create_uninvited_leg(dialog_manager, invite_params):
