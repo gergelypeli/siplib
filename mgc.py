@@ -7,7 +7,6 @@ from util import vacuum, build_oid, Loggable
 
         
 class MediaLeg(Loggable):
-    # TODO: call, mi, type; minden mast a MediaLeg intezzen!
     def __init__(self, mgc, sid, type):
         Loggable.__init__(self)
         

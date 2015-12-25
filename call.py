@@ -27,7 +27,7 @@ class Routing(Loggable):
     def add_leg(self, leg):
         li = self.leg_count
         self.leg_count += 1
-        leg_oid = self.call.generate_leg_oid()
+        leg_oid = self.call.generate_leg_oid()  # TODO: let the leg name itself, like dialout
 
         if not self.legs:
             self.set_oid(build_oid(leg_oid, "routing"))
@@ -359,7 +359,7 @@ class Call(Loggable):
                 self.logger.warning("Leg screwed, tearing down others!")
                 for leg in self.legs:
                     if leg:
-                        leg.do(dict(type="hangup"))
+                        leg.do(dict(type="hangup"))  # TODO: abort? It may not be accepted yet
             
             if not any(self.legs):
                 if any(self.media_channels):

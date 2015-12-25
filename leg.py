@@ -205,19 +205,40 @@ class PlannedLeg(Planned, Leg):
         raise NotImplementedError()
 
 
+class DialInLeg(Leg):
+    def __init__(self, dial_out_leg):
+        self.dial_out_leg = dial_out_leg
+        
+        
+    def do(self, action):
+        self.dial_out_leg.process(action)
+        
+        
+    def process(self, action):
+        self.report(action)
+        
+
 class DialOutLeg(Leg):
     def __init__(self):
         Leg.__init__(self)
-        # Hm. Lehet, hogy a Routing-nak nem is kene call, csak a Leg-nek?
-        # Elvegre a Leg meg a Call minden megbeszelhetne egymassal kozvetlenul.
-        # De ehhez a Routing.dial absztrakt kell, hogy legyen, es a Switch-ben
-        # definialni egy Routing alosztalyt.
-        
-        
-    def start_routing(self, incoming_leg):
+
+        dial_in_leg = DialInLeg(Weak(self))
+        self.dial_in_leg = Weak(dial_in_leg)
+
         self.routing = self.call.make_routing()
         self.routing.set_report(WeakMethod(self.routed))
-        self.routing.add_leg(incoming_leg)
+        self.routing.add_leg(dial_in_leg)
+
+
+    def do(self, action):
+        self.dial_in_leg.process(action)
+
+        if action["type"] in ("accept", "reject"):
+            self.report(dict(type="finish"))
+        
+        
+    def process(self, action):
+        self.report(action)
         
         
     def routed(self, action):
@@ -226,27 +247,25 @@ class DialOutLeg(Leg):
         if type == "finish":
             self.routing = None
             
-            if self.legs:
-                self.logger.debug("Routing finished")
+            if self.further_legs:
+                self.logger.debug("Dialout routing finished")
             else:
-                self.logger.debug("Oops, routing finished without success!")
+                self.logger.debug("Oops, dialout routing finished without success!")
                 self.finish()
                 # TODO
         elif type == "anchor":
-            self.logger.debug("Yay, anchored.")
-            self.legs = action["legs"]
+            self.logger.debug("Yay, dialout anchored.")
+            self.further_legs = action["legs"]
 
-            # TODO: let the Routing connect them to each other?
             for i, leg in enumerate(self.legs):
-                leg.set_report(WeakMethod(self.process, i).bind_front())
-                
-            self.media_channels = []
-            #self.refresh_media()
+                leg.set_report(None)  # FIXME: what to do here?
         elif type == "forward":
             # Post-anchoring forwarded leg actions only come from our leg 1
+            # FIXME: this is awkward, make the Routing forward postanchoring
+            # actions, and make the legs notify the call after receiving an answer?
             self.process(1, action["action"])
         else:
-            self.logger.debug("Unknown routing event %s!" % type)
+            self.logger.debug("Unknown dialout routing event %s!" % type)
 
 
 def create_uninvited_leg(dialog_manager, invite_params):
