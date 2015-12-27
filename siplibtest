@@ -150,6 +150,7 @@ class CallerLeg(PlannedLeg):
         yield from self.sleep(0)
         self.ctx["from"] = CALLER_NAMEADDR
         self.ctx["to"] = Nameaddr(CALLEE_NAMEADDR.uri)
+        # FIXME: how is this working without setting the uri, too?
         self.report(dict(type="dial", ctx=self.ctx, offer=CALLER_SDP))
 
         action = yield from self.wait_action("accept")
@@ -192,16 +193,16 @@ class TestController(Controller):
         
 class TestRouting(SimpleRouting):
     def route_ctx(self, ctx):
-        to_uri = ctx["to"].uri
-        self.logger.debug("Checking registered SIP contact: %s" % (to_uri,))
-        contacts = self.call.switch.record_manager.lookup_contacts(to_uri)
+        uri = ctx["uri"]
+        self.logger.debug("Checking registered SIP contact: %s" % (uri,))
+        contacts = self.call.switch.record_manager.lookup_contacts(uri)
             
         if len(contacts) == 1:
             uri, hop = contacts[0]
             ctx["uri"] = uri  # Only update the RURI for forwarding
             ctx["hop"] = hop
         else:
-            self.logger.debug("Not one registered SIP contact: %s" % (to_uri,))
+            self.logger.debug("Not one registered SIP contact: %s" % (uri,))
             raise Exception("Routing failed!")
 
 
@@ -291,18 +292,25 @@ class SwitchB(TestSwitch):
         def plan(self, action):
             self.logger.debug("Routing plan started.")
             yield from self.sleep(0)  # yield necessary in a generator
+            ctx = action["ctx"]
+            uri = ctx["uri"]
             
-            self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:unreachable"))))
-            self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:ringing"))))
-            self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:callee"))))
+            if uri.user == PHONE_NUMBER:
+                self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("dial:444@a.switch"))))
+            elif uri.user == "444":
+                self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:unreachable"))))
+                self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:ringing"))))
+                self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:callee"))))
             #li, action = yield from self.wait_action()
             #self.forward(li, action)
             
             
     class XRoutingClass(TestRouting):
         def route_ctx(self, ctx):
+            uri = ctx["uri"]
+            
             # For the phone call only
-            if ctx["to"].uri.user == PHONE_NUMBER:
+            if uri.user == PHONE_NUMBER:
                 self.logger.debug("Routing to CalleeLeg for %s" % PHONE_NUMBER)
                 ctx["uri"] = Uri.parse("builtin:callee")
                 #return CalleeLeg(self.call, self.switch.metapoll)

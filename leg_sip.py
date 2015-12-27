@@ -253,6 +253,7 @@ class SipLeg(Leg):
         if self.state == self.DOWN:
             if not is_response and method == "INVITE":
                 self.ctx.update({
+                    "uri": msg["uri"],
                     "from": msg["from"],
                     "to": msg["to"]
                 })

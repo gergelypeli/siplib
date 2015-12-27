@@ -192,7 +192,7 @@ class PlannedLeg(Planned, Leg):
 
     def plan_finished(self, error):
         if error:
-            self.logger.error("Leg plan screwed with %s!" % error)
+            self.logger.error("Leg plan aborted with: %s!" % error)
             
         self.finish(error)
         
@@ -222,12 +222,13 @@ class DialInLeg(Leg):
         
 
 class DialOutLeg(Leg):
-    def __init__(self):
-        Leg.__init__(self)
+    def set_call(self, call):
+        Leg.set_call(self, call)
 
         dial_in_leg = DialInLeg(Weak(self))
         dial_in_leg.set_oid(self.call.generate_leg_oid())
         self.dial_in_leg = Weak(dial_in_leg)
+        self.logger.debug("Dialing out to leg %s." % dial_in_leg.oid)
 
         self.routing = self.call.make_routing()
         self.routing.set_report(WeakMethod(self.reported))
@@ -285,6 +286,10 @@ class DialOutLeg(Leg):
             lj = 1 - li
             self.logger.debug("Forwarding %s from leg %d to %d." % (type, li, lj))
             self.legs[lj].do(action)
+
+
+    def get_further_legs(self):
+        return self.legs
 
 
 def create_uninvited_leg(dialog_manager, invite_params):

@@ -3,7 +3,7 @@ from format import Status
 from transport import UdpTransport
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
-from leg import create_uninvited_leg
+from leg import create_uninvited_leg, DialOutLeg
 from leg_sip import SipLeg
 from call import Call
 from authority import Authority
@@ -89,6 +89,9 @@ class Switch(Loggable):
         if uri.scheme == "sip":
             outgoing_dialog = Dialog(Weak(self.dialog_manager))
             outgoing_leg = SipLeg(outgoing_dialog)
+            return outgoing_leg
+        elif uri.scheme == "dial":
+            outgoing_leg = DialOutLeg()
             return outgoing_leg
         else:
             raise Exception("Unknown URI scheme '%s' for creating outgoing leg!" % uri.scheme)

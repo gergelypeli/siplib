@@ -147,7 +147,8 @@ class SimpleRouting(Routing):
             try:
                 ctx = action["ctx"].copy()
                 self.route_ctx(ctx)
-            except Exception:
+            except Exception as e:
+                self.logger.error("Simple routing error: %s" % e)
                 self.reject(Status(500))  # TODO
             else:
                 self.dial(dict(action, ctx=ctx))
