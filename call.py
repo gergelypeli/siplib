@@ -17,6 +17,7 @@ class Routing(Loggable):
         self.report = None
         self.leg_count = 0
         self.legs = {}
+        self.sent_ringback = False
         self.queued_actions = {}
     
     
@@ -56,26 +57,18 @@ class Routing(Loggable):
         self.queued_actions[li].append(action)
 
 
-    def unqueue(self, li):
-        if 0 in self.legs:
-            raise Exception("Unqueueing actions before anchoring!")
-            
-        self.logger.debug("Unqueueing %d actions from leg %s." % (len(self.queued_actions[li]), li))
-        for action in self.queued_actions[li]:
-            # Report it via the Call
-            self.legs[li].report(action)
-
-        
     def reject(self, status):
         self.logger.warning("Rejecting with status %s" % (status,))
         self.legs[0].do(dict(type="reject", status=status))
             
             
     def ringback(self):
-        self.logger.debug("Making artificial ringback.")
-        self.legs[0].do(dict(type="ring"))
+        if not self.sent_ringback:
+            self.sent_ringback = True
+            self.logger.debug("Sending artificial ringback.")
+            self.legs[0].do(dict(type="ring"))
 
-        
+
     def cancel(self, status=None):
         for li, leg in list(self.legs.items()):
             self.logger.debug("Cancelling leg %s" % li)
@@ -93,10 +86,14 @@ class Routing(Loggable):
         
         these_legs = [ self.legs[0], self.legs[li] ]
         further_legs = self.legs[li].get_further_legs()
-        self.report(dict(type="anchor", legs=these_legs + further_legs))
+        queued_actions = self.queued_actions[li]
+        self.report(dict(
+            type="anchor",
+            legs=these_legs + further_legs,
+            queued_actions=queued_actions
+        ))
 
         self.remove_leg(0)
-        self.unqueue(li)
         self.remove_leg(li)
         self.cancel()  # the remaining legs
         
@@ -126,7 +123,10 @@ class Routing(Loggable):
             if type == "reject":
                 self.reject(action["status"])
             elif type == "ring":
-                self.queue(li, action)
+                if action.get("offer") or action.get("answer"):
+                    action["type"] = "session"
+                    self.queue(li, action)
+                    
                 self.ringback()
             elif type == "session":
                 self.queue(li, action)
@@ -291,6 +291,9 @@ class Call(Loggable):
                 leg.set_report(WeakMethod(self.forward, i).bind_front())
                 
             self.media_channels = []
+            
+            for queued_action in action["queued_actions"]:
+                self.forward(1, queued_action)
         else:
             self.logger.debug("Unknown routing event %s!" % type)
 
@@ -299,19 +302,6 @@ class Call(Loggable):
         # TODO
         sid_affinity = None
         return self.switch.mgc.make_media_leg(sid_affinity, type)
-        
-        
-    #def select_gateway_sid(self, channel_index):
-    #    # TODO: check existing channels
-    #    return self.switch.mgc.select_gateway_sid()
-        
-        
-    #def allocate_media_address(self, sid):
-    #    return self.switch.mgc.allocate_media_address(sid)
-        
-        
-    #def deallocate_media_address(self, sid, addr):  # TODO: may not be necessary
-    #    self.switch.mgc.deallocate_media_address(sid, addr)
         
         
     def refresh_media(self):
@@ -363,7 +353,7 @@ class Call(Loggable):
                 else:
                     self.media_deleted(None)
         else:
-            lj = 1 - li
+            lj = li + 1 - 2 * (li % 2)
             self.logger.debug("Forwarding %s from leg %d to %d." % (type, li, lj))
             self.legs[lj].do(action)
             

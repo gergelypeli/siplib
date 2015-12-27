@@ -263,6 +263,9 @@ class DialOutLeg(Leg):
 
             for i, leg in enumerate(self.legs):
                 leg.set_report(WeakMethod(self.forward, i).bind_front())  # FIXME: what to do here?
+
+            for queued_action in action["queued_actions"]:
+                self.forward(1, queued_action)
         else:
             self.logger.debug("Unknown dialout routing event %s!" % type)
 
@@ -283,7 +286,7 @@ class DialOutLeg(Leg):
             if not any(self.legs):
                 self.finish()
         else:
-            lj = 1 - li
+            lj = li + 1 - 2 * (li % 2)
             self.logger.debug("Forwarding %s from leg %d to %d." % (type, li, lj))
             self.legs[lj].do(action)
 
