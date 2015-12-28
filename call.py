@@ -69,16 +69,12 @@ class Routing(Loggable):
             self.legs[0].do(dict(type="ring"))
 
 
-    def cancel(self, status=None):
+    def cancel(self):
         for li, leg in list(self.legs.items()):
             self.logger.debug("Cancelling leg %s" % li)
             
             if li > 0:
                 leg.do(dict(type="cancel"))
-            else:
-                # This may not happen, if we cancel after an anchoring,
-                # then the incoming leg already got a positive response.
-                self.reject(status or Status(487))
 
         
     def anchor(self, li):
@@ -95,7 +91,6 @@ class Routing(Loggable):
 
         self.remove_leg(0)
         self.remove_leg(li)
-        self.cancel()  # the remaining legs
         
 
     def dial(self, action):
@@ -117,6 +112,7 @@ class Routing(Loggable):
                 raise Exception("Should have handled dial in a subclass!")
             elif type == "cancel":
                 self.cancel()
+                self.reject(Status(487))
             else:
                 raise Exception("Invalid action from incoming leg: %s" % type)
         else:
@@ -133,6 +129,7 @@ class Routing(Loggable):
             elif type == "accept":
                 self.queue(li, action)
                 self.anchor(li)
+                self.cancel()  # the remaining legs
             else:
                 raise Exception("Invalid action from outgoing leg: %s" % type)
 
@@ -209,7 +206,8 @@ class PlannedRouting(Planned, Routing):
             
         if status:
             # TODO: must handle double events for this to work well!
-            self.cancel(status)
+            self.cancel()
+            self.reject(status)
             
         self.may_finish()
         
