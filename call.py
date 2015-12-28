@@ -69,12 +69,12 @@ class Routing(Loggable):
             self.legs[0].do(dict(type="ring"))
 
 
-    def cancel(self):
+    def hangup_all_outgoing(self):
         for li, leg in list(self.legs.items()):
-            self.logger.debug("Cancelling leg %s" % li)
+            self.logger.debug("Hanging up leg %s" % li)
             
             if li > 0:
-                leg.do(dict(type="cancel"))
+                leg.do(dict(type="hangup"))
 
         
     def anchor(self, li):
@@ -110,9 +110,8 @@ class Routing(Loggable):
         elif li == 0:
             if type == "dial":
                 raise Exception("Should have handled dial in a subclass!")
-            elif type == "cancel":
-                self.cancel()
-                self.reject(Status(487))
+            elif type == "hangup":
+                self.hangup_all_outgoing()
             else:
                 raise Exception("Invalid action from incoming leg: %s" % type)
         else:
@@ -129,7 +128,7 @@ class Routing(Loggable):
             elif type == "accept":
                 self.queue(li, action)
                 self.anchor(li)
-                self.cancel()  # the remaining legs
+                self.hangup_all_outgoing()  # the remaining legs
             else:
                 raise Exception("Invalid action from outgoing leg: %s" % type)
 
@@ -206,7 +205,7 @@ class PlannedRouting(Planned, Routing):
             
         if status:
             # TODO: must handle double events for this to work well!
-            self.cancel()
+            self.hangup_all_outgoing()
             self.reject(status)
             
         self.may_finish()
@@ -280,7 +279,7 @@ class Routable:  # Loggable
                 
                 for leg in self.legs:
                     if leg:
-                        leg.do(dict(type="hangup"))  # TODO: abort? It may not be accepted yet
+                        leg.do(dict(type="hangup"))
         else:
             lj = li + 1 - 2 * (li % 2)
             self.logger.debug("Forwarding %s from leg %d to %d." % (type, li, lj))

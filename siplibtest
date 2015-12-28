@@ -80,7 +80,7 @@ class UnreachableLeg(PlannedLeg):
         yield from self.wait_action("dial")
         self.logger.debug("Got dial, but not answering anything.")
 
-        yield from self.wait_action("cancel")
+        yield from self.wait_action("hangup")
         self.logger.debug("And now the caller hung up.")
 
 
@@ -104,7 +104,7 @@ class RingingLeg(PlannedLeg):
 
         self.report(dict(type="ring"))
 
-        yield from self.wait_action("cancel")
+        yield from self.wait_action("hangup")
         self.logger.debug("And now the caller hung up.")
 
 

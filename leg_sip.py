@@ -174,7 +174,7 @@ class SipLeg(Leg):
                 self.logger.debug("Ignoring %s, already down." % type)
                 return
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
-            if type == "cancel":
+            if type == "hangup":
                 self.send_request(dict(method="CANCEL"), self.invite_state.request)
                 self.change_state(self.DISCONNECTING_OUT)
                 return
@@ -268,13 +268,12 @@ class SipLeg(Leg):
                 return
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
             if not is_response and method == "CANCEL":
-                #self.send_response(dict(status=Status(487, "Request Terminated")), self.invite_state.request)
                 self.send_response(dict(status=Status(200, "OK")), msg)
+                self.send_response(dict(status=Status(487, "Request Terminated")), self.invite_state.request)
                 
-                #self.invite_state = None
-                #self.change_state(self.DOWN)
-                self.report(dict(type="cancel"))  # Expect a reject from now on
-                #self.finish_media()
+                self.change_state(self.DOWN)
+                self.report(dict(type="hangup"))
+                self.finish_media()
                 return
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
             if is_response and method == "INVITE":
