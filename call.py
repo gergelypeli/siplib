@@ -227,17 +227,75 @@ class PlannedRouting(Planned, Routing):
 
     def plan(self, action):
         raise NotImplementedError()
+
+
+class Routable:  # Loggable
+    def __init__(self):
+        self.routing = None
+        self.legs = []
+
+
+    def make_routing(self):
+        raise NotImplementedError()
+
+
+    def generate_leg_oid(self):
+        raise NotImplementedError()
+
+
+    def start_routing(self, incoming_leg):
+        incoming_leg.set_oid(self.generate_leg_oid())
         
+        self.routing = self.make_routing()  # just to be sure it's stored
+        self.routing.set_report(WeakMethod(self.reported))
+        self.routing.add_leg(incoming_leg)
 
 
-class Call(Loggable):
+    def reported(self, action):
+        type = action["type"]
+        
+        if type == "finish":
+            self.routing = None
+            self.logger.debug("Routing finished after anchoring %d legs." % len(self.legs))
+        elif type == "anchor":
+            self.legs = action["legs"]
+            self.logger.debug("Routing anchored %d legs." % len(self.legs))
+
+            for i, leg in enumerate(self.legs):
+                leg.set_report(WeakMethod(self.forward, i).bind_front())
+                
+            for queued_action in action["queued_actions"]:
+                self.forward(1, queued_action)
+        else:
+            self.logger.debug("Unknown routing event %s!" % type)
+
+
+    def forward(self, li, action):
+        type = action["type"]
+        
+        if type == "finish":
+            self.logger.debug("Anchored leg %d finished." % li)
+            self.legs[li] = None
+            
+            if action.get("error"):
+                self.logger.warning("Leg aborted with: %s" % action["error"])
+                
+                for leg in self.legs:
+                    if leg:
+                        leg.do(dict(type="hangup"))  # TODO: abort? It may not be accepted yet
+        else:
+            lj = li + 1 - 2 * (li % 2)
+            self.logger.debug("Forwarding %s from leg %d to %d." % (type, li, lj))
+            self.legs[lj].do(action)
+
+
+class Call(Loggable, Routable):
     def __init__(self, switch):
         Loggable.__init__(self)
+        Routable.__init__(self)
 
         self.switch = switch
-        self.legs = None
-        self.media_channels = None
-        self.routing = None
+        self.media_channels = []
         self.leg_count = 0
 
 
@@ -255,7 +313,14 @@ class Call(Loggable):
         return leg
         
         
-    def finish(self):
+    def may_finish(self):
+        if any(self.legs):
+            return
+            
+        if any(self.media_channels):
+            return
+            
+        self.logger.debug("Call is finished.")
         self.switch.finish_call(self.oid)
         
         
@@ -263,39 +328,14 @@ class Call(Loggable):
         return Routing(Weak(self))
         
         
-    def start_routing(self, incoming_leg):
-        incoming_leg.set_oid(self.generate_leg_oid())
-        
-        self.routing = self.make_routing()  # just to be sure it's stored
-        self.routing.set_report(WeakMethod(self.reported))
-        self.routing.add_leg(incoming_leg)
-        
-        
     def reported(self, action):
+        Routable.reported(self, action)
+        
         type = action["type"]
         
         if type == "finish":
-            self.routing = None
-            
-            if self.legs:
-                self.logger.debug("Routing finished after anchoring.")
-            else:
-                self.logger.debug("Oops, routing finished without success!")
-                self.finish()
-                # TODO
-        elif type == "anchor":
-            self.legs = action["legs"]
-            self.logger.debug("Yay, anchored %d legs." % len(self.legs))
-
-            for i, leg in enumerate(self.legs):
-                leg.set_report(WeakMethod(self.forward, i).bind_front())
-                
-            self.media_channels = []
-            
-            for queued_action in action["queued_actions"]:
-                self.forward(1, queued_action)
-        else:
-            self.logger.debug("Unknown routing event %s!" % type)
+            # Okay to stay if legs are present
+            self.may_finish()
 
 
     def make_media_leg(self, channel_index, type):
@@ -332,40 +372,27 @@ class Call(Loggable):
         
         
     def forward(self, li, action):
+        Routable.forward(self, li, action)
+        
         type = action["type"]
         
         if type == "finish":
-            self.logger.debug("Bridged leg %d finished." % li)
-            self.legs[li] = None
-            
-            if action.get("error"):
-                self.logger.warning("Leg screwed, tearing down others!")
-                for leg in self.legs:
-                    if leg:
-                        leg.do(dict(type="hangup"))  # TODO: abort? It may not be accepted yet
-            
+            # Clean up after the last leg is gone
             if not any(self.legs):
-                if any(self.media_channels):
-                    self.logger.debug("Deleting media channels.")
-                    for i, mc in enumerate(self.media_channels):
-                        if mc:
-                            mc.delete(WeakMethod(self.media_deleted, i))
-                else:
-                    self.media_deleted(None)
+                self.finish_media()
         else:
-            lj = li + 1 - 2 * (li % 2)
-            self.logger.debug("Forwarding %s from leg %d to %d." % (type, li, lj))
-            self.legs[lj].do(action)
-            
             if action.get("answer"):
                 self.refresh_media()
-            
 
 
-    def media_deleted(self, li):
+    def finish_media(self, li=None):
         if li is not None:
+            # Completed
             self.media_channels[li] = None
-        
-        if not any(self.media_channels):
-            self.logger.debug("Call is finished.")
-            self.finish()
+        else:
+            # Initiated
+            for i, mc in enumerate(self.media_channels):
+                self.logger.debug("Deleting media channel %ds." % i)
+                mc.delete(WeakMethod(self.finish_media, li=i))
+            
+        self.may_finish()

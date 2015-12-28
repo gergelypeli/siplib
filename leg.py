@@ -1,6 +1,7 @@
 from async import WeakMethod, WeakGeneratorMethod, Weak
 from planner import Planned
 from util import build_oid, Loggable
+from call import Routable
 
 
 class Error(Exception): pass
@@ -31,15 +32,12 @@ class Leg(Loggable):
         raise NotImplementedError()
 
 
-    def finish(self, error=None):
+    def may_finish(self, error=None):
         if any(self.media_legs):
-            self.logger.debug("Deleting media legs.")
-            for i, ml in enumerate(self.media_legs):
-                if ml:
-                    ml.delete(WeakMethod(self.media_deleted, i, error))
-        else:
-            self.logger.debug("Leg is finished.")
-            self.report(dict(type="finish", error=error))
+            return
+        
+        self.logger.debug("Leg is finished.")
+        self.report(dict(type="finish", error=error))
 
 
     def make_media_leg(self, channel_index, type):
@@ -56,18 +54,19 @@ class Leg(Loggable):
         return media_leg
 
 
-    def media_deleted(self, li, error):
-        self.media_legs[li] = None
+    def finish_media(self, li=None, error=None):
+        if li is not None:
+            # Completed
+            self.media_legs[li] = None
+        else:
+            # Initiated
+            for i, ml in enumerate(self.media_legs):
+                self.logger.debug("Deleting media leg %s." % i)
+                ml.delete(WeakMethod(self.finish_media, i, error))  # lame error handling
         
-        if not any(self.media_legs):
-            self.logger.debug("Leg is finished.")
-            self.report(dict(type="finish", error=error))
+        self.may_finish(error)
 
     
-    #def refresh_media(self):
-    #    self.call.refresh_media()
-        
-        
     def get_further_legs(self):  # for the sake of internal legs
         return []
         
@@ -193,8 +192,9 @@ class PlannedLeg(Planned, Leg):
     def plan_finished(self, error):
         if error:
             self.logger.error("Leg plan aborted with: %s!" % error)
-            
-        self.finish(error)
+        
+        # Unconditional cleanup
+        self.finish_media(error=error)
         
 
     def do(self, action):
@@ -221,21 +221,29 @@ class DialInLeg(Leg):
         self.report(action)
         
 
-class DialOutLeg(Leg):
+class DialOutLeg(Leg, Routable):
+    def __init__(self):
+        Leg.__init__(self)
+        Routable.__init__(self)
+
+
+    def make_routing(self):
+        return self.call.make_routing()
+
+
+    def generate_leg_oid(self):
+        return self.call.generate_leg_oid()
+
+
     def set_call(self, call):
         Leg.set_call(self, call)
+        # Now we can start the Routable stuff
 
         dial_in_leg = DialInLeg(Weak(self))
-        dial_in_leg.set_oid(self.call.generate_leg_oid())
         self.dial_in_leg = Weak(dial_in_leg)
-        self.logger.debug("Dialing out to leg %s." % dial_in_leg.oid)
-
-        self.routing = self.call.make_routing()
-        self.routing.set_report(WeakMethod(self.reported))
-        self.routing.add_leg(dial_in_leg)
+        self.start_routing(dial_in_leg)
+        self.logger.debug("Dialed out to leg %s." % dial_in_leg.oid)
         
-        self.legs = None
-
 
     def do(self, action):
         self.dial_in_leg.bridge(action)
@@ -243,52 +251,33 @@ class DialOutLeg(Leg):
         
     def bridge(self, action):
         self.report(action)
+    
+    
+    def may_finish(self, error=None):
+        if any(self.legs):
+            return
+            
+        Leg.may_finish(error)
         
         
     def reported(self, action):
+        Routable.reported(self, action)
+        
         type = action["type"]
         
         if type == "finish":
-            self.routing = None
-            
-            if self.legs:
-                self.logger.debug("Dialout routing finished")
-            else:
-                self.logger.debug("Oops, dialout routing finished without success!")
-                self.finish()
-                # TODO
-        elif type == "anchor":
-            self.logger.debug("Yay, dialout anchored.")
-            self.legs = action["legs"]
-
-            for i, leg in enumerate(self.legs):
-                leg.set_report(WeakMethod(self.forward, i).bind_front())  # FIXME: what to do here?
-
-            for queued_action in action["queued_actions"]:
-                self.forward(1, queued_action)
-        else:
-            self.logger.debug("Unknown dialout routing event %s!" % type)
+            # Clean up on routing failure
+            self.may_finish()
 
 
     def forward(self, li, action):
+        Routable.forward(self, li, action)
+        
         type = action["type"]
         
         if type == "finish":
-            self.logger.debug("Bridged leg %d finished." % li)
-            self.legs[li] = None
-            
-            if action.get("error"):
-                self.logger.warning("Leg screwed, tearing down others!")
-                for leg in self.legs:
-                    if leg:
-                        leg.do(dict(type="hangup"))  # TODO: abort? It may not be accepted yet
-            
             if not any(self.legs):
-                self.finish()
-        else:
-            lj = li + 1 - 2 * (li % 2)
-            self.logger.debug("Forwarding %s from leg %d to %d." % (type, li, lj))
-            self.legs[lj].do(action)
+                self.finish_media()
 
 
     def get_further_legs(self):

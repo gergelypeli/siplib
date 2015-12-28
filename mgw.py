@@ -213,6 +213,8 @@ class NetLeg(Leg):
         if self.socket:
             self.metapoll.register_reader(self.socket, None)
             
+        super().__del__()
+            
         
     def modify(self, params):
         super().modify(params)

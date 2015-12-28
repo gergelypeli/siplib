@@ -230,7 +230,7 @@ class SipLeg(Leg):
                 invite_response = dict(status=status)
                 self.send_response(invite_response, self.invite_state.request)
                 self.change_state(self.DOWN)  # The transactions will catch the ACK
-                self.finish()
+                self.finish_media()
                 return
         elif self.state == self.UP:
             if type == "hangup":
@@ -274,7 +274,7 @@ class SipLeg(Leg):
                 #self.invite_state = None
                 #self.change_state(self.DOWN)
                 self.report(dict(type="cancel"))  # Expect a reject from now on
-                #self.finish()
+                #self.finish_media()
                 return
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
             if is_response and method == "INVITE":
@@ -307,7 +307,7 @@ class SipLeg(Leg):
                     self.change_state(self.DOWN)
                     self.report(dict(type="reject", status=status))
                     # ACKed by tr
-                    self.finish()
+                    self.finish_media()
                     return
                 elif status.code >= 200:
                     if self.invite_state.had_offer_in_request:
@@ -354,18 +354,18 @@ class SipLeg(Leg):
                 self.send_response(dict(status=Status(200, "OK")), msg)
                 self.change_state(self.DOWN)
                 self.report(dict(type="hangup"))
-                self.finish()
+                self.finish_media()
                 return
         elif self.state == self.DISCONNECTING_OUT:
             if is_response and method == "BYE":
                 self.change_state(self.DOWN)
-                self.finish()
+                self.finish_media()
                 return
             elif is_response and method == "INVITE":
                 self.logger.debug("Got cancelled invite response: %s" % (status,))
                 # This was ACKed by the transaction layer
                 self.change_state(self.DOWN)
-                self.finish()
+                self.finish_media()
                 return
             elif is_response and method == "CANCEL":
                 self.logger.debug("Got cancel response: %s" % (status,))
