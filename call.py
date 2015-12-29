@@ -94,6 +94,9 @@ class Routing(Loggable):
         
 
     def dial(self, action):
+        if action["type"] != "dial":
+            raise Exception("Dial action is not a dial: %s" % action["type"])
+            
         uri = action["ctx"]["uri"]
         self.logger.debug("Dialing out to: %s" % (uri,))
         leg = self.call.make_outgoing_leg(uri)
@@ -134,20 +137,22 @@ class Routing(Loggable):
 
 
 class SimpleRouting(Routing):
-    def route_ctx(self, ctx):
+    def route(self, action):
         raise NotImplementedError()
 
 
     def process(self, li, action):
         if action["type"] == "dial":
             try:
-                ctx = action["ctx"].copy()
-                self.route_ctx(ctx)
+                self.route(action)
+            except SipError as e:
+                self.logger.error("Simple routing SIP error: %s" % e.status)
+                self.reject(e.status)
             except Exception as e:
-                self.logger.error("Simple routing error: %s" % e)
-                self.reject(Status(500))  # TODO
+                self.logger.error("Simple routing internal error: %s" % e)
+                self.reject(Status(500))
             else:
-                self.dial(dict(action, ctx=ctx))
+                self.dial(action)
         else:
             Routing.process(self, li, action)
 

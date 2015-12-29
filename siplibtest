@@ -5,7 +5,7 @@ import logging
 import logging.config
 from async import Metapoll, WeakMethod, Weak
 
-from format import Addr, Uri, Nameaddr, Status
+from format import Addr, Uri, Nameaddr, Status, SipError
 from transport import UdpTransport
 from transactions import TransactionManager
 #from dialog import Dialog, DialogManager
@@ -192,7 +192,8 @@ class TestController(Controller):
         
         
 class TestRouting(SimpleRouting):
-    def route_ctx(self, ctx):
+    def route(self, action):
+        ctx = action["ctx"]
         uri = ctx["uri"]
         self.logger.debug("Checking registered SIP contact: %s" % (uri,))
         contacts = self.call.switch.record_manager.lookup_contacts(uri)
@@ -202,8 +203,8 @@ class TestRouting(SimpleRouting):
             ctx["uri"] = uri  # Only update the RURI for forwarding
             ctx["hop"] = hop
         else:
-            self.logger.debug("Not one registered SIP contact: %s" % (uri,))
-            raise Exception("Routing failed!")
+            self.logger.debug("Has %d registered SIP contacts: %s" % (len(contacts), uri,))
+            raise SipError(Status(404))
 
 
 class TestSwitch(Switch):
@@ -306,7 +307,8 @@ class SwitchB(TestSwitch):
             
             
     class XRoutingClass(TestRouting):
-        def route_ctx(self, ctx):
+        def route(self, action):
+            ctx = action["ctx"]
             uri = ctx["uri"]
             
             # For the phone call only
@@ -319,7 +321,7 @@ class SwitchB(TestSwitch):
                 #self.logger.debug("Returning RejectingLeg for %s" % PHONE_NUMBER)
                 #return RejectingLeg(self.call, self.switch.metapoll)
             else:
-                TestRouting.route_call(self, ctx)
+                TestRouting.route(self, action)
 
 
     def __init__(self, metapoll, *args):
