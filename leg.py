@@ -207,6 +207,8 @@ class PlannedLeg(Planned, Leg):
 
 class DialInLeg(Leg):
     def __init__(self, dial_out_leg):
+        Leg.__init__(self)
+        
         self.dial_out_leg = dial_out_leg
         
         
@@ -214,17 +216,22 @@ class DialInLeg(Leg):
         self.dial_out_leg.bridge(action)
 
         if action["type"] in ("hangup", "reject"):
-            self.report(dict(type="finish"))
+            self.may_finish()
         
         
     def bridge(self, action):
         self.report(action)
+
+        if action["type"] in ("hangup",):
+            self.may_finish()
         
 
 class DialOutLeg(Leg, Routable):
     def __init__(self):
         Leg.__init__(self)
         Routable.__init__(self)
+        
+        self.is_anchored = False
 
 
     def make_routing(self):
@@ -248,40 +255,61 @@ class DialOutLeg(Leg, Routable):
     def do(self, action):
         self.dial_in_leg.bridge(action)
         
+        if action["type"] in ("hangup",):
+            self.may_finish()
+        
         
     def bridge(self, action):
         self.report(action)
-    
+
+        if action["type"] in ("hangup", "reject"):
+            self.may_finish()
+
     
     def may_finish(self, error=None):
+        if self.routing:
+            return
+            
         if any(self.legs):
             return
             
-        Leg.may_finish(error)
+        Leg.may_finish(self, error)
         
         
     def reported(self, action):
+        # Used before the child routing is anchored
         Routable.reported(self, action)
         
         type = action["type"]
         
         if type == "finish":
             # Clean up on routing failure
-            self.may_finish()
+            # If we're anchored, then the legs may already be taken by the parent routing,
+            # so checking in may_finish would actually finish.
+            
+            if not self.is_anchored:
+                self.may_finish()
+        elif type == "anchor":
+            self.is_anchored = True
 
 
     def forward(self, li, action):
+        # Used since the child routing is anchored until the parent routing is anchored
         Routable.forward(self, li, action)
         
         type = action["type"]
         
         if type == "finish":
-            if not any(self.legs):
-                self.finish_media()
+            # Clean up after all legs finished (no media here)
+            self.may_finish()
 
 
     def get_further_legs(self):
-        return self.legs
+        # Don't hold the legs from the child routing once the parent routing took them
+        legs = self.legs
+        self.legs = []
+        
+        return legs
 
 
 def create_uninvited_leg(dialog_manager, invite_params):

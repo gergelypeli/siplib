@@ -275,7 +275,7 @@ class Routable:  # Loggable
             self.legs[li] = None
             
             if action.get("error"):
-                self.logger.warning("Leg aborted with: %s" % action["error"])
+                self.logger.error("Leg aborted with: %s" % action["error"])
                 
                 for leg in self.legs:
                     if leg:
