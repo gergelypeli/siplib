@@ -310,10 +310,3 @@ class DialOutLeg(Leg, Routable):
         self.legs = []
         
         return legs
-
-
-def create_uninvited_leg(dialog_manager, invite_params):
-    # TODO: real UninvitedLeg class
-    leg = Leg(dialog_manager, None, None, None)  # FIXME: this is seriously obsolete!
-    leg.dialog.send_request(dict(method="UNINVITE"), invite_params, leg.process)  # strong ref!
-    leg.state = leg.DIALING_OUT

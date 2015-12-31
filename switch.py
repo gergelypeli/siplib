@@ -3,7 +3,7 @@ from format import Status
 from transport import UdpTransport
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
-from leg import create_uninvited_leg, DialOutLeg
+from leg import DialOutLeg
 from leg_sip import SipLeg
 from call import Call
 from authority import Authority
@@ -200,9 +200,6 @@ class Switch(Loggable):
     def reception(self, params):
         #print("Got message from transport.")
         #print("Req params: %s" % req_params)
-        uninvite_params = self.transaction_manager.match_uninvited_response(params)
-        if uninvite_params:
-            create_uninvited_leg(uninvite_params)
     
         if self.transaction_manager.match_incoming_message(params):
             return

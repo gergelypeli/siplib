@@ -134,14 +134,30 @@ class Dialog(Loggable):
         self.fix_hop(params["hop"])
         
         self.dialog_manager.dialog_established(self)
-        
 
-    def uninvite(self, invite_params):
+
+    def setup_bastard(self, invite_params):
         self.local_nameaddr = invite_params["from"]
         self.remote_nameaddr = invite_params["to"]
         self.peer_contact = Nameaddr(invite_params["uri"])
         self.call_id = invite_params["call_id"]
         self.last_sent_cseq = invite_params["cseq"]
+
+
+    def bastard_reaction(self, invite_params, response_params):
+        status = response_params["status"]
+        
+        if status.code >= 200 and status.code < 300:
+            self.logger.warning("Initiating bastard reaction for status %s!" % status.code)
+            
+            bastard = Dialog(self.dialog_manager)
+            bastard.setup_bastard(invite_params)
+            bastard.setup_outgoing2(response_params)
+            
+            bastard.send_request(dict(method="ACK"), response_params)
+            bastard.send_request(dict(method="BYE"))
+        else:
+            self.logger.warning("Skipping bastard reaction for status %s!" % status.code)
 
 
     def make_sdp(self, params):
@@ -170,6 +186,7 @@ class Dialog(Loggable):
 
     def make_request(self, user_params, related_params=None):
         method = user_params["method"]
+        
         if method == "CANCEL":
             raise Error("CANCEL should be out of dialog!")
         elif method == "ACK":
@@ -283,7 +300,10 @@ class Dialog(Loggable):
             raise Error("Mismatching local tag!")
 
         if self.is_established() and to_tag != self.remote_nameaddr.params["tag"]:
-            raise Error("Mismatching remote tag!")
+            if related_request.method != "INVITE":
+                raise Error("Mismatching remote tag!")
+            else:
+                return self.bastard_reaction(related_request, params)
 
         if status.code < 300:
             # Only successful or early responses create a dialog
@@ -323,9 +343,7 @@ class Dialog(Loggable):
     def send_request(self, user_params, related_params=None):
         method = user_params["method"]
         
-        if method == "UNINVITE":
-            self.uninvite(related_params)
-        elif method == "CANCEL":
+        if method == "CANCEL":
             # CANCELs are cloned from the INVITE in the transaction layer
             params = user_params
             params["is_response"] = False

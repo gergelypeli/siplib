@@ -230,8 +230,8 @@ class AckClientTransaction(PlainClientTransaction):
 
 
 class Bastard(object):
-    def __init__(self, report_response):
-        self.report_response = report_response
+    def __init__(self):
+        #self.report_response = report_response
         #self.statuses = set()
         self.ack = None
         
@@ -248,20 +248,6 @@ class InviteClientTransaction(PlainClientTransaction):
         return msg["to"].params.get("tag")
     
     
-    def set_report_response(self, report_response):
-        if self.report_response:
-            raise Error("Report response already set!")
-            
-        self.report_response = report_response
-        
-
-    def match_uninvited_response(self, response):
-        if self.bastards and self.rt(response) not in self.bastards:
-            return self.outgoing_msg.copy()
-        else:
-            return None
-        
-
     def create_and_send_ack(self, ack_branch, msg):
         if self.state != self.LINGERING:
             self.change_state(self.LINGERING)  # now we can expire
@@ -287,13 +273,8 @@ class InviteClientTransaction(PlainClientTransaction):
             if code > 100 and remote_tag:
                 if not him:
                     # New remote tag, create new bastard
-                    
-                    if not self.report_response:
-                        raise Error("No report_response when receiving INVITE response with new remote tag!")
-                
-                    him = Bastard(self.report_response)
+                    him = Bastard()
                     self.bastards[remote_tag] = him
-                    self.report_response = None
 
                 if code >= 300:
                     # final non-2xx responses are ACK-ed here in the same transaction (17.1.1.3)
@@ -306,7 +287,7 @@ class InviteClientTransaction(PlainClientTransaction):
                 # with different content, either check it fully, or drop this check!
                 if True:  # code not in him.statuses:
                     #him.statuses.add(code)
-                    him.report_response(response, self.outgoing_msg)
+                    self.report_response(response, self.outgoing_msg)
 
             if self.state != self.WAITING:
                 if code < 200:
@@ -434,15 +415,6 @@ class TransactionManager(Loggable):
             raise Error("WAT?")
 
 
-    def match_uninvited_response(self, msg):
-        if msg["is_response"] and msg["method"] == "INVITE":
-            tr = self.client_transactions.get(identify(msg))
-            if tr:
-                return tr.match_uninvited_response(msg)
-                
-        return None
-        
-
     def match_incoming_message(self, msg):
         #print("Match incoming:")
         #pprint(msg)
@@ -530,18 +502,7 @@ class TransactionManager(Loggable):
 
         method = msg["method"]
 
-        if method == "UNINVITE":
-            if not related_msg:
-                raise Error("Related INVITE is not given for UNINVITE!")
-                
-            invite_params = related_msg
-            invite_tr = self.client_transactions.get(identify(invite_params))
-            if not invite_tr:
-                raise Error("No transaction to UNINVITE!")
-            
-            invite_tr.set_report_response(report_response)
-            # Nothing to send here
-        elif method == "ACK":
+        if method == "ACK":
             # 2xx-ACK from Dialog
             if not related_msg:
                 raise Error("Related response is not given for ACK!")
