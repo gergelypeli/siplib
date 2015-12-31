@@ -145,6 +145,13 @@ class Dialog(Loggable):
 
 
     def bastard_reaction(self, invite_params, response_params):
+        # Multiple dialogs from a single INVITE request CAN'T be supported.
+        # Doing so would make every outgoing call implicitly forkable into an
+        # indefinite number of calls. That would allow a 2xx response to
+        # arrive during the lifetime of the INVITE client request, so non-2xx
+        # responses couldn't be reported until the transaction expires, that is
+        # some 30 seconds. HOW. FUCKED. UP. IS. THAT.
+        
         status = response_params["status"]
         
         if status.code >= 200 and status.code < 300:
