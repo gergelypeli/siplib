@@ -402,9 +402,9 @@ class Call(Loggable, Routable):
                 if span not in media_contexts_by_span:
                     self.logger.debug("Adding media context for channel %d span %d-%d" % (ci, left, right))
                     mc = MediaContext(self.switch.mgc)
-                    coid = build_oid(self.oid, "channel", ci)
-                    soid = build_oid(coid, "span", "%d-%d" % (left, right))
-                    mc.set_oid(soid)
+                    soid = build_oid(self.oid, "legs", "%d-%d" % (left, right))
+                    coid = build_oid(soid, "channel", ci)
+                    mc.set_oid(coid)
                     media_contexts_by_span[span] = mc
                 else:
                     mc = media_contexts_by_span[span]

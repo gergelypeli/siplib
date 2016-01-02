@@ -42,7 +42,7 @@ class Leg(Loggable):
 
     def make_media_leg(self, channel_index, type):
         media_leg = self.call.make_media_leg(channel_index, type)
-        media_leg.set_oid(build_oid(self.oid, "media", channel_index))
+        media_leg.set_oid(build_oid(self.oid, "channel", channel_index))
         
         if channel_index < len(self.media_legs):
             self.media_legs[channel_index] = media_leg

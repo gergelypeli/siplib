@@ -176,11 +176,11 @@ class Leg(Thing):
         
         self.type = type
         self.forward_handler = None
-        self.logger.debug("Created %s leg %s" % (type, self.label))
+        self.logger.debug("Created %s leg" % self.type)
         
         
     def __del__(self):
-        self.logger.debug("Deleted %s leg %s" % (self.type, self.label))
+        self.logger.debug("Deleted %s leg" % self.type)
 
 
     def set_forward_handler(self, fh):
@@ -358,11 +358,11 @@ class Context(Thing):
 
         self.manager = manager
         self.legs = []
-        self.logger.debug("Created context %s" % self.label)
+        self.logger.debug("Created context")
         
         
     def __del__(self):
-        self.logger.debug("Deleted context %s" % self.label)
+        self.logger.debug("Deleted context")
         
         
     def modify(self, params):
@@ -438,7 +438,7 @@ class MediaGateway(Loggable):
 
     def create_context(self, label, owner_sid, type):
         if type == "proxy":
-            oid = build_oid(self.oid, "context", label)
+            oid = build_oid(build_oid(self.oid, "context"), label)
             context = Context(oid, label, owner_sid, weakref.proxy(self))
         else:
             raise Error("Invalid context type %s!" % type)
@@ -461,7 +461,7 @@ class MediaGateway(Loggable):
     # Legs
 
     def create_leg(self, label, owner_sid, type):
-        oid = build_oid(self.oid, "leg", label)
+        oid = build_oid(build_oid(self.oid, "leg"), label)
         
         if type == "net":
             leg = NetLeg(oid, label, owner_sid, self.metapoll)
