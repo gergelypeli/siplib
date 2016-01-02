@@ -54,15 +54,18 @@ class Leg(Loggable):
         return media_leg
 
 
-    def finish_media(self, li=None, error=None):
-        if li is not None:
-            # Completed
-            self.media_legs[li] = None
-        else:
-            # Initiated
-            for i, ml in enumerate(self.media_legs):
-                self.logger.debug("Deleting media leg %s." % i)
-                ml.delete(WeakMethod(self.finish_media, i, error))  # lame error handling
+    def media_finished(self, li, error):
+        # Completed
+        self.media_legs[li] = None
+        
+        self.may_finish(error)
+
+
+    def finish_media(self, error=None):
+        # Initiated
+        for i, ml in enumerate(self.media_legs):
+            self.logger.debug("Deleting media leg %s." % i)
+            ml.delete(WeakMethod(self.media_finished, i, error))  # lame error handling
         
         self.may_finish(error)
 

@@ -81,7 +81,7 @@ class ProxiedMediaLeg(MediaLeg):
         self.refresh(changes)
         
         
-class MediaChannel(Loggable):
+class MediaContext(Loggable):
     def __init__(self, mgc):
         Loggable.__init__(self)
         
@@ -96,6 +96,16 @@ class MediaChannel(Loggable):
         self.legs = legs
         
         if changed:
+            leg_sids = set(leg.sid for leg in self.legs)
+            if len(leg_sids) != 1:
+                raise Exception("Multiple sids among media legs!")
+
+            sid = leg_sids.pop()
+                
+            if self.sid and self.sid != sid:
+                raise Exception("Context sid changed!")
+                
+            self.sid = sid
             self.refresh()
         else:
             self.logger.debug("Context not changed.")
@@ -132,11 +142,6 @@ class MediaChannel(Loggable):
         
         if not self.is_created:
             self.is_created = True
-            leg_sids = set(leg.sid for leg in self.legs)
-            if len(leg_sids) != 1:
-                raise Exception("Multiple sids among media legs!")
-                
-            self.sid = leg_sids.pop()
             self.logger.debug("Creating context %s" % (self.oid,))
             
             #request_handler = WeakMethod(self.process_mgw_request)

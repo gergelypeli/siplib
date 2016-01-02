@@ -1,6 +1,6 @@
 from async import WeakMethod, Weak, WeakGeneratorMethod
 from format import Status, SipError
-from mgc import MediaChannel
+from mgc import MediaContext
 from planner import Planned
 from util import build_oid, Loggable
 
@@ -347,31 +347,70 @@ class Call(Loggable, Routable):
         
         
     def refresh_media(self):
-        if self.media_channels is None:
-            self.logger.debug("Not media yet to refresh.")
-            return
+        leg_count = len(self.legs)
+        channel_count = max(len(leg.media_legs) for leg in self.legs)
+        
+        for ci in range(channel_count):
+            li = 0
+            media_legs = [ leg.media_legs[ci] if ci < len(leg.media_legs) else None for leg in self.legs ]
+            spans = set()
             
-        left_media_legs = self.legs[0].media_legs
-        ln = len(left_media_legs)
-        right_media_legs = self.legs[-1].media_legs
-        rn = len(right_media_legs)
-        
-        if ln != rn:
-            raise Exception("Media leg count mismatch, left has %d but right has %d!" % (ln, rn))
-        
-        channel_count = min(ln, rn)  # TODO: max?
-        self.logger.debug("Refreshing media (%d channels)" % channel_count)
-        
-        for i in range(channel_count):
-            if i < len(self.media_channels):
-                c = self.media_channels[i]
-            else:
-                c = MediaChannel(self.switch.mgc)
-                c.set_oid(build_oid(self.oid, "channel", len(self.media_channels)))
-                self.media_channels.append(c)
+            while li < leg_count:
+                while li < leg_count and not media_legs[li]:
+                    li += 1
+                    
+                if li == leg_count:
+                    break
+                    
+                if li % 2 != 0:
+                    li += 1
+                    continue
+                    
+                left = li
+                li += 1
 
-            c.set_legs([ left_media_legs[i], right_media_legs[i] ])
-        
+                while li < leg_count and not media_legs[li]:
+                    li += 1
+                    
+                if li == leg_count:
+                    break
+                    
+                if li % 2 != 1:
+                    continue
+                
+                right = li
+                li += 1
+                
+                span = left, right
+                spans.add(span)
+                
+            if ci >= len(self.media_channels):
+                self.media_channels.append({})
+                
+            media_contexts_by_span = self.media_channels[ci]
+            
+            for span in media_contexts_by_span:
+                left, right = span
+                
+                if span not in spans:
+                    self.logger.debug("Removing media context for channel %d span %d-%d" % (ci, left, right))
+                    media_contexts_by_span.pop(span)
+                    
+            for span in spans:
+                left, right = span
+                
+                if span not in media_contexts_by_span:
+                    self.logger.debug("Adding media context for channel %d span %d-%d" % (ci, left, right))
+                    mc = MediaContext(self.switch.mgc)
+                    coid = build_oid(self.oid, "channel", ci)
+                    soid = build_oid(coid, "span", "%d-%d" % (left, right))
+                    mc.set_oid(soid)
+                    media_contexts_by_span[span] = mc
+                else:
+                    mc = media_contexts_by_span[span]
+                    
+                mc.set_legs([ media_legs[left], media_legs[right] ])
+                
         
     def forward(self, li, action):
         Routable.forward(self, li, action)
@@ -387,14 +426,19 @@ class Call(Loggable, Routable):
                 self.refresh_media()
 
 
-    def finish_media(self, li=None):
-        if li is not None:
-            # Completed
-            self.media_channels[li] = None
-        else:
-            # Initiated
-            for i, mc in enumerate(self.media_channels):
-                self.logger.debug("Deleting media channel %ds." % i)
-                mc.delete(WeakMethod(self.finish_media, li=i))
+    def media_finished(self, ci, span):
+        # Completed
+        self.media_channels[ci].pop(span)
+        
+        self.may_finish()
+
+
+    def finish_media(self):
+        # Initiated
+        for ci, mcbs in enumerate(self.media_channels):
+            for span, mc in mcbs.items():
+                left, right = span
+                self.logger.debug("Finishing media channel %d span %d-%d." % (ci, left, right))
+                mc.delete(WeakMethod(self.media_finished, ci, span))
             
         self.may_finish()
