@@ -337,7 +337,8 @@ class Call(Loggable, Routable):
         
         if type == "finish":
             # Okay to stay if legs are present
-            self.may_finish()
+            if not any(self.legs):
+                self.finish_media()
 
 
     def make_media_leg(self, channel_index, type):

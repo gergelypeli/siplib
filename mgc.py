@@ -19,6 +19,7 @@ class MediaLeg(Loggable):
     def realize(self):
         if not self.is_created:
             # This shouldn't happen, unless one Leg was lazy
+            self.logger.warning("Leg was forcedly realized!")
             self.refresh({})
 
         return self.oid
@@ -43,6 +44,20 @@ class MediaLeg(Loggable):
             self.mgc.delete_leg(self.sid, params, response_handler=response_handler)
         else:
             handler()
+
+
+class PassMediaLeg(MediaLeg):
+    def __init__(self, mgc, sid):
+        super().__init__(mgc, sid, "pass")
+        
+        self.other = None
+        
+    def pair(self, other):
+        self.other = other
+        
+        
+    def refresh(self, params):
+        MediaLeg.refresh(self, dict(params, other=self.other.oid))
         
 
 class EchoMediaLeg(MediaLeg):
@@ -55,7 +70,7 @@ class PlayerMediaLeg(MediaLeg):
         super().__init__(mgc, sid, "player")
         
 
-    def play(self, filename=None, format=None, volume=1, fade=0):
+    def play(self, filename=None, format=None, volume=1, fade=0):  # TODO: rename to refresh?
         new = vacuum(dict(
             filename=filename,
             format=format,
@@ -74,7 +89,7 @@ class ProxiedMediaLeg(MediaLeg):
         self.committed = {}
 
 
-    def update(self, **kwargs):
+    def update(self, **kwargs):  # TODO: rename to refresh?
         new = dict(kwargs, local_addr=self.local_addr)
         changes = { k: v for k, v in new.items() if v != self.committed.get(k) }
         self.committed.update(changes)
@@ -238,8 +253,10 @@ class Controller(Loggable):
     
     def make_media_leg(self, sid_affinity, type):
         sid = sid_affinity or self.select_gateway_sid()
-        
-        if type == "echo":
+
+        if type == "pass":
+            return PassMediaLeg(Weak(self), sid)
+        elif type == "echo":
             return EchoMediaLeg(Weak(self), sid)
         elif type == "player":
             return PlayerMediaLeg(Weak(self), sid)

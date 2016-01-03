@@ -2,6 +2,7 @@ from async import WeakMethod, WeakGeneratorMethod, Weak
 from planner import Planned
 from util import build_oid, Loggable
 from call import Routable
+from mgc import PassMediaLeg
 
 
 class Error(Exception): pass
@@ -219,14 +220,14 @@ class DialInLeg(Leg):
         self.dial_out_leg.bridge(action)
 
         if action["type"] in ("hangup", "reject"):
-            self.may_finish()
+            self.finish_media()
         
         
     def bridge(self, action):
         self.report(action)
 
         if action["type"] in ("hangup",):
-            self.may_finish()
+            self.finish_media()
         
 
 class DialOutLeg(Leg, Routable):
@@ -253,20 +254,43 @@ class DialOutLeg(Leg, Routable):
         self.dial_in_leg = Weak(dial_in_leg)
         self.start_routing(dial_in_leg)
         self.logger.debug("Dialed out to leg %s." % dial_in_leg.oid)
+
+
+    def hack_media(self, answer):
+        if not answer:
+            return
+            
+        old = len(self.media_legs)
+        new = len(answer.channels)
         
+        for i in range(old, new):
+            this = self.make_media_leg(i, "pass")
+            that = self.dial_in_leg.make_media_leg(i, "pass")
+            
+            this.pair(Weak(that))
+            that.pair(Weak(this))
+            
 
     def do(self, action):
+        # Must modify media before forwarding the event, because only Call
+        # checks the media legs, and it happens right after anchoring, which
+        # is triggered by reporting the action!
+        self.hack_media(action.get("answer"))
+
         self.dial_in_leg.bridge(action)
-        
+
         if action["type"] in ("hangup",):
-            self.may_finish()
-        
+            self.finish_media()
+
         
     def bridge(self, action):
+        # See above
+        self.hack_media(action.get("answer"))
+
         self.report(action)
 
         if action["type"] in ("hangup", "reject"):
-            self.may_finish()
+            self.finish_media()
 
     
     def may_finish(self, error=None):
@@ -290,8 +314,8 @@ class DialOutLeg(Leg, Routable):
             # If we're anchored, then the legs may already be taken by the parent routing,
             # so checking in may_finish would actually finish.
             
-            if not self.is_anchored:
-                self.may_finish()
+            if not any(self.legs) and not self.is_anchored:
+                self.finish_media()
         elif type == "anchor":
             self.is_anchored = True
 
@@ -303,8 +327,9 @@ class DialOutLeg(Leg, Routable):
         type = action["type"]
         
         if type == "finish":
-            # Clean up after all legs finished (no media here)
-            self.may_finish()
+            # Clean up after the last leg is gone
+            if not any(self.legs):
+                self.finish_media()
 
 
     def get_further_legs(self):

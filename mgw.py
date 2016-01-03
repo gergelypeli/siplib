@@ -198,6 +198,30 @@ class Leg(Thing):
         raise NotImplementedError()
 
 
+class PassLeg(Leg):
+    pass_legs_by_label = weakref.WeakValueDictionary()
+    
+    def __init__(self, oid, label, owner_sid):
+        super().__init__(oid, label, owner_sid, "pass")
+        
+        self.other_label = None
+        self.pass_legs_by_label[label] = self
+
+
+    def modify(self, params):
+        super().modify(params)
+        
+        if "other" in params:
+            self.other_label = params["other"]
+            
+
+    def send_format(self, format, packet):
+        other_leg = self.pass_legs_by_label.get(self.other_label)
+        if other_leg:
+            other_leg.recv_format(format, packet)
+        
+        
+
 class NetLeg(Leg):
     def __init__(self, oid, label, owner_sid, metapoll):
         super().__init__(oid, label, owner_sid, "net")
@@ -397,7 +421,6 @@ class MediaGateway(Loggable):
         self.metapoll = metapoll
         self.contexts_by_label = {}
         self.legs_by_label = {}
-        #self.msgp = msgp.JsonMsgp(metapoll, mgw_addr, WeakMethod(self.process_request))
         self.msgp = MsgpServer(metapoll, WeakMethod(self.process_request), None, mgw_addr)
 
 
@@ -463,7 +486,9 @@ class MediaGateway(Loggable):
     def create_leg(self, label, owner_sid, type):
         oid = build_oid(build_oid(self.oid, "leg"), label)
         
-        if type == "net":
+        if type == "pass":
+            leg = PassLeg(oid, label, owner_sid)
+        elif type == "net":
             leg = NetLeg(oid, label, owner_sid, self.metapoll)
         elif type == "echo":
             leg = EchoLeg(oid, label, owner_sid)
