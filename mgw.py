@@ -1,4 +1,3 @@
-from __future__ import print_function, unicode_literals
 import socket
 import weakref
 import struct
@@ -28,7 +27,29 @@ def read_wav(filename):
     x = f.readframes(f.getnframes())
     f.close()
     
-    return bytearray(x)  # TODO: Py3k!
+    return bytearray(x)  # Make it mutable
+
+
+def write_wav(filename, data1, data2 = None):
+    f = wave.open(filename, "wb")
+    f.setsampwidth(2)
+    f.setframerate(8000)
+    
+    if data2 is None:
+        f.setnchannels(1)
+        f.writeframes(data1)
+    else:
+        n = min(len(data1), len(data2)) // 2
+        data = bytearray(2 * 2 * n)
+        
+        for i in range(n):
+            data[2 * 2 * i + 0 : 2 * 2 * i + 2] = data1[2 * i : 2 * i + 2]
+            data[2 * 2 * i + 2 : 2 * 2 * i + 4] = data2[2 * i : 2 * i + 2]
+        
+        f.setnchannels(2)
+        f.writeframes(data)
+        
+    f.close()
 
 
 def amplify_wav(samples, volume):
@@ -38,6 +59,28 @@ def amplify_wav(samples, volume):
         offset = i * BYTES_PER_SAMPLE
         old = struct.unpack_from("<h", samples, offset)[0]
         struct.pack_into('<h', samples, offset, int(volume * old))
+
+
+def encode_samples(encoding, samples):
+    if encoding == "PCMA":
+        payload = g711.encode_pcma(samples)
+    elif encoding == "PCMU":
+        payload = g711.encode_pcmu(samples)
+    else:
+        raise Error("WTF?")
+        
+    return payload
+
+
+def decode_samples(encoding, payload):
+    if encoding == "PCMA":
+        samples = g711.decode_pcma(payload)
+    elif encoding == "PCMU":
+        samples = g711.decode_pcmu(payload)
+    else:
+        raise Error("WTF?")
+        
+    return samples
 
 
 def build_rtp(ssrc, seq, timestamp, payload_type, payload):
@@ -59,7 +102,7 @@ def build_rtp(ssrc, seq, timestamp, payload_type, payload):
 
 
 def parse_rtp(packet):
-    payload_type = ord(packet[1]) & 0x7f
+    payload_type = packet[1] & 0x7f
     seq = struct.unpack_from("!H", packet, 2)[0]
     timestamp = struct.unpack_from("!I", packet, 4)[0]
     ssrc = struct.unpack_from("!I", packet, 8)[0]
@@ -141,13 +184,7 @@ class RtpPlayer(object):
             self.volume += self.fade_step
         
         amplify_wav(samples, self.volume)
-        
-        if encoding == "PCMA":
-            payload = g711.encode_pcma(samples)
-        elif encoding == "PCMU":
-            payload = g711.encode_pcmu(samples)
-        else:
-            raise Error("WTF?")
+        payload = encode_samples(encoding, samples)
             
         packet = build_rtp(self.ssrc, self.base_seq + seq, self.base_timestamp + timestamp, 127, payload)
         self.handler(self.format, packet)
@@ -201,11 +238,31 @@ class Leg(Thing):
 class PassLeg(Leg):
     pass_legs_by_label = weakref.WeakValueDictionary()
     
+    
     def __init__(self, oid, label, owner_sid):
         super().__init__(oid, label, owner_sid, "pass")
         
         self.other_label = None
+        self.filename = None
+        self.is_recording = False
+        self.has_recorded = False
+        self.samples_recved = bytearray()
+        self.samples_sent = bytearray()
+        
+        # A file will be written only if recording was turned on, even if there
+        # are no samples recorded.
+        
         self.pass_legs_by_label[label] = self
+
+
+    def __del__(self):
+        if self.has_recorded:
+            if self.filename:
+                write_wav(self.filename, self.samples_recved, self.samples_sent)
+            else:
+                self.logger.error("Couldn't save recording without a filename!")
+
+        Leg.__del__(self)                
 
 
     def modify(self, params):
@@ -214,8 +271,29 @@ class PassLeg(Leg):
         if "other" in params:
             self.other_label = params["other"]
             
+        if "filename" in params:
+            self.filename = params["filename"]
+            
+        if "record" in params:
+            self.is_recording = params["record"]
+            self.has_recorded = self.has_recorded or self.is_recording
+
+
+    def recv_format(self, format, packet):
+        if self.is_recording:
+            ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
+            encoding, clock = format
+            self.samples_recved += decode_samples(encoding, payload)
+
+        Leg.recv_format(self, format, packet)
+        
 
     def send_format(self, format, packet):
+        if self.is_recording:
+            ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
+            encoding, clock = format
+            self.samples_sent += decode_samples(encoding, payload)
+            
         other_leg = self.pass_legs_by_label.get(self.other_label)
         if other_leg:
             other_leg.recv_format(format, packet)

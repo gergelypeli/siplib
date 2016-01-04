@@ -2,7 +2,6 @@ from async import WeakMethod, WeakGeneratorMethod, Weak
 from planner import Planned
 from util import build_oid, Loggable
 from call import Routable
-from mgc import PassMediaLeg
 
 
 class Error(Exception): pass
@@ -269,6 +268,8 @@ class DialOutLeg(Leg, Routable):
             
             this.pair(Weak(that))
             that.pair(Weak(this))
+            
+            this.refresh(dict(filename="recorded.wav", record=True))
             
 
     def do(self, action):
