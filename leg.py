@@ -235,6 +235,7 @@ class DialOutLeg(Leg, Routable):
         Routable.__init__(self)
         
         self.is_anchored = False
+        self.dial_in_leg = None
 
 
     def make_routing(self):
@@ -245,10 +246,7 @@ class DialOutLeg(Leg, Routable):
         return self.call.generate_leg_oid()
 
 
-    def set_call(self, call):
-        Leg.set_call(self, call)
-        # Now we can start the Routable stuff
-
+    def start(self):
         dial_in_leg = DialInLeg(Weak(self))
         self.dial_in_leg = Weak(dial_in_leg)
         self.start_routing(dial_in_leg)

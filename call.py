@@ -204,7 +204,7 @@ class PlannedRouting(Planned, Routing):
         except SipError as e:
             self.logger.error("Routing plan aborted with SIP error: %s" % e)
             status = e.status
-        except:
+        except Exception as e:
             self.logger.error("Routing plan aborted with exception: %s" % e)
             status = Status(500)
             
