@@ -21,7 +21,7 @@ class WeakMethod(object):
 
     def __init__(self, bound_method, *bound_args, **bound_kwargs):
         self.func = bound_method.__func__
-        self.wself = weakref.ref(bound_method.__self__)
+        self.store_self(bound_method.__self__)
         self.args = bound_args
         self.kwargs = bound_kwargs
         self.bound_front = False
@@ -31,13 +31,17 @@ class WeakMethod(object):
         self.bound_front = True
         return self
         
+        
+    def store_self(self, myself):
+        self.wself = weakref.ref(myself)
+        
 
-    def make_selfarg(self):
+    def load_self(self):
         return self.wself()
         
 
     def __call__(self, *args, **kwargs):
-        selfarg = self.make_selfarg()
+        selfarg = self.load_self()
 
         if not selfarg:
             return None
@@ -53,17 +57,18 @@ class WeakMethod(object):
 
 
     def __repr__(self):
-        return "WeakMethod<%s, %s>" % (self.wself(), self.func)
+        return "WeakMethod<%s, %s>" % (self.load_self(), self.func)
         
         
     def rebind(self, *args, **kwargs):
-        sself = self.wself()
+        sself = self.load_self()
         bound_method = self.func.__get__(sself)
         return self.__class__(bound_method, *args, **kwargs)
 
 
 class WeakGeneratorMethod(WeakMethod):
-    def make_selfarg(self):
+    def load_self(self):
+        # Pass a weak self to the generator method
         sself = self.wself()
         return weakref.proxy(sself) if sself else None
 
