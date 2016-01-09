@@ -1,10 +1,10 @@
-from async import WeakMethod, WeakGeneratorMethod, Weak
+from async import WeakMethod, WeakGeneratorMethod
 from planner import Planned
 from util import build_oid, Loggable
-from call import Routable
 
 
 class Error(Exception): pass
+
 
 class Leg(Loggable):
     def __init__(self):
@@ -208,132 +208,22 @@ class PlannedLeg(Planned, Leg):
         raise NotImplementedError()
 
 
-class DialInLeg(Leg):
-    def __init__(self, dial_out_leg):
+class BridgeLeg(Leg):
+    def __init__(self, bridge, bli):
         Leg.__init__(self)
         
-        self.dial_out_leg = dial_out_leg
+        self.bridge = bridge
+        self.bli = bli
         
         
     def do(self, action):
-        self.dial_out_leg.bridge(action)
+        self.bridge.bridge(self.bli, action)
 
-        if action["type"] in ("hangup", "reject"):
-            self.finish_media()
         
-        
-    def bridge(self, action):
-        self.report(action)
-
-        if action["type"] in ("hangup",):
-            self.finish_media()
-        
-
-class DialOutLeg(Leg, Routable):
-    def __init__(self):
-        Leg.__init__(self)
-        Routable.__init__(self)
-        
-        self.is_anchored = False
-        self.dial_in_leg = None
-
-
-    def make_routing(self):
-        return self.call.make_routing()
-
-
-    def generate_leg_oid(self):
-        return self.call.generate_leg_oid()
-
-
     def start(self):
-        dial_in_leg = DialInLeg(Weak(self))
-        self.dial_in_leg = Weak(dial_in_leg)
-        self.start_routing(dial_in_leg)
-        self.logger.debug("Dialed out to leg %s." % dial_in_leg.oid)
-
-
-    def hack_media(self, answer):
-        if not answer:
-            return
-            
-        old = len(self.media_legs)
-        new = len(answer.channels)
-        
-        for i in range(old, new):
-            this = self.make_media_leg(i, "pass")
-            that = self.dial_in_leg.make_media_leg(i, "pass")
-            
-            this.pair(Weak(that))
-            that.pair(Weak(this))
-            
-            this.refresh(dict(filename="recorded.wav", record=True))
-            
-
-    def do(self, action):
-        # Must modify media before forwarding the event, because only Call
-        # checks the media legs, and it happens right after anchoring, which
-        # is triggered by reporting the action!
-        self.hack_media(action.get("answer"))
-
-        self.dial_in_leg.bridge(action)
-
-        if action["type"] in ("hangup",):
-            self.finish_media()
-
-        
-    def bridge(self, action):
-        # See above
-        self.hack_media(action.get("answer"))
-
-        self.report(action)
-
-        if action["type"] in ("hangup", "reject"):
-            self.finish_media()
-
-    
-    def may_finish(self, error=None):
-        if self.routing:
-            return
-            
-        if any(self.legs):
-            return
-            
-        Leg.may_finish(self, error)
-        
-        
-    def reported(self, action):
-        # Used before the child routing is anchored
-        Routable.reported(self, action)
-        
-        type = action["type"]
-        
-        if type == "finish":
-            # Clean up on routing failure
-            # If we're anchored, then the legs may already be taken by the parent routing,
-            # so checking in may_finish would actually finish.
-            
-            if not any(self.legs) and not self.is_anchored:
-                self.finish_media()
-        elif type == "anchor":
-            self.is_anchored = True
-
-
-    def forward(self, li, action):
-        # Used since the child routing is anchored until the parent routing is anchored
-        Routable.forward(self, li, action)
-        
-        type = action["type"]
-        
-        if type == "finish":
-            # Clean up after the last leg is gone
-            if not any(self.legs):
-                self.finish_media()
+        if self.bli == 0:
+            self.bridge.start()
 
 
     def get_further_legs(self):
-        # Don't hold the legs from the child routing once the parent routing took them
-        legs = self.legs
-        self.legs = []
-        
-        return legs
+        return self.bridge.get_further_legs()

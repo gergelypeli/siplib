@@ -3,6 +3,7 @@ from format import Status, SipError
 from mgc import MediaContext
 from planner import Planned
 from util import build_oid, Loggable
+from leg import BridgeLeg
 
 
 class Routing(Loggable):
@@ -231,10 +232,12 @@ class PlannedRouting(Planned, Routing):
         raise NotImplementedError()
 
 
-class Routable:  # Loggable
+class Routable(Loggable):
     def __init__(self):
+        Loggable.__init__(self)
+        
         self.routing = None
-        self.legs = []
+        self.legs = []  # TODO: rename to anchored_legs!
 
 
     def make_routing(self):
@@ -291,14 +294,168 @@ class Routable:  # Loggable
             self.legs[lj].do(action)
 
 
-class Call(Loggable, Routable):
+class Bridge(Routable):
+    def __init__(self, call):
+        Routable.__init__(self)
+        
+        self.call = call
+        self.anchored_legs_taken = False
+        self.incoming_leg = None
+        self.outgoing_leg = None
+        
+        # Careful! self.legs is already inherited from Routable!
+        # And that will contain all further legs in order!
+        # TODO: use StrongMethod!
+        #incoming_report = lambda action: self.bridge(0, action)
+        #self.incoming_leg = Weak(BridgeLeg(incoming_report))
+        
+        #outgoing_report = WeakMethod(self.bridge, 1).bind_front()
+        #self.outgoing_leg = BridgeLeg(outgoing_report)
+        
+        # The Leg-s refer us strongly
+
+        # The destruction order is:
+        # outgoing_leg - routing - anchored_legs - incoming_leg
+        # The initial trigger is a hangup/reject message.
+        # Finalize the outgoing_leg.
+        # If routing is active, stop, and wait for its finish.
+        # If anchored legs are active, stop, and wait for their finish.
+        # Finalize the incoming leg.
+        # If routing finishes and is_anchored, the it's a successful routing, do nothing.
+        # Otherwise proceed to the incoming_leg.
+        # If the last anchored leg finishes, it's a semi-anchored bridge, do the incoming_leg.
+
+
+    def make_incoming_leg(self):
+        incoming_leg = BridgeLeg(self, 0)
+        self.incoming_leg = Weak(incoming_leg)
+        return incoming_leg
+        
+        
+    def make_outgoing_leg(self):
+        outgoing_leg = BridgeLeg(self, 1)
+        self.outgoing_leg = Weak(outgoing_leg)
+        return outgoing_leg
+        
+
+    def make_routing(self):
+        return self.call.make_routing()
+
+
+    def generate_leg_oid(self):
+        return self.call.generate_leg_oid()
+
+
+    def start(self):
+        # Triggered by the incoming leg's start
+        self.start_routing(self.make_outgoing_leg())
+        self.logger.debug("Dialed out to leg %s." % self.outgoing_leg.oid)
+
+
+    def hack_media(self, answer):
+        if not answer:
+            return
+            
+        old = len(self.incoming_leg.media_legs)
+        new = len(answer.channels)
+        
+        for i in range(old, new):
+            this = self.incoming_leg.make_media_leg(i, "pass")
+            that = self.outgoing_leg.make_media_leg(i, "pass")
+            
+            this.pair(Weak(that))
+            that.pair(Weak(this))
+            
+            this.refresh(dict(filename="recorded.wav", record=True))
+
+
+    def may_finish(self):
+        if self.outgoing_leg:
+            #outgoing_leg = self.outgoing_leg()
+            #if not outgoing_leg:
+            #    raise Exception("Bridge outgoing leg finished without our permission!")
+                
+            self.logger.debug("Releasing outgoing leg.")
+            self.outgoing_leg.finish_media()
+            self.outgoing_leg = None
+            
+        if self.routing or self.legs:
+            return
+
+        if self.incoming_leg:
+            #incoming_leg = self.incoming_leg()
+            #if not incoming_leg:
+            #    raise Exception("Bridge incoming leg finished without our permission!")
+            
+            self.logger.debug("Releasing incoming leg.")
+            self.incoming_leg.finish_media()
+            self.incoming_leg = None
+
+
+    def bridge(self, li, action):
+        # Must modify media before forwarding the event, because only Call
+        # checks the media legs, and it happens right after anchoring, which
+        # is triggered by reporting the action!
+        self.hack_media(action.get("answer"))
+
+        if li == 0:
+            leg = self.outgoing_leg
+            direction = "forward"
+        else:
+            leg = self.incoming_leg
+            direction = "backward"
+        
+        self.logger.debug("Bridging %s %s" % (action["type"], direction))
+        leg.report(action)
+
+        if action["type"] in ("hangup", "reject"):
+            self.may_finish()
+
+    
+    def reported(self, action):
+        # Used before the child routing is anchored
+        Routable.reported(self, action)
+        
+        type = action["type"]
+        
+        if type == "finish":
+            # self.routing is surely None here
+            if not any(self.legs) and not self.anchored_legs_taken:
+                self.logger.debug("Routing finished and no more legs, finishing.")
+                self.may_finish()
+
+
+    def forward(self, li, action):
+        # Used since the child routing is anchored until the parent routing is anchored
+        Routable.forward(self, li, action)
+        
+        type = action["type"]
+        
+        if type == "finish":
+            # self.are_legs_taken is surely False here
+            if not any(self.legs) and not self.routing:
+                self.logger.debug("Last leg finished and no routing, finishing")
+                self.may_finish()
+
+
+    def get_further_legs(self):
+        # Don't hold the legs from the child routing once the parent routing took them
+        self.anchored_legs_taken = True
+        
+        legs = self.legs
+        self.legs = []
+        
+        return legs
+
+
+class Call(Routable):
     def __init__(self, switch):
-        Loggable.__init__(self)
         Routable.__init__(self)
 
         self.switch = switch
         self.media_channels = []
         self.leg_count = 0
+        self.bridge_count = 0
 
 
     def generate_leg_oid(self):
@@ -308,8 +465,21 @@ class Call(Loggable, Routable):
         return leg_oid
 
 
+    def generate_bridge_oid(self):
+        bridge_oid = build_oid(self.oid, "bridge", self.bridge_count)
+        self.bridge_count += 1
+        
+        return bridge_oid
+
+
+    def make_bridge(self):
+        bridge = Bridge(Weak(self))
+        bridge.set_oid(self.generate_bridge_oid())
+        return bridge
+        
+
     def make_outgoing_leg(self, uri):
-        leg = self.switch.make_outgoing_leg(uri)
+        leg = self.switch.make_outgoing_leg(self, uri)
         leg.set_oid(self.generate_leg_oid())
 
         return leg

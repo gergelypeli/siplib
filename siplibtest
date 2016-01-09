@@ -244,7 +244,7 @@ class TestSwitch(Switch):
         metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
 
 
-    def make_outgoing_leg(self, uri):
+    def make_outgoing_leg(self, call, uri):
         if uri.scheme == "builtin":
             subtype = uri.addr.host
             
@@ -257,7 +257,7 @@ class TestSwitch(Switch):
             else:
                 raise Exception("Unknown builtin URI '%s'!" % uri.addr.host)
         else:
-            return Switch.make_outgoing_leg(self, uri)
+            return Switch.make_outgoing_leg(self, call, uri)
 
 
     def make_call(self):
