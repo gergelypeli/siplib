@@ -30,9 +30,6 @@ class Routing(Loggable):
         li = self.leg_count
         self.leg_count += 1
 
-        if not self.legs:
-            self.set_oid(build_oid(leg.oid, "routing"))
-
         self.legs[li] = leg
         self.queued_actions[li] = []
         
@@ -237,7 +234,7 @@ class Routable(Loggable):
         Loggable.__init__(self)
         
         self.routing = None
-        self.legs = []  # TODO: rename to anchored_legs!
+        self.anchored_legs = []
 
 
     def make_routing(self):
@@ -251,7 +248,8 @@ class Routable(Loggable):
     def start_routing(self, incoming_leg):
         incoming_leg.set_oid(self.generate_leg_oid())
         
-        self.routing = self.make_routing()  # just to be sure it's stored
+        self.routing = self.make_routing()
+        self.routing.set_oid(build_oid(self.oid, "routing"))
         self.routing.set_report(WeakMethod(self.reported))
         self.routing.add_leg(incoming_leg)
 
@@ -261,12 +259,12 @@ class Routable(Loggable):
         
         if type == "finish":
             self.routing = None
-            self.logger.debug("Routing finished after anchoring %d legs." % len(self.legs))
+            self.logger.debug("Routing finished after anchoring %d legs." % len(self.anchored_legs))
         elif type == "anchor":
-            self.legs = action["legs"]
-            self.logger.debug("Routing anchored %d legs." % len(self.legs))
+            self.anchored_legs = action["legs"]
+            self.logger.debug("Routing anchored %d legs." % len(self.anchored_legs))
 
-            for i, leg in enumerate(self.legs):
+            for i, leg in enumerate(self.anchored_legs):
                 leg.set_report(WeakMethod(self.forward, i).bind_front())
                 
             for queued_action in action["queued_actions"]:
@@ -280,18 +278,18 @@ class Routable(Loggable):
         
         if type == "finish":
             self.logger.debug("Anchored leg %d finished." % li)
-            self.legs[li] = None
+            self.anchored_legs[li] = None
             
             if action.get("error"):
-                self.logger.error("Leg aborted with: %s" % action["error"])
+                self.logger.error("It aborted with: %s" % action["error"])
                 
-                for leg in self.legs:
+                for leg in self.anchored_legs:
                     if leg:
                         leg.do(dict(type="hangup"))
         else:
             lj = li + 1 - 2 * (li % 2)
-            self.logger.debug("Forwarding %s from leg %d to %d." % (type, li, lj))
-            self.legs[lj].do(action)
+            self.logger.debug("Forwarding %s from anchored leg %d to %d." % (type, li, lj))
+            self.anchored_legs[lj].do(action)
 
 
 class Bridge(Routable):
@@ -303,7 +301,7 @@ class Bridge(Routable):
         self.incoming_leg = None
         self.outgoing_leg = None
         
-        # Careful! self.legs is already inherited from Routable!
+        # Careful! self.anchored_legs is already inherited from Routable!
         # And that will contain all further legs in order!
         # TODO: use StrongMethod!
         #incoming_report = lambda action: self.bridge(0, action)
@@ -379,7 +377,7 @@ class Bridge(Routable):
             self.outgoing_leg.finish_media()
             self.outgoing_leg = None
             
-        if self.routing or self.legs:
+        if self.routing or self.anchored_legs:
             return
 
         if self.incoming_leg:
@@ -420,8 +418,8 @@ class Bridge(Routable):
         
         if type == "finish":
             # self.routing is surely None here
-            if not any(self.legs) and not self.anchored_legs_taken:
-                self.logger.debug("Routing finished and no more legs, finishing.")
+            if not any(self.anchored_legs) and not self.anchored_legs_taken:
+                self.logger.debug("Routing finished and no anchored legs, finishing.")
                 self.may_finish()
 
 
@@ -433,8 +431,8 @@ class Bridge(Routable):
         
         if type == "finish":
             # self.are_legs_taken is surely False here
-            if not any(self.legs) and not self.routing:
-                self.logger.debug("Last leg finished and no routing, finishing")
+            if not any(self.anchored_legs) and not self.routing:
+                self.logger.debug("Last anchored leg finished and no routing, finishing.")
                 self.may_finish()
 
 
@@ -442,8 +440,8 @@ class Bridge(Routable):
         # Don't hold the legs from the child routing once the parent routing took them
         self.anchored_legs_taken = True
         
-        legs = self.legs
-        self.legs = []
+        legs = self.anchored_legs
+        self.anchored_legs = []
         
         return legs
 
@@ -486,7 +484,7 @@ class Call(Routable):
         
         
     def may_finish(self):
-        if any(self.legs):
+        if any(self.anchored_legs):
             return
             
         if any(self.media_channels):
@@ -507,7 +505,7 @@ class Call(Routable):
         
         if type == "finish":
             # Okay to stay if legs are present
-            if not any(self.legs):
+            if not any(self.anchored_legs):
                 self.finish_media()
 
 
@@ -518,12 +516,12 @@ class Call(Routable):
         
         
     def refresh_media(self):
-        leg_count = len(self.legs)
-        channel_count = max(len(leg.media_legs) for leg in self.legs)
+        leg_count = len(self.anchored_legs)
+        channel_count = max(len(leg.media_legs) for leg in self.anchored_legs)
         
         for ci in range(channel_count):
             li = 0
-            media_legs = [ leg.media_legs[ci] if ci < len(leg.media_legs) else None for leg in self.legs ]
+            media_legs = [ leg.media_legs[ci] if ci < len(leg.media_legs) else None for leg in self.anchored_legs ]
             spans = set()
             
             while li < leg_count:
@@ -590,7 +588,7 @@ class Call(Routable):
         
         if type == "finish":
             # Clean up after the last leg is gone
-            if not any(self.legs):
+            if not any(self.anchored_legs):
                 self.finish_media()
         else:
             if action.get("answer"):
