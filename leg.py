@@ -69,9 +69,13 @@ class Leg(Loggable):
         
         self.may_finish(error)
 
-    
-    def get_further_legs(self):  # for the sake of internal legs
-        return []
+
+    def anchor(self):
+        self.report(dict(type="anchor"))
+        
+
+    def flatten(self, legs):
+        legs.append(self)
         
 
 class Session(object):
@@ -221,9 +225,9 @@ class BridgeLeg(Leg):
 
         
     def start(self):
-        if self.bli == 0:
-            self.bridge.start()
+        self.bridge.start()
 
 
-    def get_further_legs(self):
-        return self.bridge.get_further_legs()
+    def flatten(self, legs):
+        Leg.flatten(self, legs)
+        self.bridge.flatten(legs)

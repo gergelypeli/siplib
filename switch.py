@@ -4,7 +4,7 @@ from transport import UdpTransport
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
 from leg_sip import SipLeg
-from call import Call, Bridge
+from call import Call
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
 from account import Account, AccountManager
@@ -84,7 +84,7 @@ class Switch(Loggable):
             self.transaction_manager.send_message(response, msg)
 
 
-    def make_outgoing_leg(self, call, uri):
+    def make_leg(self, call, uri):
         if uri.scheme == "dial":
             bridge = call.make_bridge()
             outgoing_leg = bridge.make_incoming_leg()
@@ -112,7 +112,7 @@ class Switch(Loggable):
 
         incoming_dialog = Dialog(Weak(self.dialog_manager))
         incoming_leg = SipLeg(incoming_dialog)
-        call.start_routing(incoming_leg)
+        call.start(incoming_leg)
         
         return WeakMethod(incoming_dialog.recv_request)
     

@@ -169,6 +169,8 @@ class SipLeg(Leg):
                 self.send_request(invite_request)  # Will be extended!
                 self.invite_state = InviteState(invite_request)
                 self.change_state(self.DIALING_OUT)
+                
+                self.anchor()
                 return
             else:
                 self.logger.debug("Ignoring %s, already down." % type)

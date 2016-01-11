@@ -79,6 +79,7 @@ class UnreachableLeg(PlannedLeg):
         
         yield from self.wait_action("dial")
         self.logger.debug("Got dial, but not answering anything.")
+        self.anchor()
 
         yield from self.wait_action("hangup")
         self.logger.debug("And now the caller hung up.")
@@ -90,6 +91,7 @@ class RejectingLeg(PlannedLeg):
         
         yield from self.wait_action("dial")
         self.logger.debug("Got dial, but not now rejecting it.")
+        self.anchor()
 
         self.report(dict(type="reject", status=Status(603)))
         self.logger.debug("And now done.")
@@ -101,6 +103,7 @@ class RingingLeg(PlannedLeg):
         
         yield from self.wait_action("dial")
         self.logger.debug("Got dial, now ringing forever.")
+        self.anchor()
 
         self.report(dict(type="ring"))
 
@@ -115,6 +118,7 @@ class CalleeLeg(PlannedLeg):
         action = yield from self.wait_action("dial")
         self.offer = action.get("offer")
         self.logger.debug("Got offer:\n%s" % repr(self.offer))
+        self.anchor()
         
         yield from self.sleep(1)
         self.report(dict(type="ring"))
@@ -244,7 +248,7 @@ class TestSwitch(Switch):
         metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
 
 
-    def make_outgoing_leg(self, call, uri):
+    def make_leg(self, call, uri):
         if uri.scheme == "builtin":
             subtype = uri.addr.host
             
@@ -257,7 +261,7 @@ class TestSwitch(Switch):
             else:
                 raise Exception("Unknown builtin URI '%s'!" % uri.addr.host)
         else:
-            return Switch.make_outgoing_leg(self, call, uri)
+            return Switch.make_leg(self, call, uri)
 
 
     def make_call(self):

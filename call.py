@@ -19,6 +19,8 @@ class Routing(Loggable):
         self.leg_count = 0
         self.legs = {}
         self.sent_ringback = False
+        self.anchored_leg_index = None  # set locally
+        self.anchorable_leg_indexes = set()
         self.queued_actions = {}
     
     
@@ -55,6 +57,14 @@ class Routing(Loggable):
         self.queued_actions[li].append(action)
 
 
+    def unqueue(self, li):
+        for action in self.queued_actions[li]:
+            self.logger.debug("Unqueueing %s from leg %s." % (action["type"], li))
+            self.legs[0].do(action)
+            
+        self.queued_actions[li] = []
+
+
     def reject(self, status):
         self.logger.warning("Rejecting with status %s" % (status,))
         self.legs[0].do(dict(type="reject", status=status))
@@ -67,37 +77,47 @@ class Routing(Loggable):
             self.legs[0].do(dict(type="ring"))
 
 
-    def hangup_all_outgoing(self):
+    def hangup_all_outgoing(self, except_li):
         for li, leg in list(self.legs.items()):
             self.logger.debug("Hanging up leg %s" % li)
             
-            if li > 0:
+            if li not in (0, except_li):
                 leg.do(dict(type="hangup"))
+
+
+    def establish_anchor(self):
+        li = self.anchored_leg_index
+        self.logger.debug("Anchored to leg %d." % li)
+        self.unqueue(li)
+        self.report(dict(type="anchor"))
+        
+
+    def set_leg_anchorable(self, li):
+        self.logger.debug("Marking leg %s as anchorable." % li)
+        self.anchorable_leg_indexes.add(li)
+        
+        if self.anchored_leg_index == li:
+            self.establish_anchor()
 
         
     def anchor(self, li):
-        self.logger.debug("Anchoring to leg %d." % li)
-        
-        these_legs = [ self.legs[0], self.legs[li] ]
-        further_legs = self.legs[li].get_further_legs()
-        queued_actions = self.queued_actions[li]
-        self.report(dict(
-            type="anchor",
-            legs=these_legs + further_legs,
-            queued_actions=queued_actions
-        ))
+        if self.anchored_leg_index is not None:
+            raise Exception("Routing already anchored!")
 
-        self.remove_leg(0)
-        self.remove_leg(li)
+        self.logger.debug("Choosing leg %s for anchoring." % li)
+        self.anchored_leg_index = li
         
-
+        if li in self.anchorable_leg_indexes:
+            self.establish_anchor()
+            
+            
     def dial(self, action):
         if action["type"] != "dial":
             raise Exception("Dial action is not a dial: %s" % action["type"])
             
         uri = action["ctx"]["uri"]
         self.logger.debug("Dialing out to: %s" % (uri,))
-        leg = self.call.make_outgoing_leg(uri)
+        leg = self.call.make_leg(uri)
         self.add_leg(leg)
         leg.do(action)
 
@@ -112,11 +132,26 @@ class Routing(Loggable):
             if type == "dial":
                 raise Exception("Should have handled dial in a subclass!")
             elif type == "hangup":
-                self.hangup_all_outgoing()
+                self.hangup_all_outgoing(None)
             else:
                 raise Exception("Invalid action from incoming leg: %s" % type)
         else:
+            if type == "anchor":
+                self.set_leg_anchorable(li)
+                return
+                
+            if self.anchored_leg_index is not None:
+                # Already anchored locally
+                
+                if li != self.anchored_leg_index:
+                    self.logger.debug("Ignoring action %s from unanchored leg %d!" % (action["type"], li))
+                else:
+                    self.legs[0].do(action)
+                    
+                return
+                
             if type == "reject":
+                # FIXME: of course don't reject the incoming leg immediately
                 self.reject(action["status"])
             elif type == "ring":
                 if action.get("offer") or action.get("answer"):
@@ -129,10 +164,25 @@ class Routing(Loggable):
             elif type == "accept":
                 self.queue(li, action)
                 self.anchor(li)
-                self.hangup_all_outgoing()  # the remaining legs
+                self.hangup_all_outgoing(li)
+            elif type == "hangup":
+                # Oops, we anchored this leg because it accepted, but now hangs up
+                self.legs[0].do(action)
             else:
                 raise Exception("Invalid action from outgoing leg: %s" % type)
 
+
+    def flatten(self, legs):
+        li = self.anchored_leg_index
+        
+        if li is None or li not in self.anchorable_leg_indexes:
+            raise Exception("Flatten for nonanchored routing!")
+        
+        legs.append(self.legs[0])
+        self.legs[li].flatten(legs)
+        self.remove_leg(li)
+        self.remove_leg(0)
+        
 
 class SimpleRouting(Routing):
     def route(self, action):
@@ -208,7 +258,7 @@ class PlannedRouting(Planned, Routing):
             
         if status:
             # TODO: must handle double events for this to work well!
-            self.hangup_all_outgoing()
+            self.hangup_all_outgoing(None)
             self.reject(status)
             
         self.may_finish()
@@ -234,7 +284,6 @@ class Routable(Loggable):
         Loggable.__init__(self)
         
         self.routing = None
-        self.anchored_legs = []
 
 
     def make_routing(self):
@@ -259,37 +308,11 @@ class Routable(Loggable):
         
         if type == "finish":
             self.routing = None
-            self.logger.debug("Routing finished after anchoring %d legs." % len(self.anchored_legs))
+            self.logger.debug("Routing finished.")
         elif type == "anchor":
-            self.anchored_legs = action["legs"]
-            self.logger.debug("Routing anchored %d legs." % len(self.anchored_legs))
-
-            for i, leg in enumerate(self.anchored_legs):
-                leg.set_report(WeakMethod(self.forward, i).bind_front())
-                
-            for queued_action in action["queued_actions"]:
-                self.forward(1, queued_action)
+            pass
         else:
             self.logger.debug("Unknown routing event %s!" % type)
-
-
-    def forward(self, li, action):
-        type = action["type"]
-        
-        if type == "finish":
-            self.logger.debug("Anchored leg %d finished." % li)
-            self.anchored_legs[li] = None
-            
-            if action.get("error"):
-                self.logger.error("It aborted with: %s" % action["error"])
-                
-                for leg in self.anchored_legs:
-                    if leg:
-                        leg.do(dict(type="hangup"))
-        else:
-            lj = li + 1 - 2 * (li % 2)
-            self.logger.debug("Forwarding %s from anchored leg %d to %d." % (type, li, lj))
-            self.anchored_legs[lj].do(action)
 
 
 class Bridge(Routable):
@@ -297,41 +320,20 @@ class Bridge(Routable):
         Routable.__init__(self)
         
         self.call = call
-        self.anchored_legs_taken = False
         self.incoming_leg = None
         self.outgoing_leg = None
         
-        # Careful! self.anchored_legs is already inherited from Routable!
-        # And that will contain all further legs in order!
-        # TODO: use StrongMethod!
-        #incoming_report = lambda action: self.bridge(0, action)
-        #self.incoming_leg = Weak(BridgeLeg(incoming_report))
-        
-        #outgoing_report = WeakMethod(self.bridge, 1).bind_front()
-        #self.outgoing_leg = BridgeLeg(outgoing_report)
-        
-        # The Leg-s refer us strongly
-
-        # The destruction order is:
-        # outgoing_leg - routing - anchored_legs - incoming_leg
-        # The initial trigger is a hangup/reject message.
-        # Finalize the outgoing_leg.
-        # If routing is active, stop, and wait for its finish.
-        # If anchored legs are active, stop, and wait for their finish.
-        # Finalize the incoming leg.
-        # If routing finishes and is_anchored, the it's a successful routing, do nothing.
-        # Otherwise proceed to the incoming_leg.
-        # If the last anchored leg finishes, it's a semi-anchored bridge, do the incoming_leg.
-
 
     def make_incoming_leg(self):
+        # Strong reference to self to keep us alive
         incoming_leg = BridgeLeg(self, 0)
         self.incoming_leg = Weak(incoming_leg)
         return incoming_leg
         
         
     def make_outgoing_leg(self):
-        outgoing_leg = BridgeLeg(self, 1)
+        # Weak reference to self to avoid reference cycle in Bridge->Routing->BridgeLeg
+        outgoing_leg = BridgeLeg(Weak(self), 1)
         self.outgoing_leg = Weak(outgoing_leg)
         return outgoing_leg
         
@@ -346,6 +348,9 @@ class Bridge(Routable):
 
     def start(self):
         # Triggered by the incoming leg's start
+        if self.outgoing_leg:
+            return
+            
         self.start_routing(self.make_outgoing_leg())
         self.logger.debug("Dialed out to leg %s." % self.outgoing_leg.oid)
 
@@ -377,7 +382,7 @@ class Bridge(Routable):
             self.outgoing_leg.finish_media()
             self.outgoing_leg = None
             
-        if self.routing or self.anchored_legs:
+        if self.routing:
             return
 
         if self.incoming_leg:
@@ -391,6 +396,8 @@ class Bridge(Routable):
 
 
     def bridge(self, li, action):
+        type = action["type"]
+        
         # Must modify media before forwarding the event, because only Call
         # checks the media legs, and it happens right after anchoring, which
         # is triggered by reporting the action!
@@ -403,10 +410,10 @@ class Bridge(Routable):
             leg = self.incoming_leg
             direction = "backward"
         
-        self.logger.debug("Bridging %s %s" % (action["type"], direction))
+        self.logger.debug("Bridging %s %s" % (type, direction))
         leg.report(action)
 
-        if action["type"] in ("hangup", "reject"):
+        if type in ("hangup", "reject"):
             self.may_finish()
 
     
@@ -418,32 +425,15 @@ class Bridge(Routable):
         
         if type == "finish":
             # self.routing is surely None here
-            if not any(self.anchored_legs) and not self.anchored_legs_taken:
-                self.logger.debug("Routing finished and no anchored legs, finishing.")
+            if not self.outgoing_leg:
+                self.logger.debug("Routing finished and no outgoing leg, finishing.")
                 self.may_finish()
+        elif type == "anchor":
+            self.incoming_leg.anchor()
 
 
-    def forward(self, li, action):
-        # Used since the child routing is anchored until the parent routing is anchored
-        Routable.forward(self, li, action)
-        
-        type = action["type"]
-        
-        if type == "finish":
-            # self.are_legs_taken is surely False here
-            if not any(self.anchored_legs) and not self.routing:
-                self.logger.debug("Last anchored leg finished and no routing, finishing.")
-                self.may_finish()
-
-
-    def get_further_legs(self):
-        # Don't hold the legs from the child routing once the parent routing took them
-        self.anchored_legs_taken = True
-        
-        legs = self.anchored_legs
-        self.anchored_legs = []
-        
-        return legs
+    def flatten(self, legs):
+        self.routing.flatten(legs)            
 
 
 class Call(Routable):
@@ -451,6 +441,7 @@ class Call(Routable):
         Routable.__init__(self)
 
         self.switch = switch
+        self.legs = []
         self.media_channels = []
         self.leg_count = 0
         self.bridge_count = 0
@@ -476,15 +467,23 @@ class Call(Routable):
         return bridge
         
 
-    def make_outgoing_leg(self, uri):
-        leg = self.switch.make_outgoing_leg(self, uri)
+    def make_leg(self, uri):
+        leg = self.switch.make_leg(self, uri)
         leg.set_oid(self.generate_leg_oid())
 
         return leg
+
+
+    def make_routing(self):
+        return Routing(Weak(self))
+        
+        
+    def start(self, incoming_leg):
+        self.start_routing(incoming_leg)
         
         
     def may_finish(self):
-        if any(self.anchored_legs):
+        if any(self.legs):
             return
             
         if any(self.media_channels):
@@ -492,11 +491,7 @@ class Call(Routable):
             
         self.logger.debug("Call is finished.")
         self.switch.finish_call(self.oid)
-        
-        
-    def make_routing(self):
-        return Routing(Weak(self))
-        
+
         
     def reported(self, action):
         Routable.reported(self, action)
@@ -505,8 +500,16 @@ class Call(Routable):
         
         if type == "finish":
             # Okay to stay if legs are present
-            if not any(self.anchored_legs):
+            if not any(self.legs):
                 self.finish_media()
+        elif type == "anchor":
+            self.routing.flatten(self.legs)
+            self.logger.debug("Finally anchored %d legs." % len(self.legs))
+
+            for i, leg in enumerate(self.legs):
+                leg.set_report(WeakMethod(self.forward, i).bind_front())
+                
+            self.refresh_media()
 
 
     def make_media_leg(self, channel_index, type):
@@ -516,12 +519,12 @@ class Call(Routable):
         
         
     def refresh_media(self):
-        leg_count = len(self.anchored_legs)
-        channel_count = max(len(leg.media_legs) for leg in self.anchored_legs)
+        leg_count = len(self.legs)
+        channel_count = max(len(leg.media_legs) for leg in self.legs)
         
         for ci in range(channel_count):
             li = 0
-            media_legs = [ leg.media_legs[ci] if ci < len(leg.media_legs) else None for leg in self.anchored_legs ]
+            media_legs = [ leg.media_legs[ci] if ci < len(leg.media_legs) else None for leg in self.legs ]
             spans = set()
             
             while li < leg_count:
@@ -582,15 +585,27 @@ class Call(Routable):
                 
         
     def forward(self, li, action):
-        Routable.forward(self, li, action)
-        
         type = action["type"]
         
         if type == "finish":
+            self.logger.debug("Anchored leg %d finished." % li)
+            self.legs[li] = None
+            
+            if action.get("error"):
+                self.logger.error("It aborted with: %s" % action["error"])
+                
+                for leg in self.legs:
+                    if leg:
+                        leg.do(dict(type="hangup"))
+
             # Clean up after the last leg is gone
-            if not any(self.anchored_legs):
+            if not any(self.legs):
                 self.finish_media()
         else:
+            lj = li + 1 - 2 * (li % 2)
+            self.logger.debug("Forwarding %s from anchored leg %d to %d." % (type, li, lj))
+            self.legs[lj].do(action)
+
             if action.get("answer"):
                 self.refresh_media()
 
