@@ -102,15 +102,14 @@ class MediaContext(Loggable):
         
         self.mgc = mgc
         self.sid = None
-        self.legs = [ None, None ]
+        self.legs = []
         self.is_created = False
         
 
     def set_legs(self, legs):
-        changed = legs[0] and legs[1] and (legs[0] != self.legs[0] or legs[1] != self.legs[1])
-        self.legs = legs
-        
-        if changed:
+        if legs != self.legs:
+            self.legs = legs
+            
             leg_sids = set(leg.sid for leg in self.legs)
             if len(leg_sids) != 1:
                 raise Exception("Multiple sids among media legs!")
@@ -126,27 +125,15 @@ class MediaContext(Loggable):
             self.logger.debug("Context not changed.")
 
         
-    #def process_mgw_request(self, sid, seq, params, target):
-    #    self.logger.debug("Huh, MGW %s sent a %s message!" % (sid, target))
-        
-        
     def process_mgw_response(self, msgid, params):
         if params == "ok":
-            self.logger.debug("Huh, MGW %s is OK for %s!" % msgid)
+            self.logger.debug("Huh, MGW message %s:%s was successful." % msgid)
         else:
-            self.logger.debug("Oops, MGW %s error for %s!" % msgid)
+            self.logger.debug("Oops, MGW message %s:%s failed!" % msgid)
         
         
     def refresh(self):
         # TODO: implement leg deletion
-        #leg_labels = []
-        
-        #for leg in self.legs:
-        #    if not leg.sid:
-        #        raise Exception("Bridged media leg is not created yet!")
-                
-        #    leg_labels.append(leg.sid.label)
-        
         leg_oids = [ leg.realize() for leg in self.legs ]
         
         params = {

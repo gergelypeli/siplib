@@ -69,8 +69,9 @@ class SipLeg(Leg):
         # Negotiated session parameters, must have the same length
         lsdp = self.session.local_sdp
         rsdp = self.session.remote_sdp
+        channel_count = min(len(lsdp.channels), len(rsdp.channels)) if lsdp and rsdp else 0
 
-        for i in range(len(lsdp.channels) if lsdp else 0):
+        for i in range(channel_count):
             lc = lsdp.channels[i]
             rc = rsdp.channels[i]
             ml = self.media_legs[i]  # must also have the same number of media legs
@@ -82,15 +83,11 @@ class SipLeg(Leg):
                 recv_formats=extract_formats(lc)
             )
             
+        Leg.refresh_media(self)
+            
 
     def preprocess_outgoing_session(self, sdp):
         for i in range(len(self.media_legs), len(sdp.channels)):
-            #mgc = self.call.switch.mgc
-            #sid = self.call.select_gateway_sid(i)
-            #local_addr = self.call.allocate_media_address(sid)  # TODO: deallocate them, too!
-            #media_leg = ProxiedMediaLeg(mgc, sid, local_addr)
-            #media_leg.set_oid(build_oid(self.oid, "media", len(self.media_legs)))
-            #self.media_legs.append(media_leg)
             self.make_media_leg(i, "net")
         
         for i in range(len(sdp.channels)):

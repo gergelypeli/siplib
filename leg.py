@@ -40,6 +40,10 @@ class Leg(Loggable):
         self.report(dict(type="finish", error=error))
 
 
+    def refresh_media(self):
+        self.call.refresh_media()
+
+
     def make_media_leg(self, channel_index, type):
         media_leg = self.call.make_media_leg(channel_index, type)
         media_leg.set_oid(build_oid(self.oid, "channel", channel_index))
@@ -50,9 +54,9 @@ class Leg(Loggable):
             self.media_legs.append(media_leg)
         else:
             raise Exception("Invalid media leg index!")
-            
+        
         return media_leg
-
+        
 
     def media_finished(self, li, error):
         # Completed

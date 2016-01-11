@@ -127,8 +127,7 @@ class CalleeLeg(PlannedLeg):
         answer = self.make_answer(self.offer)
         
         media_leg = self.make_media_leg(0, "player")
-        #media_leg = EchoMediaLeg(self.call.switch.mgc, sid)
-        #self.set_media_leg(0, media_leg)
+        # No refresh_media here, because we are the sender leg of the answer
         self.report(dict(type="accept", answer=answer))
         # TODO: It shouldn't be legal to answer without channels existing already!
         
