@@ -400,13 +400,13 @@ class MsgpDispatcher(Loggable):
         
 
     def wrap_request_handler(self, target, source, body, remote_id):
-        self.logger.debug("Received request %s:%s" % (remote_id, source))
+        self.logger.debug("Received request %s/%s" % (remote_id, source))
         msgid = (remote_id, source)
         self.request_handler(target, msgid, body)
 
 
     def wrap_response_handler(self, source, body, response_handler, remote_id):
-        self.logger.debug("Received response %s:%s" % (remote_id, source))
+        self.logger.debug("Received response %s/%s" % (remote_id, source))
         msgid = (remote_id, source)
         response_handler(msgid, body)
     
@@ -417,7 +417,7 @@ class MsgpDispatcher(Loggable):
         
     
     def send(self, msgid, body, response_handler=None, response_timeout=None):
-        self.logger.debug("Sending message %s:%s" % msgid)
+        self.logger.debug("Sending message %s/%s" % msgid)
         remote_id, target = msgid
         
         stream = self.streams_by_id.get(remote_id)

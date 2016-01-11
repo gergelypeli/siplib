@@ -127,9 +127,9 @@ class MediaContext(Loggable):
         
     def process_mgw_response(self, msgid, params):
         if params == "ok":
-            self.logger.debug("Huh, MGW message %s:%s was successful." % msgid)
+            self.logger.debug("Huh, MGW message %s/%s was successful." % msgid)
         else:
-            self.logger.debug("Oops, MGW message %s:%s failed!" % msgid)
+            self.logger.debug("Oops, MGW message %s/%s failed!" % msgid)
         
         
     def refresh(self):
