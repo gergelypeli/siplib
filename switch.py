@@ -4,7 +4,7 @@ from transport import UdpTransport
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
 from leg_sip import SipLeg
-from call import Call
+from call import Call, Bridge, RecordingBridge
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
 from account import Account, AccountManager
@@ -86,13 +86,11 @@ class Switch(Loggable):
 
     def make_leg(self, call, uri):
         if uri.scheme == "dial":
-            bridge = call.make_bridge()
-            outgoing_leg = bridge.make_incoming_leg()
-            return outgoing_leg
+            return call.make_bridge(Bridge).make_incoming_leg()
+        elif uri.scheme == "record":
+            return call.make_bridge(RecordingBridge).make_incoming_leg()
         elif uri.scheme == "sip":
-            outgoing_dialog = Dialog(Weak(self.dialog_manager))
-            outgoing_leg = SipLeg(outgoing_dialog)
-            return outgoing_leg
+            return SipLeg(Dialog(Weak(self.dialog_manager)))
         else:
             raise Exception("Unknown URI scheme '%s' for creating outgoing leg!" % uri.scheme)
 

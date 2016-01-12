@@ -583,6 +583,7 @@ class MediaGateway(Loggable):
         
         
     def delete_leg(self, label):
+        # NOTE: a leg may stay alive here if linked into a context!
         self.delete_thing(self.legs_by_label, label)
 
 

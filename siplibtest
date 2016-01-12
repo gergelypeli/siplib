@@ -300,7 +300,7 @@ class SwitchB(TestSwitch):
             uri = ctx["uri"]
             
             if uri.user == PHONE_NUMBER:
-                self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("dial:444@a.switch"))))
+                self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("record:444@a.switch"))))
             elif uri.user == "444":
                 self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:unreachable"))))
                 self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:ringing"))))

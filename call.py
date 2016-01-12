@@ -36,7 +36,10 @@ class Routing(Loggable):
         self.queued_actions[li] = []
         
         leg.set_report(WeakMethod(self.process, li).bind_front())
-        leg.set_call(self.call)
+        
+        if not leg.call:
+            raise Exception("Why you ain't have no call?")
+        #leg.set_call(self.call)
         
         leg.start()
 
@@ -299,12 +302,12 @@ class Routable(Loggable):
         raise NotImplementedError()
 
 
-    def generate_leg_oid(self):
+    def pimp_leg(self, leg):
         raise NotImplementedError()
 
 
     def start_routing(self, incoming_leg):
-        incoming_leg.set_oid(self.generate_leg_oid())
+        incoming_leg = self.pimp_leg(incoming_leg)
         
         self.routing = self.make_routing()
         self.routing.set_oid(build_oid(self.oid, "routing"))
@@ -351,8 +354,8 @@ class Bridge(Routable):
         return self.call.make_routing()
 
 
-    def generate_leg_oid(self):
-        return self.call.generate_leg_oid()
+    def pimp_leg(self, leg):
+        return self.call.pimp_leg(leg)
 
 
     def start(self):
@@ -360,35 +363,13 @@ class Bridge(Routable):
         if self.outgoing_leg:
             return
             
-        self.start_routing(self.make_outgoing_leg())
-        self.logger.debug("Dialed out to leg %s." % self.outgoing_leg.oid)
-
-
-    def hack_media(self, answer):
-        if not answer:
-            return
-            
-        old = len(self.incoming_leg.media_legs)
-        new = len(answer.channels)
-        
-        for i in range(old, new):
-            this = self.incoming_leg.make_media_leg(i, "pass")
-            that = self.outgoing_leg.make_media_leg(i, "pass")
-            
-            this.pair(Weak(that))
-            that.pair(Weak(this))
-            
-            this.refresh(dict(filename="recorded.wav", record=True))
-            
-        self.call.refresh_media()
+        outgoing_leg = self.make_outgoing_leg()
+        self.logger.debug("Bridging legs %s and %s." % (self.incoming_leg.oid, self.outgoing_leg.oid))
+        self.start_routing(outgoing_leg)
 
 
     def may_finish(self):
         if self.outgoing_leg:
-            #outgoing_leg = self.outgoing_leg()
-            #if not outgoing_leg:
-            #    raise Exception("Bridge outgoing leg finished without our permission!")
-                
             self.logger.debug("Releasing outgoing leg.")
             self.outgoing_leg.finish_media()
             self.outgoing_leg = None
@@ -397,10 +378,6 @@ class Bridge(Routable):
             return
 
         if self.incoming_leg:
-            #incoming_leg = self.incoming_leg()
-            #if not incoming_leg:
-            #    raise Exception("Bridge incoming leg finished without our permission!")
-            
             self.logger.debug("Releasing incoming leg.")
             self.incoming_leg.finish_media()
             self.incoming_leg = None
@@ -409,8 +386,6 @@ class Bridge(Routable):
     def bridge(self, li, action):
         type = action["type"]
         
-        self.hack_media(action.get("answer"))
-
         if li == 0:
             leg = self.outgoing_leg
             direction = "forward"
@@ -434,6 +409,7 @@ class Bridge(Routable):
         if type == "finish":
             # self.routing is surely None here
             if not self.outgoing_leg:
+                # Seems like we had a failed routing here
                 self.logger.debug("Routing finished and no outgoing leg, finishing.")
                 self.may_finish()
         elif type == "anchor":
@@ -442,6 +418,32 @@ class Bridge(Routable):
 
     def flatten(self, legs):
         self.routing.flatten(legs)            
+
+
+class RecordingBridge(Bridge):
+    def hack_media(self, answer):
+        if not answer:
+            return
+            
+        old = len(self.incoming_leg.media_legs)
+        new = len(answer.channels)
+        
+        for i in range(old, new):
+            this = self.incoming_leg.make_media_leg(i, "pass")
+            that = self.outgoing_leg.make_media_leg(i, "pass")
+            
+            this.pair(Weak(that))
+            that.pair(Weak(this))
+            
+            this.refresh(dict(filename="recorded.wav", record=True))
+            
+        self.call.refresh_media()
+
+
+    def bridge(self, li, action):
+        self.hack_media(action.get("answer"))
+        
+        Bridge.bridge(self, li, action)
 
 
 class Call(Routable):
@@ -469,17 +471,20 @@ class Call(Routable):
         return bridge_oid
 
 
-    def make_bridge(self):
-        bridge = Bridge(Weak(self))
+    def make_bridge(self, bridge_class):
+        bridge = bridge_class(Weak(self))
         bridge.set_oid(self.generate_bridge_oid())
         return bridge
         
+        
+    def pimp_leg(self, leg):
+        leg.set_oid(self.generate_leg_oid())
+        leg.set_call(Weak(self))
+        return leg
+        
 
     def make_leg(self, uri):
-        leg = self.switch.make_leg(self, uri)
-        leg.set_oid(self.generate_leg_oid())
-
-        return leg
+        return self.pimp_leg(self.switch.make_leg(self, uri))
 
 
     def make_routing(self):
