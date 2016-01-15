@@ -118,27 +118,53 @@ def prid(sid):
     return "%s:%d@%s" % (host, port, label)
 
 
-class RtpPlayer(object):
+class RtpBase(Loggable):
     PTIME = 20
     PLAY_INFO = {
+        ("*",    8000): (1,),  # artificial codec for recording
         ("PCMU", 8000): (1,),
         ("PCMA", 8000): (1,)
     }
     BYTES_PER_SAMPLE = 2
     
-    def __init__(self, metapoll, format, data, handler, volume=1, fade=0):
-        self.metapoll = metapoll
-        self.data = data  # mono 16 bit LSB LPCM
-        self.handler = handler
+    
+    def __init__(self):
+        self.ssrc = None
+        self.base_seq = None
+        self.base_timestamp = None
         
+        self.format = None
+        self.encoding = None
+        self.clock = None
+        self.bytes_per_sample = None
+        self.samples_per_packet = None
+
+        
+    def set_format(self, format):
+        if format not in self.PLAY_INFO:
+            raise Error("Unknown format for playing: %s" % format)
+            
+        self.format = format
+        self.encoding, self.clock = format
+        self.bytes_per_sample, = self.PLAY_INFO[format]
+        self.samples_per_packet = int(self.clock * self.PTIME / 1000)
+    
+
+class RtpPlayer(RtpBase):
+    def __init__(self, metapoll, format, data, handler, volume=1, fade=0):
+        RtpBase.__init__(self)
+
         self.ssrc = 0  # should be random
         self.base_seq = 0  # too
         self.base_timestamp = 0  # too
         
+        self.metapoll = metapoll
+        self.data = data  # mono 16 bit LSB LPCM
+        self.handler = handler
+        
         self.offset = 0
         self.next_seq = 0
         self.volume = 0
-        self.format = None
         
         self.set_format(format)
         self.set_volume(volume, fade)
@@ -158,24 +184,13 @@ class RtpPlayer(object):
         self.fade_step = (volume - self.volume) / self.fade_steps
         
 
-    def set_format(self, format):
-        if format not in self.PLAY_INFO:
-            raise Error("Unknown format for playing: %s" % format)
-            
-        self.format = format
-        
-        
     def play(self):
         seq = self.next_seq
         self.next_seq += 1
         
-        encoding, clock = self.format
-        bytes_per_sample, = self.PLAY_INFO[self.format]
+        timestamp = seq * self.samples_per_packet
         
-        samples_per_packet = int(clock * self.PTIME / 1000)
-        timestamp = seq * samples_per_packet
-        
-        new_offset = self.offset + samples_per_packet * self.BYTES_PER_SAMPLE
+        new_offset = self.offset + self.samples_per_packet * self.BYTES_PER_SAMPLE
         samples = self.data[self.offset:new_offset]
         self.offset = new_offset
         
@@ -184,7 +199,7 @@ class RtpPlayer(object):
             self.volume += self.fade_step
         
         amplify_wav(samples, self.volume)
-        payload = encode_samples(encoding, samples)
+        payload = encode_samples(self.encoding, samples)
             
         packet = build_rtp(self.ssrc, self.base_seq + seq, self.base_timestamp + timestamp, 127, payload)
         self.handler(self.format, packet)
@@ -192,6 +207,55 @@ class RtpPlayer(object):
         if self.offset >= len(self.data):
             self.metapoll.unregister_timeout(self.handle)
             self.handle = None
+
+
+class RtpRecorder(RtpBase):
+    def __init__(self, format):
+        RtpBase.__init__(self)
+        
+        self.chunks = []  # mono 16 bit LSB LPCM
+        self.last_seq = None
+
+        self.set_format(format)
+        
+        
+    def record(self, format, packet):
+        encoding, clock = format
+        
+        if clock != self.clock:
+            self.logger.warning("Clock %s is not the expected %s!" % (clock, self.clock))
+            return
+            
+        ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
+    
+        if self.ssrc is None:
+            self.ssrc = ssrc
+            self.base_seq = seq
+            self.base_timestamp = timestamp
+            self.last_seq = seq
+        elif seq > self.last_seq:
+            self.last_seq = seq
+        else:
+            # TODO: maybe order a bit?
+            return
+        
+        n = int((timestamp - self.base_timestamp) / self.samples_per_packet)
+        #self.logger.info("Recording chunk %d" % n)
+
+        samples = decode_samples(encoding, payload)
+        
+        while n >= len(self.chunks):
+            self.chunks.append(None)
+            
+        self.chunks[n] = samples
+        
+        
+    def get(self):
+        silence = bytes(self.samples_per_packet * self.BYTES_PER_SAMPLE)
+        
+        samples = b"".join(chunk or silence for chunk in self.chunks)
+
+        return samples
 
 
 class Thing(Loggable):
@@ -246,8 +310,9 @@ class PassLeg(Leg):
         self.filename = None
         self.is_recording = False
         self.has_recorded = False
-        self.samples_recved = bytearray()
-        self.samples_sent = bytearray()
+        self.format = None
+        self.recv_recorder = None
+        self.send_recorder = None
         
         # A file will be written only if recording was turned on, even if there
         # are no samples recorded.
@@ -256,13 +321,15 @@ class PassLeg(Leg):
 
 
     def __del__(self):
-        if self.has_recorded:
-            if self.filename:
-                write_wav(self.filename, self.samples_recved, self.samples_sent)
-            else:
-                self.logger.error("Couldn't save recording without a filename!")
+        self.flush()
+        Leg.__del__(self)
 
-        Leg.__del__(self)                
+
+    def flush(self):
+        if self.has_recorded:
+            samples_recved = self.recv_recorder.get()
+            samples_sent = self.send_recorder.get()
+            write_wav(self.filename, samples_recved, samples_sent)
 
 
     def modify(self, params):
@@ -271,28 +338,44 @@ class PassLeg(Leg):
         if "other" in params:
             self.other_label = params["other"]
             
-        if "filename" in params:
-            self.filename = params["filename"]
+        if "format" in params:
+            self.format = tuple(params["format"])
             
+            if self.recv_recorder:
+                self.recv_recorder.set_format(self.format)
+            if self.send_recorder:
+                self.send_recorder.set_format(self.format)
+            
+        if "filename" in params:
+            self.flush()
+                
+            self.filename = params["filename"]
+            self.recv_recorder = RtpRecorder(self.format)
+            self.recv_recorder.set_oid(build_oid(self.oid, "recv"))
+            self.send_recorder = RtpRecorder(self.format)
+            self.send_recorder.set_oid(build_oid(self.oid, "send"))
+            
+            self.is_recording = False
+            self.has_recorded = False
+
         if "record" in params:
-            self.is_recording = params["record"]
-            self.has_recorded = self.has_recorded or self.is_recording
+            if self.filename:
+                self.is_recording = params["record"]
+                self.has_recorded = self.has_recorded or self.is_recording
+            else:
+                self.logger.error("Can't save recording without a filename!")
 
 
     def recv_format(self, format, packet):
         if self.is_recording:
-            ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
-            encoding, clock = format
-            self.samples_recved += decode_samples(encoding, payload)
+            self.recv_recorder.record(format, packet)
 
         Leg.recv_format(self, format, packet)
         
 
     def send_format(self, format, packet):
         if self.is_recording:
-            ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
-            encoding, clock = format
-            self.samples_sent += decode_samples(encoding, payload)
+            self.send_recorder.record(format, packet)
             
         other_leg = self.pass_legs_by_label.get(self.other_label)
         if other_leg:
