@@ -132,7 +132,7 @@ class Metapoll(object):
         self.update(fd)
 
 
-    def register_timeout(self, timeout, handler, repeat=False):
+    def register_timeout(self, timeout, handler, repeat=False, align=False):
         """
         Registers an event handler to be called when the given timeout expires.
         The timeout must be a datetime.timedelta object.
@@ -145,6 +145,12 @@ class Metapoll(object):
             timeout = datetime.timedelta(seconds=timeout)
 
         now = datetime.datetime.now()
+        if align:
+            # Make sure it is aligned to milliseconds to improve the
+            # polling performance of bulk registrations
+            usecs = 1000 - now.microsecond % 1000
+            now += datetime.timedelta(microseconds=usecs)
+        
         delta = timeout if repeat else None
         self.timeout_handlers_by_key[self.next_timeout_key] = (now + timeout, handler, delta)
         self.next_timeout_key += 1
