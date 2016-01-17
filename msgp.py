@@ -406,7 +406,11 @@ class MsgpDispatcher(Loggable):
 
 
     def wrap_response_handler(self, source, body, response_handler, remote_id):
-        self.logger.debug("Received response %s/%s" % (remote_id, source))
+        if source is not None:
+            self.logger.debug("Received response %s/%s" % (remote_id, source))
+        else:
+            self.logger.debug("Not received response %s/-" % (remote_id,))
+            
         msgid = (remote_id, source)
         response_handler(msgid, body)
     

@@ -7,7 +7,7 @@ import wave
 
 import g711
 from msgp import MsgpServer
-from async import WeakMethod
+from async import WeakMethod, Weak
 from util import Loggable, build_oid
 
 
@@ -109,6 +109,21 @@ def parse_rtp(packet):
     payload = packet[12:]
 
     return ssrc, seq, timestamp, payload_type, payload
+
+
+def parse_telephone_event(payload):
+    te = struct.unpack_from("!I", payload)[0]
+    event = (te & 0xff000000) >> 24
+    end = bool(te & 0x00800000)
+    volume = (te & 0x003f0000) >> 16
+    duration = (te & 0x0000ffff)
+    
+    return event, end, volume, duration
+
+
+def build_telephone_event(event, end, volume, duration):
+    te = (event & 0xff) << 24 | (int(end) & 0x1) << 23 | (volume & 0x3f) << 16 | (duration & 0xffff)
+    struct.pack('!I', te)
 
 
 def prid(sid):
@@ -258,13 +273,69 @@ class RtpRecorder(RtpBase):
         return samples
 
 
+class DtmfBase:
+    keys_by_event = {
+        0: "0", 1: "1", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9",
+        10: "*", 11: "#", 12: "A", 13: "B", 14: "C", 15: "D"
+    }
+    
+    events_by_key = {
+        "0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9,
+        "*": 10, "#": 11, "A": 12, "B": 13, "C": 14, "D": 15
+    }
+    
+
+class DtmfExtractor(DtmfBase):
+    def __init__(self, report):
+        self.report = report
+        self.last_timestamp = None
+        self.last_duration = None
+        
+        
+    def process(self, format, packet):
+        encoding, clock = format
+        
+        if encoding != "telephone-event":
+            return False
+            
+        ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
+
+        if self.last_timestamp is not None:
+            if timestamp < self.last_timestamp + self.last_duration:
+                return True
+
+        event, end, volume, duration = parse_telephone_event(payload)
+        
+        if duration == 0:
+            return True
+            
+        self.last_timestamp = timestamp
+        self.last_duration = duration
+        key = self.keys_by_event.get(event)
+        
+        if key:
+            self.report(key)
+            
+        return True
+    
+
 class Thing(Loggable):
     def __init__(self, oid, label, owner_sid):
         Loggable.__init__(self)
 
         self.label = label
         self.owner_sid = owner_sid
+        self.mgw = None
         self.set_oid(oid)
+        
+        
+    def set_mgw(self, mgw):
+        self.mgw = mgw
+        
+    
+    def report(self, tag, params, response_handler=None):
+        msgid = (self.owner_sid, tag)
+        self.mgw.report(msgid, dict(params, id=self.label), response_handler=response_handler)
         
         
     def modify(self, params):
@@ -286,7 +357,7 @@ class Leg(Thing):
 
     def set_forward_handler(self, fh):
         self.forward_handler = fh
-                    
+    
         
     def recv_format(self, format, packet):
         if self.forward_handler:
@@ -386,12 +457,14 @@ class PassLeg(Leg):
 class NetLeg(Leg):
     def __init__(self, oid, label, owner_sid, metapoll):
         super().__init__(oid, label, owner_sid, "net")
+        
         self.local_addr = None
         self.remote_addr = None
         self.socket = None
         self.metapoll = metapoll
         self.send_pts_by_format = None
         self.recv_formats_by_pt = None
+        self.dtmf_extractor = DtmfExtractor(WeakMethod(self.dtmf_detected))
         
         
     def __del__(self):
@@ -433,7 +506,7 @@ class NetLeg(Leg):
     def recved(self):
         #print("Receiving on %s" % self.name)
         packet, addr = self.socket.recvfrom(65535)
-        packet = bytearray(packet)  # TODO: use Py3
+        packet = bytearray(packet)
         
         if self.remote_addr:
             remote_host, remote_port = self.remote_addr
@@ -445,10 +518,7 @@ class NetLeg(Leg):
                 return
         
         if addr != self.remote_addr:
-            params = { 'id': self.label, 'remote_addr': addr }
-            msgid = (self.owner_sid, "detected")
-            self.context.manager.msgp.send(msgid, params)
-            
+            self.report("detected", { 'id': self.label, 'remote_addr': addr })
             self.remote_addr = addr
             
         pt = get_payload_type(packet)
@@ -458,9 +528,18 @@ class NetLeg(Leg):
         except KeyError:
             self.logger.debug("Ignoring received unknown payload type %d" % pt)
         else:
-            self.recv_format(format, packet)
+            if not self.dtmf_extractor.process(format, packet):
+                self.recv_format(format, packet)
     
-
+    
+    def dtmf_detected(self, key):
+        self.report("dtmf_detected", {'key': key}, response_handler=WeakMethod(self.dtmf_detected_response))
+        
+        
+    def dtmf_detected_response(self, msgid, params):
+        self.logger.debug("Seems like he MGC %sacknowledged our DTMF!" % ("" if msgid[1] else "NOT "))
+        
+    
     def send_format(self, format, packet):
         try:
             pt = self.send_pts_by_format[format]  # pt can be 0, which is false...
@@ -592,6 +671,10 @@ class MediaGateway(Loggable):
     
     def get_leg(self, label):
         return self.legs_by_label[label]
+
+
+    def report(self, msgid, params, response_handler=None):
+        self.msgp.send(msgid, params, response_handler=response_handler)
         
 
     # Things
@@ -601,6 +684,8 @@ class MediaGateway(Loggable):
             raise Error("Duplicate %s!" % thing.__class__)
         
         things[thing.label] = thing
+        thing.set_mgw(Weak(self))
+        
         return thing
         
         

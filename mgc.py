@@ -31,7 +31,7 @@ class MediaLeg(Loggable):
             #self.sid = self.mgc.generate_leg_sid(self.affinity)
             #self.sid = self.mgc.select_gateway_sid(self.affinity)
             params = dict(params, id=self.oid, type=self.type)
-            self.mgc.create_leg(self.sid, params, response_handler=lambda x, y: None)  # TODO
+            self.mgc.create_leg(self.sid, params, response_handler=lambda x, y: None, request_handler=WeakMethod(self.process_request))  # TODO
         else:
             params = dict(params, id=self.oid)
             self.mgc.modify_leg(self.sid, params, response_handler=lambda x, y: None)  # TODO
@@ -44,6 +44,10 @@ class MediaLeg(Loggable):
             self.mgc.delete_leg(self.sid, params, response_handler=response_handler)
         else:
             handler()
+            
+        
+    def process_request(self, target, msgid, params):
+        self.logger.warning("Unknown request %s from MGW!" % target)
 
 
 class PassMediaLeg(MediaLeg):
@@ -94,6 +98,14 @@ class ProxiedMediaLeg(MediaLeg):
         changes = { k: v for k, v in new.items() if v != self.committed.get(k) }
         self.committed.update(changes)
         self.refresh(changes)
+        
+    
+    def process_request(self, target, msgid, params):
+        if target == "dtmf_detected":
+            self.logger.debug("Yay, just detected a DTMF %s!" % params["key"])
+            self.mgc.send_message(msgid, "OK")
+        else:
+            MediaLeg.process_request(self, target, msgid, params)
         
         
 class MediaContext(Loggable):
@@ -171,6 +183,7 @@ class Controller(Loggable):
         self.metapoll = metapoll
         self.mgw_sid = None  # FIXME: Msgp can handle multiple connections already!
         
+        self.request_handlers_by_id = {}
         self.msgp = MsgpClient(metapoll, WeakMethod(self.process_request), WeakMethod(self.status_changed))
         
         
@@ -181,42 +194,62 @@ class Controller(Loggable):
 
     def add_mgw_addr(self, addr):
         self.msgp.add_mgw_addr(addr)
-                
-        
-    def send_message(self, sid, target, params, response_handler):
-        if not params.get('id'):
-            raise Exception("An id is missing here...")
+    
+    
+    def manage_request_handler(self, id, request_handler):
+        if request_handler:
+            self.logger.debug("Added request handler %s." % id)
+            self.request_handlers_by_id[id] = request_handler
+        else:
+            if self.request_handlers_by_id.pop(id):
+                self.logger.debug("Removed request handler %s." % id)
+
+
+    def send_message(self, msgid, params, response_handler=None, request_handler=None):
+        if not msgid[1].isdigit() and not params.get('id'):
+            raise Exception("A request id is missing here...")
             
-        msgid = (sid, target)
         self.msgp.send(msgid, params, response_handler=response_handler)
         
         
     def process_request(self, target, msgid, params):
-        self.logger.debug("Unsolicited request from the MGW!")
+        if not params.get('id'):
+            self.logger.error("Request from MGW without id, can't process!")
+        else:
+            self.logger.debug("Request %s from MGW to %s" % (target, params["id"]))
+            request_handler = self.request_handlers_by_id.get(params["id"])
+            
+            if request_handler:
+                request_handler(target, msgid, params)
+            else:
+                self.logger.warning("No handler for this request!")
         
         
+    # TODO: remove these methods
     def create_context(self, sid, params, response_handler=None):
-        self.send_message(sid, "create_context", params, response_handler)
+        self.send_message((sid, "create_context"), params, response_handler)
 
 
     def modify_context(self, sid, params, response_handler=None):
-        self.send_message(sid, "modify_context", params, response_handler)
+        self.send_message((sid, "modify_context"), params, response_handler)
 
 
     def delete_context(self, sid, params, response_handler=None):
-        self.send_message(sid, "delete_context", params, response_handler)
+        self.send_message((sid, "delete_context"), params, response_handler)
         
         
-    def create_leg(self, sid, params, response_handler=None):
-        self.send_message(sid, "create_leg", params, response_handler)
+    def create_leg(self, sid, params, response_handler=None, request_handler=None):
+        self.manage_request_handler(params["id"], request_handler)
+        self.send_message((sid, "create_leg"), params, response_handler)
 
 
     def modify_leg(self, sid, params, response_handler=None):
-        self.send_message(sid, "modify_leg", params, response_handler)
+        self.send_message((sid, "modify_leg"), params, response_handler)
 
 
     def delete_leg(self, sid, params, response_handler=None):
-        self.send_message(sid, "delete_leg", params, response_handler)
+        self.send_message((sid, "delete_leg"), params, response_handler)
+        self.manage_request_handler(params["id"], None)
 
 
     def status_changed(self, sid, remote_addr):
