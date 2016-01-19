@@ -1,7 +1,7 @@
 import socket
 import weakref
 
-from rtp import read_wav, write_wav, RtpPlayer, RtpRecorder, DtmfExtractor, get_payload_type, set_payload_type
+from rtp import read_wav, write_wav, RtpPlayer, RtpRecorder, DtmfExtractor, DtmfInjector, get_payload_type, set_payload_type
 from msgp import MsgpServer
 from async import WeakMethod, Weak
 from util import Loggable, build_oid
@@ -156,6 +156,7 @@ class NetLeg(Leg):
         self.send_pts_by_format = None
         self.recv_formats_by_pt = None
         self.dtmf_extractor = DtmfExtractor(WeakMethod(self.dtmf_detected))
+        self.dtmf_injector = DtmfInjector()
         
         
     def __del__(self):
@@ -172,6 +173,10 @@ class NetLeg(Leg):
         
         if "send_formats" in params:
             self.send_pts_by_format = { tuple(v): int(k) for k, v in params["send_formats"].items() }
+            
+            for format, pt in self.send_pts_by_format.items():
+                if format[0] == "telephone-event":
+                    self.dtmf_injector.set_clock_and_payload_type(format[1], pt)
             
         #print("send_formats: %s" % (self.send_pts_by_format,))
             
@@ -242,11 +247,26 @@ class NetLeg(Leg):
         
         if not self.remote_addr or not self.remote_addr[1]:
             return
+
+        if self.dtmf_injector.process(packet):
+            return
             
         #print("Sending to %s" % (self.remote_addr,))
         # packet should be a bytearray here
         self.socket.sendto(packet, self.remote_addr)
 
+
+    def send_dtmf(self, keys):
+        packets = self.dtmf_injector.inject(keys)
+        
+        if not self.remote_addr or not self.remote_addr[1]:
+            return
+            
+        for packet in packets:
+            #print("Sending to %s" % (self.remote_addr,))
+            # packet should be a bytearray here
+            self.socket.sendto(packet, self.remote_addr)
+        
 
 class EchoLeg(Leg):
     def __init__(self, oid, label, owner_sid):

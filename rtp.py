@@ -1,6 +1,7 @@
 import struct
 import datetime
 import wave
+import math
 
 import g711
 from async import WeakMethod
@@ -79,6 +80,7 @@ def decode_samples(encoding, payload):
     return samples
 
 
+# TODO: add the marker flag!
 def build_rtp(ssrc, seq, timestamp, payload_type, payload):
     version = 2
     padding = 0
@@ -270,6 +272,9 @@ class RtpRecorder(RtpBase):
 
 
 class DtmfBase:
+    MIN_DURATION = datetime.timedelta(milliseconds=40)
+    PTIME = datetime.timedelta(milliseconds=20)
+    
     keys_by_event = {
         0: "0", 1: "1", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9",
         10: "*", 11: "#", 12: "A", 13: "B", 14: "C", 15: "D"
@@ -302,7 +307,7 @@ class DtmfExtractor(DtmfBase):
 
         event, end, volume, duration = parse_telephone_event(payload)
         
-        if duration == 0:
+        if duration < int(clock * self.MIN_DURATION.total_seconds()):
             return True
             
         self.last_timestamp = timestamp
@@ -313,3 +318,65 @@ class DtmfExtractor(DtmfBase):
             self.report(key)
             
         return True
+
+
+class DtmfInjector(DtmfBase):
+    def __init__(self):
+        self.payload_type = None
+        self.clock = None
+        self.dtmf_duration = None
+        
+        self.ssrc = None
+        self.last_seq = None
+        self.last_timestamp = None
+        self.last_duration = None
+
+
+    def set_clock_and_payload_type(self, clock, payload_type):
+        self.clock = clock
+        self.payload_type = payload_type
+        
+        dtmf_length = self.PTIME * math.ceil(self.MIN_DURATION / self.PTIME)
+        self.dtmf_duration = int(self.clock * dtmf_length)
+        
+        
+    def inject(self, keys):
+        # TODO: this is wrong if one frame is made of multiple packets, we'd
+        # cut it in half with this! Must delay sending until the current frame ends!
+        # Wait until the time stamp increases? No, we can't wait for external packets...
+        
+        packets = []
+        
+        for key in keys:
+            event = self.events_by_key.get(key)
+            if not event:
+                continue
+
+            volume = 10
+
+            self.last_timestamp += self.last_duration
+            self.last_duration = self.dtmf_duration
+        
+            payload = build_telephone_event(event, True, volume, self.last_duration)
+        
+            for i in range(3):
+                self.last_seq += 1
+                packet = build_rtp(self.ssrc, self.last_seq, self.last_timestamp, self.payload_type, payload)
+                packets.append(packet)
+
+        return packets
+        
+        
+    def process(self, packet):
+        ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
+        
+        if self.ssrc is not None:
+            if timestamp < self.last_timestamp + self.last_duration:
+                return True
+        
+        self.ssrc = ssrc
+        self.last_seq = seq
+        self.last_timestamp = timestamp
+        self.last_duration = int(self.PTIME.total_seconds() * self.clock)
+            
+        return False
