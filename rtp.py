@@ -2,6 +2,7 @@ import struct
 import datetime
 import wave
 import math
+import collections
 
 import g711
 from async import WeakMethod
@@ -9,6 +10,10 @@ from util import Loggable
 
 
 class Error(Exception): pass
+
+Format = collections.namedtuple("Format", [ "encoding", "clock" ])
+
+Packet = collections.namedtuple("Packet", [ "format", "timestamp", "marker", "payload" ])
 
 
 def get_payload_type(packet):
@@ -75,22 +80,21 @@ def decode_samples(encoding, payload):
     elif encoding == "PCMU":
         samples = g711.decode_pcmu(payload)
     else:
-        raise Error("WTF?")
+        raise Error("Can't decode %s!" % (encoding,))
         
     return samples
 
 
 # TODO: add the marker flag!
-def build_rtp(ssrc, seq, timestamp, payload_type, payload):
+def build_rtp(ssrc, seq, timestamp, marker, payload_type, payload):
     version = 2
     padding = 0
     extension = 0
     csrc_count = 0
-    marker = 0
     
     packet = bytearray(12 + len(payload))
     packet[0] = version << 6 | padding << 5 | extension << 4 | csrc_count
-    packet[1] = marker << 7 | payload_type & 0x7f
+    packet[1] = int(marker) << 7 | payload_type & 0x7f
     struct.pack_into('!H', packet, 2, seq)
     struct.pack_into('!I', packet, 4, timestamp)
     struct.pack_into('!I', packet, 8, ssrc)
@@ -101,12 +105,13 @@ def build_rtp(ssrc, seq, timestamp, payload_type, payload):
 
 def parse_rtp(packet):
     payload_type = packet[1] & 0x7f
+    marker = bool(packet[1] & 0x80)
     seq = struct.unpack_from("!H", packet, 2)[0]
     timestamp = struct.unpack_from("!I", packet, 4)[0]
     ssrc = struct.unpack_from("!I", packet, 8)[0]
     payload = packet[12:]
 
-    return ssrc, seq, timestamp, payload_type, payload
+    return ssrc, seq, timestamp, marker, payload_type, payload
 
 
 def parse_telephone_event(payload):
@@ -134,49 +139,38 @@ def prid(sid):
 class RtpBase(Loggable):
     PTIME = 20
     PLAY_INFO = {
-        ("*",    8000): (1,),  # artificial codec for recording
-        ("PCMU", 8000): (1,),
-        ("PCMA", 8000): (1,)
+        Format("*",    8000): (1,),  # artificial codec for recording
+        Format("PCMU", 8000): (1,),
+        Format("PCMA", 8000): (1,)
     }
     BYTES_PER_SAMPLE = 2
     
     
     def __init__(self):
-        self.ssrc = None
-        self.base_seq = None
-        self.base_timestamp = None
-        
         self.format = None
-        self.encoding = None
-        self.clock = None
         self.bytes_per_sample = None
         self.samples_per_packet = None
 
         
     def set_format(self, format):
         if format not in self.PLAY_INFO:
-            raise Error("Unknown format for playing: %s" % format)
+            raise Error("Unknown format for playing: %s" % (format,))
             
         self.format = format
-        self.encoding, self.clock = format
         self.bytes_per_sample, = self.PLAY_INFO[format]
-        self.samples_per_packet = int(self.clock * self.PTIME / 1000)
+        self.samples_per_packet = int(self.format.clock * self.PTIME / 1000)
     
 
 class RtpPlayer(RtpBase):
     def __init__(self, metapoll, format, data, handler, volume=1, fade=0):
         RtpBase.__init__(self)
 
-        self.ssrc = 0  # should be random
-        self.base_seq = 0  # too
-        self.base_timestamp = 0  # too
+        self.timestamp = 0
         
         self.metapoll = metapoll
         self.data = data  # mono 16 bit LSB LPCM
         self.handler = handler
         
-        self.offset = 0
-        self.next_seq = 0
         self.volume = 0
         
         self.set_format(format)
@@ -198,26 +192,25 @@ class RtpPlayer(RtpBase):
         
 
     def play(self):
-        seq = self.next_seq
-        self.next_seq += 1
+        timestamp = self.timestamp
+        self.timestamp += self.samples_per_packet
         
-        timestamp = seq * self.samples_per_packet
-        
-        new_offset = self.offset + self.samples_per_packet * self.BYTES_PER_SAMPLE
-        samples = self.data[self.offset:new_offset]
-        self.offset = new_offset
+        old_offset = timestamp * self.BYTES_PER_SAMPLE
+        new_offset = self.timestamp * self.BYTES_PER_SAMPLE
+        samples = self.data[old_offset:new_offset]
         
         if self.fade_steps:
             self.fade_steps -= 1
             self.volume += self.fade_step
         
         amplify_wav(samples, self.volume)
-        payload = encode_samples(self.encoding, samples)
+        payload = encode_samples(self.format.encoding, samples)
             
-        packet = build_rtp(self.ssrc, self.base_seq + seq, self.base_timestamp + timestamp, 127, payload)
-        self.handler(self.format, packet)
+        packet = Packet(self.format, timestamp, True, payload)
+        #packet = build_rtp(self.ssrc, self.base_seq + seq, self.base_timestamp + timestamp, 127, payload)
+        self.handler(packet)
         
-        if self.offset >= len(self.data):
+        if new_offset >= len(self.data):
             self.metapoll.unregister_timeout(self.handle)
             self.handle = None
 
@@ -226,36 +219,28 @@ class RtpRecorder(RtpBase):
     def __init__(self, format):
         RtpBase.__init__(self)
         
+        self.base_timestamp = None
         self.chunks = []  # mono 16 bit LSB LPCM
-        self.last_seq = None
 
         self.set_format(format)
         
         
-    def record(self, format, packet):
-        encoding, clock = format
-        
-        if clock != self.clock:
-            self.logger.warning("Clock %s is not the expected %s!" % (clock, self.clock))
+    def record_packet(self, packet):
+        if packet.format.clock != self.format.clock:
+            self.logger.warning("Clock %s is not the expected %s!" % (packet.format.clock, self.format.clock))
             return
             
-        ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
+        #ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
     
-        if self.ssrc is None:
-            self.ssrc = ssrc
-            self.base_seq = seq
-            self.base_timestamp = timestamp
-            self.last_seq = seq
-        elif seq > self.last_seq:
-            self.last_seq = seq
-        else:
-            # TODO: maybe order a bit?
-            return
+        if self.base_timestamp is None:
+            self.base_timestamp = packet.timestamp
+        elif packet.timestamp < self.base_timestamp:
+            return  # Oops, started recording later!
         
-        n = int((timestamp - self.base_timestamp) / self.samples_per_packet)
+        n = int((packet.timestamp - self.base_timestamp) / self.samples_per_packet)
         #self.logger.info("Recording chunk %d" % n)
 
-        samples = decode_samples(encoding, payload)
+        samples = decode_samples(packet.format.encoding, packet.payload)
         
         while n >= len(self.chunks):
             self.chunks.append(None)
@@ -293,24 +278,22 @@ class DtmfExtractor(DtmfBase):
         self.last_duration = None
         
         
-    def process(self, format, packet):
-        encoding, clock = format
-        
-        if encoding != "telephone-event":
+    def process(self, packet):
+        if packet.format.encoding != "telephone-event":
             return False
             
-        ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
+        #ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
 
         if self.last_timestamp is not None:
-            if timestamp < self.last_timestamp + self.last_duration:
+            if packet.timestamp < self.last_timestamp + self.last_duration:
                 return True
 
-        event, end, volume, duration = parse_telephone_event(payload)
+        event, end, volume, duration = parse_telephone_event(packet.payload)
         
-        if duration < int(clock * self.MIN_DURATION.total_seconds()):
+        if duration < int(packet.format.clock * self.MIN_DURATION.total_seconds()):
             return True
             
-        self.last_timestamp = timestamp
+        self.last_timestamp = packet.timestamp
         self.last_duration = duration
         key = self.keys_by_event.get(event)
         
@@ -322,22 +305,18 @@ class DtmfExtractor(DtmfBase):
 
 class DtmfInjector(DtmfBase):
     def __init__(self):
-        self.payload_type = None
-        self.clock = None
+        self.format = None
         self.dtmf_duration = None
         
-        self.ssrc = None
-        self.last_seq = None
         self.last_timestamp = None
         self.last_duration = None
 
 
-    def set_clock_and_payload_type(self, clock, payload_type):
-        self.clock = clock
-        self.payload_type = payload_type
+    def set_format(self, format):
+        self.format = format
         
         dtmf_length = self.PTIME * math.ceil(self.MIN_DURATION / self.PTIME)
-        self.dtmf_duration = int(self.clock * dtmf_length)
+        self.dtmf_duration = int(self.format.clock * dtmf_length.total_seconds())
         
         
     def inject(self, keys):
@@ -358,25 +337,78 @@ class DtmfInjector(DtmfBase):
             self.last_duration = self.dtmf_duration
         
             payload = build_telephone_event(event, True, volume, self.last_duration)
-        
+            packet = Packet(self.format, self.last_timestamp, True, payload)
+            
             for i in range(3):
-                self.last_seq += 1
-                packet = build_rtp(self.ssrc, self.last_seq, self.last_timestamp, self.payload_type, payload)
                 packets.append(packet)
-
+            #build_rtp(self.ssrc, self.last_seq, self.last_timestamp, self.payload_type, payload)
+        
         return packets
         
         
     def process(self, packet):
-        ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
+        #ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
         
-        if self.ssrc is not None:
-            if timestamp < self.last_timestamp + self.last_duration:
+        if self.last_timestamp:
+            if packet.timestamp < self.last_timestamp + self.last_duration:
                 return True
         
-        self.ssrc = ssrc
-        self.last_seq = seq
-        self.last_timestamp = timestamp
-        self.last_duration = int(self.PTIME.total_seconds() * self.clock)
+        self.last_timestamp = packet.timestamp
+        self.last_duration = int(self.PTIME.total_seconds() * self.format.clock)
             
         return False
+
+
+class RtpBuilder:
+    def __init__(self):
+        self.ssrc = 0  # TODO: generate
+        self.last_seq = 0  # TODO: generate
+        self.base_timestamp = 0  # TODO: generate
+        self.payload_types_by_format = {}
+        
+        
+    def set_payload_types_by_format(self, ptbf):
+        self.payload_types_by_format = ptbf
+        
+        
+    def build(self, packet):
+        payload_type = self.payload_types_by_format.get(packet.format)
+        if payload_type is None:
+            return None
+            
+        self.last_seq += 1
+        
+        udp = build_rtp(self.ssrc, self.last_seq, packet.timestamp + self.base_timestamp, packet.marker, payload_type, packet.payload)
+        
+        return udp
+
+
+class RtpParser:
+    def __init__(self):
+        self.last_seq = None
+        self.base_timestamp = None
+        self.formats_by_payload_type = {}
+        
+        
+    def set_formats_by_payload_type(self, fbpt):
+        self.formats_by_payload_type = fbpt
+        
+        
+    def parse(self, udp):
+        ssrc, seq, timestamp, marker, payload_type, payload = parse_rtp(udp)
+        
+        format = self.formats_by_payload_type.get(payload_type)
+        if format is None:
+            return None
+            
+        if self.last_seq is not None and seq < self.last_seq:
+            return None
+            
+        self.last_seq = seq
+            
+        if self.base_timestamp is None:
+            self.base_timestamp = timestamp
+            
+        packet = Packet(format, timestamp - self.base_timestamp, marker, payload)
+        
+        return packet

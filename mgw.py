@@ -1,7 +1,7 @@
 import socket
 import weakref
 
-from rtp import read_wav, write_wav, RtpPlayer, RtpRecorder, DtmfExtractor, DtmfInjector, get_payload_type, set_payload_type
+from rtp import read_wav, write_wav, RtpPlayer, RtpRecorder, RtpBuilder, RtpParser, DtmfExtractor, DtmfInjector, Format
 from msgp import MsgpServer
 from async import WeakMethod, Weak
 from util import Loggable, build_oid
@@ -50,14 +50,14 @@ class Leg(Thing):
         self.forward_handler = fh
     
         
-    def recv_format(self, format, packet):
+    def recv_packet(self, packet):
         if self.forward_handler:
-            self.forward_handler(format, packet)
+            self.forward_handler(packet)
         else:
             self.logger.warning("No context to forward media to!")
 
 
-    def send_format(self, format, packet):
+    def send_packet(self, packet):
         raise NotImplementedError()
 
 
@@ -101,7 +101,7 @@ class PassLeg(Leg):
             self.other_label = params["other"]
             
         if "format" in params:
-            self.format = tuple(params["format"])
+            self.format = Format(*params["format"])
             
             if self.recv_recorder:
                 self.recv_recorder.set_format(self.format)
@@ -128,20 +128,20 @@ class PassLeg(Leg):
                 self.logger.error("Can't save recording without a filename!")
 
 
-    def recv_format(self, format, packet):
+    def recv_packet(self, packet):
         if self.is_recording:
-            self.recv_recorder.record(format, packet)
+            self.recv_recorder.record_packet(packet)
 
-        Leg.recv_format(self, format, packet)
+        Leg.recv_packet(self, packet)
         
 
-    def send_format(self, format, packet):
+    def send_packet(self, packet):
         if self.is_recording:
-            self.send_recorder.record(format, packet)
+            self.send_recorder.record_packet(packet)
             
         other_leg = self.pass_legs_by_label.get(self.other_label)
         if other_leg:
-            other_leg.recv_format(format, packet)
+            other_leg.recv_packet(packet)
         
         
 
@@ -153,8 +153,10 @@ class NetLeg(Leg):
         self.remote_addr = None
         self.socket = None
         self.metapoll = metapoll
-        self.send_pts_by_format = None
-        self.recv_formats_by_pt = None
+        #self.send_pts_by_format = None
+        #self.recv_formats_by_pt = None
+        self.rtp_parser = RtpParser()
+        self.rtp_builder = RtpBuilder()
         self.dtmf_extractor = DtmfExtractor(WeakMethod(self.dtmf_detected))
         self.dtmf_injector = DtmfInjector()
         
@@ -172,16 +174,18 @@ class NetLeg(Leg):
         #print("Setting leg: %s" % (params,))
         
         if "send_formats" in params:
-            self.send_pts_by_format = { tuple(v): int(k) for k, v in params["send_formats"].items() }
+            payload_types_by_format = { Format(*v): int(k) for k, v in params["send_formats"].items() }
+            self.rtp_builder.set_payload_types_by_format(payload_types_by_format)
             
-            for format, pt in self.send_pts_by_format.items():
-                if format[0] == "telephone-event":
-                    self.dtmf_injector.set_clock_and_payload_type(format[1], pt)
+            for format in payload_types_by_format:
+                if format.encoding == "telephone-event":
+                    self.dtmf_injector.set_format(format)
             
         #print("send_formats: %s" % (self.send_pts_by_format,))
             
         if "recv_formats" in params:
-            self.recv_formats_by_pt = { int(k): tuple(v) for k, v in params["recv_formats"].items() }
+            formats_by_payload_type = { int(k): Format(*v) for k, v in params["recv_formats"].items() }
+            self.rtp_parser.set_formats_by_payload_type(formats_by_payload_type)
 
         if "local_addr" in params:
             try:
@@ -201,8 +205,8 @@ class NetLeg(Leg):
     
     def recved(self):
         #print("Receiving on %s" % self.name)
-        packet, addr = self.socket.recvfrom(65535)
-        packet = bytearray(packet)
+        udp, addr = self.socket.recvfrom(65535)
+        udp = bytearray(udp)
         
         if self.remote_addr:
             remote_host, remote_port = self.remote_addr
@@ -217,15 +221,12 @@ class NetLeg(Leg):
             self.report("detected", { 'id': self.label, 'remote_addr': addr })
             self.remote_addr = addr
             
-        pt = get_payload_type(packet)
-        
-        try:
-            format = self.recv_formats_by_pt[pt]
-        except KeyError:
-            self.logger.debug("Ignoring received unknown payload type %d" % pt)
-        else:
-            if not self.dtmf_extractor.process(format, packet):
-                self.recv_format(format, packet)
+        packet = self.rtp_parser.parse(udp)
+
+        if packet is None:
+            self.logger.debug("Ignoring received unknown payload type!")
+        elif not self.dtmf_extractor.process(packet):
+            self.recv_packet(packet)
     
     
     def dtmf_detected(self, key):
@@ -235,37 +236,32 @@ class NetLeg(Leg):
     def dtmf_detected_response(self, msgid, params):
         self.logger.debug("Seems like he MGC %sacknowledged our DTMF!" % ("" if msgid[1] else "NOT "))
         
-    
-    def send_format(self, format, packet):
-        try:
-            pt = self.send_pts_by_format[format]  # pt can be 0, which is false...
-        except (TypeError, KeyError):
+        
+    def send_checked(self, packet):
+        udp = self.rtp_builder.build(packet)
+        
+        if udp is None:
             self.logger.debug("Ignoring sent unknown payload format %s" % (format,))
             return
-            
-        set_payload_type(packet, pt)
-        
-        if not self.remote_addr or not self.remote_addr[1]:
-            return
 
-        if self.dtmf_injector.process(packet):
+        if not self.remote_addr or not self.remote_addr[1]:
             return
             
         #print("Sending to %s" % (self.remote_addr,))
         # packet should be a bytearray here
-        self.socket.sendto(packet, self.remote_addr)
+        self.socket.sendto(udp, self.remote_addr)
+    
+    
+    def send_packet(self, packet):
+        if not self.dtmf_injector.process(packet):
+            self.send_checked(packet)
 
 
     def send_dtmf(self, keys):
         packets = self.dtmf_injector.inject(keys)
         
-        if not self.remote_addr or not self.remote_addr[1]:
-            return
-            
         for packet in packets:
-            #print("Sending to %s" % (self.remote_addr,))
-            # packet should be a bytearray here
-            self.socket.sendto(packet, self.remote_addr)
+            self.send_checked(packet)
         
 
 class EchoLeg(Leg):
@@ -275,14 +271,14 @@ class EchoLeg(Leg):
         self.buffer = []
 
 
-    def send_format(self, format, packet):
+    def send_packet(self, packet):
         # We don't care about payload types
         #self.logger.debug("Echoing %s packet on %s" % (format, self.label))
-        self.buffer.append((format, packet))
+        self.buffer.append(packet)
         
         if len(self.buffer) > 10:
-            f, p = self.buffer.pop(0)
-            self.recv_format(f, p)
+            p = self.buffer.pop(0)
+            self.recv_packet(p)
 
 
 class PlayerLeg(Leg):
@@ -312,7 +308,7 @@ class PlayerLeg(Leg):
                 self.rtp_player.set_volume(self.volume, fade)
 
         if "format" in params:
-            self.format = tuple(params["format"])
+            self.format = Format(*params["format"])
             
             if self.rtp_player:
                 self.rtp_player.set_format(self.format)
@@ -320,10 +316,10 @@ class PlayerLeg(Leg):
         if "filename" in params:
             samples = read_wav(params["filename"])
             
-            self.rtp_player = RtpPlayer(self.metapoll, self.format, samples, WeakMethod(self.recv_format), self.volume, fade)
+            self.rtp_player = RtpPlayer(self.metapoll, self.format, samples, WeakMethod(self.recv_packet), self.volume, fade)
 
 
-    def send_format(self, format, packet):
+    def send_packet(self, packet):
         pass
 
 
@@ -349,10 +345,10 @@ class Context(Thing):
         self.legs = [ self.manager.get_leg(label) for label in leg_labels ]
 
         for i, leg in enumerate(self.legs):
-            leg.set_forward_handler(WeakMethod(self.forward, i))
+            leg.set_forward_handler(WeakMethod(self.forward, i).bind_front())
 
 
-    def forward(self, format, packet, li):  # li is bound
+    def forward(self, li, packet):
         lj = (1 if li == 0 else 0)
         
         try:
@@ -362,7 +358,7 @@ class Context(Thing):
 
         #print("Forwarding in %s a %s from %d to %d" % (self.label, format, li, lj))
         
-        leg.send_format(format, packet)
+        leg.send_packet(packet)
 
 
 class MediaGateway(Loggable):
