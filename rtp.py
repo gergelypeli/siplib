@@ -126,8 +126,8 @@ def parse_telephone_event(payload):
 
 def build_telephone_event(event, end, volume, duration):
     te = (event & 0xff) << 24 | (int(end) & 0x1) << 23 | (volume & 0x3f) << 16 | (duration & 0xffff)
-    struct.pack('!I', te)
-
+    return struct.pack('!I', te)
+    
 
 def prid(sid):
     addr, label = sid
@@ -319,31 +319,24 @@ class DtmfInjector(DtmfBase):
         self.dtmf_duration = int(self.format.clock * dtmf_length.total_seconds())
         
         
-    def inject(self, keys):
+    def inject(self, name):
         # TODO: this is wrong if one frame is made of multiple packets, we'd
         # cut it in half with this! Must delay sending until the current frame ends!
         # Wait until the time stamp increases? No, we can't wait for external packets...
         
-        packets = []
-        
-        for key in keys:
-            event = self.events_by_key.get(key)
-            if not event:
-                continue
+        event = self.events_by_key.get(name)
+        if not event:
+            return []
 
-            volume = 10
+        volume = 10
 
-            self.last_timestamp += self.last_duration
-            self.last_duration = self.dtmf_duration
+        self.last_timestamp += self.last_duration
+        self.last_duration = self.dtmf_duration
+    
+        payload = build_telephone_event(event, True, volume, self.last_duration)
+        packet = Packet(self.format, self.last_timestamp, True, payload)
         
-            payload = build_telephone_event(event, True, volume, self.last_duration)
-            packet = Packet(self.format, self.last_timestamp, True, payload)
-            
-            for i in range(3):
-                packets.append(packet)
-            #build_rtp(self.ssrc, self.last_seq, self.last_timestamp, self.payload_type, payload)
-        
-        return packets
+        return [ packet, packet, packet ]
         
         
     def process(self, packet):

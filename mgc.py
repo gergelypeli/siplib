@@ -44,6 +44,11 @@ class MediaLeg(Loggable):
             self.mgc.delete_leg(self.sid, params, response_handler=response_handler)
         else:
             handler()
+
+
+    def notify(self, type, params):
+        params = dict(params, id=self.oid)
+        self.mgc.send_message((self.sid, type), params)
             
         
     def process_request(self, target, msgid, params):
@@ -86,10 +91,11 @@ class PlayerMediaLeg(MediaLeg):
 
 
 class ProxiedMediaLeg(MediaLeg):
-    def __init__(self, mgc, sid, local_addr):
+    def __init__(self, mgc, sid, local_addr, report=None):
         super().__init__(mgc, sid, "net")
 
         self.local_addr = local_addr
+        self.report = report
         self.committed = {}
 
 
@@ -101,11 +107,13 @@ class ProxiedMediaLeg(MediaLeg):
         
     
     def process_request(self, target, msgid, params):
-        if target == "dtmf_detected":
-            self.logger.debug("Yay, just detected a DTMF %s!" % params["key"])
+        if target == "tone":
+            self.logger.debug("Yay, just got a tone %s!" % (params,))
             self.mgc.send_message(msgid, "OK")
+            self.report("tone", params)
         else:
             MediaLeg.process_request(self, target, msgid, params)
+            
         
         
 class MediaContext(Loggable):
@@ -213,11 +221,13 @@ class Controller(Loggable):
         
         
     def process_request(self, target, msgid, params):
-        if not params.get('id'):
+        oid = params.pop('id', None)
+        
+        if not oid:
             self.logger.error("Request from MGW without id, can't process!")
         else:
-            self.logger.debug("Request %s from MGW to %s" % (target, params["id"]))
-            request_handler = self.request_handlers_by_id.get(params["id"])
+            self.logger.debug("Request %s from MGW to %s" % (target, oid))
+            request_handler = self.request_handlers_by_id.get(oid)
             
             if request_handler:
                 request_handler(target, msgid, params)
@@ -271,17 +281,17 @@ class Controller(Loggable):
         raise NotImplementedError()
 
     
-    def make_media_leg(self, sid_affinity, type):
+    def make_media_leg(self, sid_affinity, type, **kwargs):
         sid = sid_affinity or self.select_gateway_sid()
 
         if type == "pass":
-            return PassMediaLeg(Weak(self), sid)
+            return PassMediaLeg(Weak(self), sid, **kwargs)
         elif type == "echo":
-            return EchoMediaLeg(Weak(self), sid)
+            return EchoMediaLeg(Weak(self), sid, **kwargs)
         elif type == "player":
-            return PlayerMediaLeg(Weak(self), sid)
+            return PlayerMediaLeg(Weak(self), sid, **kwargs)
         elif type == "net":
             local_addr = self.allocate_media_address(sid)
-            return ProxiedMediaLeg(Weak(self), sid, local_addr)
+            return ProxiedMediaLeg(Weak(self), sid, local_addr, **kwargs)
         else:
             raise Exception("No such media leg type: %s!" % type)

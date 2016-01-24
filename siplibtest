@@ -133,7 +133,8 @@ class CalleeLeg(PlannedLeg):
         
         media_leg.play("playback.wav", ("PCMA", 8000), volume=0.2, fade=3)
         
-        yield from self.sleep(3)
+        action = yield from self.wait_action("tone")
+        self.logger.debug("Okay, go a tone %s, fading out..." % action["name"])
         media_leg.play(volume=0, fade=3)
         
         yield from self.sleep(3)

@@ -421,7 +421,7 @@ class Bridge(Routable):
 
 
 class RecordingBridge(Bridge):
-    def hack_media(self, answer):
+    def hack_media(self, li, answer):
         if not answer:
             return
             
@@ -441,10 +441,22 @@ class RecordingBridge(Bridge):
             this.refresh(dict(filename="recorded.wav", format=format, record=True))
             
         self.call.refresh_media()
+        
+        if len(answer.channels) >= 1:
+            d = answer.channels[0].direction
+
+            if not d.send:
+                self.logger.debug("Hah, the %s put us on hold!" % ("callee" if li == 0 else "caller"))
+
+            if not d.recv:
+                self.logger.debug("Hah, the %s put us on hold!" % ("caller" if li == 0 else "callee"))
 
 
     def bridge(self, li, action):
-        self.hack_media(action.get("answer"))
+        answer = action.get("answer")
+        
+        if answer:
+            self.hack_media(li, answer)
         
         Bridge.bridge(self, li, action)
 
@@ -532,10 +544,10 @@ class Call(Routable):
             self.refresh_media()
 
 
-    def make_media_leg(self, channel_index, type):
+    def make_media_leg(self, channel_index, type, **kwargs):
         # TODO
         sid_affinity = None
-        return self.switch.mgc.make_media_leg(sid_affinity, type)
+        return self.switch.mgc.make_media_leg(sid_affinity, type, **kwargs)
         
         
     def refresh_media(self):

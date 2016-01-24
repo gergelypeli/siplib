@@ -31,6 +31,10 @@ class Thing(Loggable):
         
     def modify(self, params):
         pass
+        
+        
+    def notify(self, type, params):
+        pass
 
     
 class Leg(Thing):
@@ -201,7 +205,7 @@ class NetLeg(Leg):
             
         if "remote_addr" in params:
             self.remote_addr = tuple(params["remote_addr"])
-    
+            
     
     def recved(self):
         #print("Receiving on %s" % self.name)
@@ -229,8 +233,8 @@ class NetLeg(Leg):
             self.recv_packet(packet)
     
     
-    def dtmf_detected(self, key):
-        self.report("dtmf_detected", {'key': key}, response_handler=WeakMethod(self.dtmf_detected_response))
+    def dtmf_detected(self, name):
+        self.report("tone", dict(name=name), response_handler=WeakMethod(self.dtmf_detected_response))
         
         
     def dtmf_detected_response(self, msgid, params):
@@ -257,11 +261,15 @@ class NetLeg(Leg):
             self.send_checked(packet)
 
 
-    def send_dtmf(self, keys):
-        packets = self.dtmf_injector.inject(keys)
+    def notify(self, type, params):
+        if type == "tone":
+            name = params.get("name")
+            packets = self.dtmf_injector.inject(name)
         
-        for packet in packets:
-            self.send_checked(packet)
+            for packet in packets:
+                self.send_checked(packet)
+        else:
+            Leg.notify(self, type, params)
         
 
 class EchoLeg(Leg):
@@ -408,6 +416,11 @@ class MediaGateway(Loggable):
     def take_thing(self, things, label, owner_sid):
         thing = things[label]
         thing.owner_sid = owner_sid
+
+
+    def notify_thing(self, things, label, type, params):
+        thing = things[label]
+        thing.notify(type, params)
     
     
     # Contexts
@@ -466,6 +479,10 @@ class MediaGateway(Loggable):
         self.take_thing(self.legs_by_label, label, owner_sid)
         
         
+    def notify_leg(self, label, type, params):
+        self.notify_thing(self.legs_by_label, label, type, params)
+        
+        
     def process_request(self, target, msgid, params):
         try:
             owner_sid, seq = msgid
@@ -489,6 +506,8 @@ class MediaGateway(Loggable):
                 self.delete_leg(label)
             elif target == "take_leg":
                 self.take_leg(label, owner_sid)
+            elif target == "tone":
+                self.notify_leg(label, "tone", params)
             else:
                 raise Error("Invalid target %s!" % target)
         except Exception as e:
