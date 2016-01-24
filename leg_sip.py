@@ -1,18 +1,19 @@
 from copy import deepcopy
-#import logging
 
 from async import WeakMethod
 from format import Status, make_virtual_response
-#from mgc import ProxiedMediaLeg
 from util import build_oid
 from leg import Leg, Session, Error
 
 
-class InviteState(object):
-    def __init__(self, request):
+class Invite(object):
+    def __init__(self, request, is_outgoing):
         self.request = request
+        self.is_outgoing = is_outgoing
+        
         sdp = request.get("sdp")
         self.had_offer_in_request = (sdp and sdp.is_session())
+        
         self.responded_session = None
         self.rpr_session_done = False
         self.final_response = None
@@ -24,8 +25,6 @@ class SipLeg(Leg):
     DIALING_OUT = "DIALING_OUT"
     DIALING_IN_RINGING = "DIALING_IN_RINGING"
     DIALING_OUT_RINGING = "DIALING_OUT_RINGING"
-    DIALING_IN_ANSWERED = "DIALING_IN_ANSWERED"
-    DIALING_OUT_ANSWERED = "DIALING_OUT_ANSWERED"
     UP = "UP"
     DISCONNECTING_OUT = "DISCONNECTING_OUT"
     
@@ -35,7 +34,7 @@ class SipLeg(Leg):
 
         self.dialog = dialog
         self.state = self.DOWN
-        self.invite_state = None
+        self.invite = None
         self.session = Session()
         
         self.dialog.set_report(WeakMethod(self.process))
@@ -88,7 +87,7 @@ class SipLeg(Leg):
 
     def preprocess_outgoing_session(self, sdp):
         for i in range(len(self.media_legs), len(sdp.channels)):
-            self.make_media_leg(i, "net")
+            self.make_media_leg(i, "net", report=WeakMethod(self.notified))
         
         for i in range(len(sdp.channels)):
             # No need to make a copy again here
@@ -133,7 +132,151 @@ class SipLeg(Leg):
         self.session.set_local_answer(sdp)
         self.refresh_media()
         return sdp
+
+
+    def invite_outgoing_request(self, msg):
+        if self.invite:
+            raise Exception("Invalid outgoing INVITE request!")
         
+        if msg.get("sdp"):
+            msg["sdp"] = self.process_outgoing_offer(msg["sdp"])
+            
+        self.invite = Invite(msg, True)
+        self.send_request(msg)  # Will be extended!
+
+
+    def invite_incoming_response(self, msg):
+        # TODO: error handling!
+        if not self.invite or not self.invite.is_outgoing:
+            raise Exception("Unexpected incoming INVITE response!")
+        
+        status = msg.get("status")
+        sdp = msg.get("sdp")
+        session = {}
+        
+        if sdp and sdp.is_session() and not self.invite.responded_session:
+            # No session yet in INVITE responses, take this one
+            
+            if self.invite.had_offer_in_request:
+                session["answer"] = self.process_incoming_answer(sdp)
+            else:
+                session["offer"] = self.process_incoming_offer(sdp)
+
+            self.invite.responded_session = sdp  # just to ignore any further
+
+        if status.code >= 200:
+            if self.invite.had_offer_in_request:
+                # send ACK without SDP now
+                self.send_request(dict(method="ACK"), msg)
+                self.invite = None
+            else:
+                # wait for outgoing session for the ACK
+                # beware, the report() below may send it!
+                self.invite.final_response = msg
+                self.invite.state = Invite.OUT_RESPONDED
+                
+        return session
+
+
+    def invite_outgoing_ack(self, answer):
+        if not self.invite or not self.invite.is_outgoing or not self.invite.final_response:
+            raise Exception("Invalid outgoing ACK request!")
+            
+        # send ACK with SDP
+        if not answer:
+            # This function is only called for the no-SDP-in-request case
+            raise Error("Answer expected for explicit ACK!")
+            
+        sdp = self.process_outgoing_answer(answer)
+        self.send_request(dict(method="ACK", sdp=sdp), self.invite.final_response)
+        self.invite = None
+
+
+    def invite_incoming_request(self, msg):
+        if self.invite:
+            raise Exception("Unexpected incoming INVITE request!")
+
+        sdp = msg.get("sdp")
+        session = {}
+        
+        if sdp and sdp.is_session():
+            session["offer"] = self.process_incoming_offer(sdp)  # TODO: session query?
+            
+        self.invite = Invite(msg, False)
+        
+        return session
+
+
+    def invite_outgoing_response_session(self, offer, answer):
+        if not self.invite or self.invite.is_outgoing:
+            raise Exception("Invalid outgoing INVITE response session!")
+    
+        session_changed = False
+        
+        if self.invite.responded_session:
+            if offer or answer:
+                self.logger.warning("Ignoring outgoing session, because one already sent!")
+        elif self.invite.had_offer_in_request:
+            if answer:
+                self.invite.responded_session = self.process_outgoing_answer(answer)
+                session_changed = True
+            
+            if offer:
+                self.logger.warning("Ignoring outgoing offer, because answer is expected!")
+        else:
+            if offer:
+                self.invite.responded_session = self.process_outgoing_offer(offer)
+                session_changed = True
+            
+            if answer:
+                self.logger.warning("Ignoring outgoing answer, because offer is expected!")
+
+        return session_changed
+
+
+    def invite_outgoing_response(self, msg):
+        if not self.invite or self.invite.is_outgoing:
+            raise Exception("Invalid outgoing INVITE response!")
+        
+        msg["sdp"] = self.invite.responded_session
+        self.invite.final_response = msg  # Note: this is an incomplete message, but OK here
+        self.send_response(self.invite.final_response, self.invite.request)
+        
+        if msg["status"].code >= 300:
+            self.invite = None
+    
+    
+    def invite_incoming_ack(self, msg):
+        if not self.invite or self.invite.is_outgoing or not self.invite.final_response:
+            raise Exception("Unexpected incoming ACK request!")
+
+        sdp = msg.get("sdp")
+        session = {}
+        
+        if self.invite.had_offer_in_request:
+            if sdp and sdp.is_session():
+                self.logger.debug("Unexpected session in ACK!")
+        else:
+            if not (sdp and sdp.is_session()):
+                self.logger.debug("Unexpected sessionless ACK!")
+            else:
+                session["answer"] = self.process_incoming_answer(sdp)
+            
+        # Stop the retransmission of the final answer
+        self.send_response(make_virtual_response(), self.invite.request)
+        # Let the ACK server transaction expire
+        self.send_response(make_virtual_response(), msg)
+        
+        self.invite = None
+        return session
+
+
+    def invite_incoming_nak(self):
+        if not self.invite or self.invite.is_outgoing or not self.invite.final_response:
+            raise Exception("Unexpected incoming NAK request!")
+                
+        self.invite = None
+    
 
     def do(self, action):
         self.logger.debug("Doing %s" % action)
@@ -144,10 +287,6 @@ class SipLeg(Leg):
         
         if offer and answer:
             raise Error("WTF?")
-        elif offer:
-            offer = self.process_outgoing_offer(offer)
-        elif answer:
-            answer = self.process_outgoing_answer(answer)
         
         if self.state == self.DOWN:
             if type == "dial":
@@ -162,89 +301,82 @@ class SipLeg(Leg):
                     self.ctx.get("route"), self.ctx.get("hop")
                 )
                 
-                invite_request = dict(method="INVITE", sdp=offer)
-                self.send_request(invite_request)  # Will be extended!
-                self.invite_state = InviteState(invite_request)
+                self.invite_outgoing_request(dict(method="INVITE", sdp=offer))
                 self.change_state(self.DIALING_OUT)
                 
                 self.anchor()
                 return
-            else:
-                self.logger.debug("Ignoring %s, already down." % type)
-                return
-        elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
+
+        if self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
             if type == "hangup":
-                self.send_request(dict(method="CANCEL"), self.invite_state.request)
+                self.send_request(dict(method="CANCEL"), self.invite.request)
                 self.change_state(self.DISCONNECTING_OUT)
                 return
-        elif self.state in (self.DIALING_OUT_ANSWERED,):  # TODO: into InviteState?
+                
             if type == "session":
-                # send ACK with SDP
-                if not answer:
-                    raise Error("Answer expected in ACK!")
-                    
-                self.send_request(dict(method="ACK", sdp=answer), self.invite_state.final_response)
+                self.invite_outgoing_ack(answer)
                 self.change_state(self.UP)
                 return
-        elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
-            session_changed = False
-            
-            if self.invite_state.responded_session:
-                sdp = self.invite_state.responded_session
-            else:
-                sdp = answer if self.invite_state.had_offer_in_request else offer
-                if sdp:
-                    session_changed = True
-                    self.invite_state.responded_session = sdp
-                
-            if type == "ring":
-                already_ringing = (self.state == self.DIALING_IN_RINGING)
-                if not session_changed and already_ringing:
-                    self.logger.debug("Already ringing and session unchanged, skipping 180.")
-                    return
-                
-                invite_response = dict(status=Status(180, "Ringing"), sdp=sdp)
-                self.send_response(invite_response, self.invite_state.request)
-                self.change_state(self.DIALING_IN_RINGING)
-                return
-            elif type == "session":
+
+        if self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
+            session_changed = self.invite_outgoing_response_session(offer, answer)
+
+            if type == "session":
                 if not session_changed:
                     self.logger.debug("Session unchanged, skipping 180/183.")
                     return
                     
                 already_ringing = (self.state == self.DIALING_IN_RINGING)
                 status = Status(180, "Ringing") if already_ringing else Status(183, "Session Progress")
-                invite_response = dict(status=status, sdp=sdp)
-                self.send_response(invite_response, self.invite_state.request)
+                self.invite_outgoing_response(dict(status=status))
                 return
-            elif type == "accept":
-                invite_response = dict(status=Status(200, "OK"), sdp=sdp)
-                self.send_response(invite_response, self.invite_state.request)
-                self.change_state(self.DIALING_IN_ANSWERED)  # TODO: into InviteState?
-                # TODO: Do we need to block requests here, or can we already send new ones?
-                # Just wait for the ACK for now.
+                
+            if type == "ring":
+                already_ringing = (self.state == self.DIALING_IN_RINGING)
+                
+                if not session_changed and already_ringing:
+                    self.logger.debug("Already ringing and session unchanged, skipping 180.")
+                    return
+                
+                self.invite_outgoing_response(dict(status=Status(180, "Ringing")))
+                
+                if not already_ringing:
+                    self.change_state(self.DIALING_IN_RINGING)
+                    
                 return
-            elif type == "reject":
-                status = action["status"]
-                invite_response = dict(status=status)
-                self.send_response(invite_response, self.invite_state.request)
-                self.change_state(self.DOWN)  # The transactions will catch the ACK
+                    
+            if type == "accept":
+                self.invite_outgoing_response(dict(status=Status(200, "OK")))
+                # Wait for the ACK before changing state
+                return
+
+            if type == "reject":
+                self.invite_outgoing_response(dict(status=action["status"]))
+                # The transactions will catch the ACK
+                self.change_state(self.DOWN)
                 self.finish_media()
                 return
-        elif self.state == self.UP:
+
+        if self.state == self.UP:
+            if type == "tone":
+                if self.media_legs and action.get("name"):
+                    self.media_legs[0].notify("tone", dict(name=action["name"]))
+                    
+                return
+
             if type == "hangup":
                 self.send_request(dict(method="BYE"))
                 self.change_state(self.DISCONNECTING_OUT)
                 return
-                
-        raise Error("Weirdness!")
+            
+        raise Error("Weird thing to do %s in state %s!" % (type, self.state))
 
 
     def process(self, msg):
         is_response = msg["is_response"]
         method = msg["method"]
         status = msg.get("status")
-        sdp = msg.get("sdp")
+        #sdp = msg.get("sdp")
         
         # Note: must change state before report, because that can generate
         # a reverse action which should only be processed with the new state!
@@ -257,96 +389,71 @@ class SipLeg(Leg):
                     "to": msg["to"]
                 })
                 
-                offer = sdp if sdp and sdp.is_session() else None
-                if offer:
-                    offer = self.process_incoming_offer(offer)  # TODO: session query?
-                    
-                self.invite_state = InviteState(msg)
+                session = self.invite_incoming_request(msg)
+                
                 self.change_state(self.DIALING_IN)
-                self.report(dict(type="dial", ctx=self.ctx, offer=offer))
+                self.report(dict(type="dial", ctx=self.ctx, **session))
                 return
+                
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
             if not is_response and method == "CANCEL":
                 self.send_response(dict(status=Status(200, "OK")), msg)
-                self.send_response(dict(status=Status(487, "Request Terminated")), self.invite_state.request)
+                self.send_response(dict(status=Status(487, "Request Terminated")), self.invite.request)
                 
                 self.change_state(self.DOWN)
                 self.report(dict(type="hangup"))
                 self.finish_media()
                 return
+                
+            elif not is_response and method == "ACK":
+                session = self.invite_incoming_ack(msg)
+                
+                self.change_state(self.UP)
+                if session:
+                    self.report(dict(type="session", **session))
+                return
+                
+            elif not is_response and method == "NAK":  # virtual request, no ACK received
+                self.invite_incoming_nak()
+
+                self.send_request(dict(method="BYE"))  # required behavior
+                self.change_state(self.DISCONNECTING_OUT)
+                return
+                
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
             if is_response and method == "INVITE":
-                offer, answer = None, None
-                
-                if sdp and sdp.is_session() and not self.invite_state.responded_session:
-                    # No session yet in INVITE responses, take this one
-                    
-                    if self.invite_state.had_offer_in_request:
-                        answer = self.process_incoming_answer(sdp)
-                    else:
-                        offer = self.process_incoming_offer(sdp)
-
-                    self.invite_state.responded_session = sdp  # just to ignore any further
+                session = self.invite_incoming_response(msg)
                     
                 if status.code == 180:
                     already_ringing = (self.state == self.DIALING_OUT_RINGING)
                     self.change_state(self.DIALING_OUT_RINGING)
                     
                     if not already_ringing:
-                        self.report(dict(type="ring", offer=offer, answer=answer))
-                    elif offer or answer:
-                        self.report(dict(type="session", offer=offer, answer=answer))
+                        self.report(dict(type="ring", **session))
+                    elif session:
+                        self.report(dict(type="session", **session))
                     return
+                    
                 elif status.code == 183:
-                    if offer or answer:
-                        self.report(dict(type="session", offer=offer, answer=answer))
+                    if session:
+                        self.report(dict(type="session", **session))
                     return
+                    
                 elif status.code >= 300:
                     self.change_state(self.DOWN)
                     self.report(dict(type="reject", status=status))
                     # ACKed by tr
                     self.finish_media()
                     return
-                elif status.code >= 200:
-                    if self.invite_state.had_offer_in_request:
-                        # send ACK without SDP now
-                        self.send_request(dict(method="ACK"), msg)
-                        self.change_state(self.UP)
-                    else:
-                        # wait for outgoing session for the ACK
-                        # beware, the report() below may send it!
-                        self.invite_state.final_response = msg
-                        self.change_state(self.DIALING_OUT_ANSWERED)
-                        
-                    self.report(dict(type="accept", offer=offer, answer=answer))
-                    return
-        elif self.state == self.DIALING_IN_ANSWERED:
-            if not is_response and method == "ACK":
-                answer = None
-                
-                if self.invite_state.had_offer_in_request:
-                    if sdp and sdp.is_session():
-                        self.logger.debug("Unexpected session in ACK!")
-                else:
-                    if not (sdp and sdp.is_session()):
-                        self.logger.debug("Unexpected sessionless ACK!")
-                    else:
-                        answer = self.process_incoming_answer(sdp)
                     
-                # Stop the retransmission of the final answer
-                self.send_response(make_virtual_response(), self.invite_state.request)
-                # Let the ACK server transaction expire
-                self.send_response(make_virtual_response(), msg)
-                
-                self.invite_state = None
-                self.change_state(self.UP)
-                if answer:
-                    self.report(dict(type="session", answer=answer))
-                return
-            elif not is_response and method == "NAK":  # virtual request, no ACK received
-                self.send_request(dict(method="BYE"))  # required behavior
-                self.change_state(self.DISCONNECTING_OUT)
-                return
+                elif status.code >= 200:
+                    if not self.invite:
+                        # If the INVITE is completed, then go up
+                        self.change_state(self.UP)
+                        
+                    self.report(dict(type="accept", **session))
+                    return
+                    
         elif self.state == self.UP:
             if not is_response and method == "BYE":
                 self.send_response(dict(status=Status(200, "OK")), msg)
@@ -354,19 +461,26 @@ class SipLeg(Leg):
                 self.report(dict(type="hangup"))
                 self.finish_media()
                 return
+                
         elif self.state == self.DISCONNECTING_OUT:
             if is_response and method == "BYE":
                 self.change_state(self.DOWN)
                 self.finish_media()
                 return
+                
             elif is_response and method == "INVITE":
                 self.logger.debug("Got cancelled invite response: %s" % (status,))
                 # This was ACKed by the transaction layer
                 self.change_state(self.DOWN)
                 self.finish_media()
                 return
+                
             elif is_response and method == "CANCEL":
                 self.logger.debug("Got cancel response: %s" % (status,))
                 return
                 
-        raise Error("Weirdness!")
+        raise Error("Weird message %s %s in state %s!" % (method, "response" if is_response else "request", self.state))
+
+
+    def notified(self, type, params):
+        self.report(dict(params, type=type))
