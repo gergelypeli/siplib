@@ -11,7 +11,7 @@ from transactions import TransactionManager
 #from dialog import Dialog, DialogManager
 from leg import PlannedLeg
 from call import Call, SimpleRouting, PlannedRouting
-from sdp import Sdp
+from sdp import Sdp, Direction
 from authority import Authority
 from registrar import RecordManager
 from account import Account
@@ -132,6 +132,14 @@ class CalleeLeg(PlannedLeg):
         # TODO: It shouldn't be legal to answer without channels existing already!
         
         media_leg.play("playback.wav", ("PCMA", 8000), volume=0.2, fade=3)
+
+        action = yield from self.wait_action("session")
+        answer = self.make_answer(action["offer"])
+        self.report(dict(type="session", answer=answer))
+
+        action = yield from self.wait_action("session")
+        answer = self.make_answer(action["offer"])
+        self.report(dict(type="session", answer=answer))
         
         action = yield from self.wait_action("tone")
         self.logger.debug("Okay, go a tone %s, fading out..." % action["name"])
@@ -144,7 +152,12 @@ class CalleeLeg(PlannedLeg):
         
 
     def make_answer(self, offer):
-        return offer
+        answer = offer
+        
+        for c in answer.channels:
+            c.direction = Direction(send=c.direction.recv, recv=c.direction.send)
+            
+        return answer
 
 
 class CallerLeg(PlannedLeg):
