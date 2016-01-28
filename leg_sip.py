@@ -3,18 +3,18 @@ from copy import deepcopy
 from async import WeakMethod
 from format import Status, make_virtual_response
 from util import build_oid
-from leg import Leg, Session, Error
+from leg import Leg, SessionState, Error
+from sdp import Session
 
 
-class Invite(object):
+class InviteState(object):
     def __init__(self, request, is_outgoing):
         self.request = request
         self.is_outgoing = is_outgoing
         
-        sdp = request.get("sdp")
-        self.had_offer_in_request = (sdp and sdp.is_session())
+        #self.had_offer_in_request = bool(request.get("sdp"))  # FIXME: unnecessary!
         
-        self.responded_session = None
+        self.responded_sdp = None
         self.rpr_session_done = False
         self.final_response = None
 
@@ -35,7 +35,7 @@ class SipLeg(Leg):
         self.dialog = dialog
         self.state = self.DOWN
         self.invite = None
-        self.session = Session()
+        self.session = SessionState()
         
         self.dialog.set_report(WeakMethod(self.process))
 
@@ -85,7 +85,7 @@ class SipLeg(Leg):
         Leg.refresh_media(self)
             
 
-    def preprocess_outgoing_session(self, sdp):
+    def preprocess_outgoing_sdp(self, sdp):
         for i in range(len(self.media_legs), len(sdp.channels)):
             self.make_media_leg(i, "net", report=WeakMethod(self.notified))
         
@@ -99,7 +99,7 @@ class SipLeg(Leg):
         return sdp  # For the sake of consistency
 
 
-    def postprocess_incoming_session(self, sdp):
+    def postprocess_incoming_sdp(self, sdp):
         sdp = deepcopy(sdp)
 
         for i in range(len(sdp.channels)):
@@ -110,38 +110,42 @@ class SipLeg(Leg):
         
     def process_incoming_offer(self, sdp):
         self.session.set_remote_offer(sdp)
-        sdp = self.postprocess_incoming_session(sdp)
+        sdp = self.postprocess_incoming_sdp(sdp)
         return sdp
 
     
     def process_incoming_answer(self, sdp):
         self.session.set_remote_answer(sdp)
         self.refresh_media()
-        sdp = self.postprocess_incoming_session(sdp)
+        sdp = self.postprocess_incoming_sdp(sdp)
         return sdp
 
     
     def process_outgoing_offer(self, sdp):
-        sdp = self.preprocess_outgoing_session(sdp)
+        sdp = self.preprocess_outgoing_sdp(sdp)
         self.session.set_local_offer(sdp)
         return sdp
 
     
     def process_outgoing_answer(self, sdp):
-        sdp = self.preprocess_outgoing_session(sdp)
+        sdp = self.preprocess_outgoing_sdp(sdp)
         self.session.set_local_answer(sdp)
         self.refresh_media()
         return sdp
 
 
-    def invite_outgoing_request(self, msg):
+    def invite_outgoing_request(self, msg, session):
         if self.invite:
             raise Exception("Invalid outgoing INVITE request!")
         
-        if msg.get("sdp"):
-            msg["sdp"] = self.process_outgoing_offer(msg["sdp"])
+        if not session:
+            raise Exception("No session for INVITE request!")
+        elif session.is_answer:
+            raise Exception("Session answer for INVITE request!")
+        elif session.sdp:
+            msg["sdp"] = self.process_outgoing_offer(session.sdp)
             
-        self.invite = Invite(msg, True)
+        self.invite = InviteState(msg, True)
         self.send_request(msg)  # Will be extended!
 
 
@@ -152,44 +156,47 @@ class SipLeg(Leg):
         
         status = msg.get("status")
         sdp = msg.get("sdp")
-        session = {}
+        session = None
         
-        if sdp and sdp.is_session() and not self.invite.responded_session:
+        if sdp and not self.invite.responded_sdp:
             # No session yet in INVITE responses, take this one
             
-            if self.invite.had_offer_in_request:
-                session["answer"] = self.process_incoming_answer(sdp)
+            if self.invite.request.get("sdp"):
+                session = Session(is_answer=True, sdp=self.process_incoming_answer(sdp))
             else:
-                session["offer"] = self.process_incoming_offer(sdp)
+                session = Session(is_answer=False, sdp=self.process_incoming_offer(sdp))
 
-            self.invite.responded_session = sdp  # just to ignore any further
+            self.invite.responded_sdp = session.sdp  # just to ignore any further
 
         if status.code >= 300:
-            pass  # TODO: some kind of rejection? At least ignore the session in it.
+            # Transactions sent the ACK
+            self.invite = None
+            return Session(is_answer=True, sdp=None)
         elif status.code >= 200:
-            if self.invite.had_offer_in_request:
-                # send ACK without SDP now
-                self.send_request(dict(method="ACK"), msg)
-                self.invite = None
-            else:
-                # wait for outgoing session for the ACK
-                # beware, the report() below may send it!
-                self.invite.final_response = msg
-                self.invite.state = Invite.OUT_RESPONDED
+            self.invite.final_response = msg
                 
         return session
 
 
-    def invite_outgoing_ack(self, answer):
+    def invite_outgoing_ack(self, session):
         if not self.invite or not self.invite.is_outgoing or not self.invite.final_response:
             raise Exception("Invalid outgoing ACK request!")
             
-        # send ACK with SDP
-        if not answer:
-            # This function is only called for the no-SDP-in-request case
-            raise Error("Answer expected for explicit ACK!")
-            
-        sdp = self.process_outgoing_answer(answer)
+        if self.invite.request.get("sdp"):
+            if session:
+                raise Error("Unnecessary session for ACK!")
+            else:
+                sdp = None
+        else:
+            # send ACK with SDP
+            if not session:
+                # This function is only called for the no-SDP-in-request case
+                raise Error("Missing session for ACK!")
+            elif not session.is_answer:
+                raise Error("Answer expected for ACK!")
+            else:
+                sdp = self.process_outgoing_answer(session.sdp)
+        
         self.send_request(dict(method="ACK", sdp=sdp), self.invite.final_response)
         self.invite = None
 
@@ -199,48 +206,51 @@ class SipLeg(Leg):
             raise Exception("Unexpected incoming INVITE request!")
 
         sdp = msg.get("sdp")
-        session = {}
+        session = None
         
-        if sdp and sdp.is_session():
-            session["offer"] = self.process_incoming_offer(sdp)  # TODO: session query?
+        if sdp:
+            session = Session(is_answer=False, sdp=self.process_incoming_offer(sdp))
+        else:
+            session = Session(is_answer=False, sdp=None)
             
-        self.invite = Invite(msg, False)
+        self.invite = InviteState(msg, False)
         
         return session
 
 
-    def invite_outgoing_response_session(self, offer, answer):
+    def invite_outgoing_response_session(self, session):
         if not self.invite or self.invite.is_outgoing:
             raise Exception("Invalid outgoing INVITE response session!")
     
-        session_changed = False
-        
-        if self.invite.responded_session:
-            if offer or answer:
-                self.logger.warning("Ignoring outgoing session, because one already sent!")
-        elif self.invite.had_offer_in_request:
-            if answer:
-                self.invite.responded_session = self.process_outgoing_answer(answer)
-                session_changed = True
+        if not session:
+            return False
+    
+        if self.invite.responded_sdp:
+            if session:
+                raise Exception("Ignoring outgoing session, because one already sent!")
+                
+            return False
+        elif self.invite.request.get("sdp"):
+            if not session.is_answer:
+                raise Exception("Ignoring outgoing session, because answer is expected!")
             
-            if offer:
-                self.logger.warning("Ignoring outgoing offer, because answer is expected!")
+            self.invite.responded_sdp = self.process_outgoing_answer(session.sdp)
+            return True
         else:
-            if offer:
-                self.invite.responded_session = self.process_outgoing_offer(offer)
-                session_changed = True
+            if session.is_answer or not session.sdp:
+                raise Exception("Ignoring outgoing session, because offer is expected!")
             
-            if answer:
-                self.logger.warning("Ignoring outgoing answer, because offer is expected!")
-
-        return session_changed
+            self.invite.responded_sdp = self.process_outgoing_offer(session.sdp)
+            return True
 
 
     def invite_outgoing_response(self, msg):
         if not self.invite or self.invite.is_outgoing:
             raise Exception("Invalid outgoing INVITE response!")
         
-        msg["sdp"] = self.invite.responded_session
+        if self.invite.responded_sdp:
+            msg["sdp"] = self.invite.responded_sdp
+            
         self.invite.final_response = msg  # Note: this is an incomplete message, but OK here
         self.send_response(self.invite.final_response, self.invite.request)
         
@@ -253,16 +263,16 @@ class SipLeg(Leg):
             raise Exception("Unexpected incoming ACK request!")
 
         sdp = msg.get("sdp")
-        session = {}
+        session = None
         
-        if self.invite.had_offer_in_request:
-            if sdp and sdp.is_session():
+        if self.invite.request.get("sdp"):
+            if sdp:
                 self.logger.debug("Unexpected session in ACK!")
         else:
-            if not (sdp and sdp.is_session()):
+            if not sdp:
                 self.logger.debug("Unexpected sessionless ACK!")
             else:
-                session["answer"] = self.process_incoming_answer(sdp)
+                session = Session(is_answer=True, sdp=self.process_incoming_answer(sdp))
             
         # Stop the retransmission of the final answer
         self.send_response(make_virtual_response(), self.invite.request)
@@ -284,11 +294,7 @@ class SipLeg(Leg):
         self.logger.debug("Doing %s" % action)
         
         type = action["type"]
-        offer = action.get("offer")
-        answer = action.get("answer")
-        
-        if offer and answer:
-            raise Error("WTF?")
+        session = action.get("session")
         
         if self.state == self.DOWN:
             if type == "dial":
@@ -303,7 +309,7 @@ class SipLeg(Leg):
                     self.ctx.get("route"), self.ctx.get("hop")
                 )
                 
-                self.invite_outgoing_request(dict(method="INVITE", sdp=offer))
+                self.invite_outgoing_request(dict(method="INVITE"), session)
                 self.change_state(self.DIALING_OUT)
                 
                 self.anchor()
@@ -316,12 +322,12 @@ class SipLeg(Leg):
                 return
                 
             elif type == "session":
-                self.invite_outgoing_ack(answer)
+                self.invite_outgoing_ack(session)
                 self.change_state(self.UP)
                 return
 
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
-            session_changed = self.invite_outgoing_response_session(offer, answer)
+            session_changed = self.invite_outgoing_response_session(session)
 
             if type == "session":
                 if not session_changed:
@@ -364,19 +370,13 @@ class SipLeg(Leg):
             
             if type == "session":
                 if not self.invite:
-                    if not offer:
-                        pass
-                    else:
-                        self.invite_outgoing_request(dict(method="INVITE", sdp=offer))
+                    self.invite_outgoing_request(dict(method="INVITE"), session)
                 elif not self.invite.final_response:
                     # TODO: handle rejection!
-                    self.invite_outgoing_response_session(offer, answer)
+                    self.invite_outgoing_response_session(session)
                     self.invite_outgoing_response(dict(status=Status(200)))
                 else:
-                    if not answer:
-                        pass
-                    else:
-                        self.invite_outgoing_ack(answer)
+                    self.invite_outgoing_ack(session)
                         
                 return
         
@@ -414,7 +414,7 @@ class SipLeg(Leg):
                 session = self.invite_incoming_request(msg)
                 
                 self.change_state(self.DIALING_IN)
-                self.report(dict(type="dial", ctx=self.ctx, **session))
+                self.report(dict(type="dial", ctx=self.ctx, session=session))
                 return
                 
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
@@ -432,7 +432,7 @@ class SipLeg(Leg):
                 
                 self.change_state(self.UP)
                 if session:
-                    self.report(dict(type="session", **session))
+                    self.report(dict(type="session", session=session))
                 return
                 
             elif not is_response and method == "NAK":  # virtual request, no ACK received
@@ -451,14 +451,14 @@ class SipLeg(Leg):
                     self.change_state(self.DIALING_OUT_RINGING)
                     
                     if not already_ringing:
-                        self.report(dict(type="ring", **session))
+                        self.report(dict(type="ring", session=session))
                     elif session:
-                        self.report(dict(type="session", **session))
+                        self.report(dict(type="session", session=session))
                     return
                     
                 elif status.code == 183:
                     if session:
-                        self.report(dict(type="session", **session))
+                        self.report(dict(type="session", session=session))
                     return
                     
                 elif status.code >= 300:
@@ -468,11 +468,11 @@ class SipLeg(Leg):
                     return
                     
                 elif status.code >= 200:
-                    if not self.invite:
-                        # If the INVITE is completed, then go up
+                    if self.invite.request.get("sdp"):
+                        self.invite_outgoing_ack(None)
                         self.change_state(self.UP)
                         
-                    self.report(dict(type="accept", **session))
+                    self.report(dict(type="accept", session=session))
                     return
                     
         elif self.state == self.UP:
@@ -481,13 +481,13 @@ class SipLeg(Leg):
             if not is_response and method == "INVITE":
                 session = self.invite_incoming_request(msg)
                 if session:
-                    self.report(dict(type="session", **session))
+                    self.report(dict(type="session", session=session))
                 return
                 
             elif not is_response and method == "ACK":
                 session = self.invite_incoming_ack(msg)
                 if session:
-                    self.report(dict(type="session", **session))
+                    self.report(dict(type="session", session=session))
                 return
                 
             elif not is_response and method == "NAK":  # virtual request, no ACK received
@@ -496,9 +496,15 @@ class SipLeg(Leg):
                 return
                 
             elif is_response and method == "INVITE":
+                # FIXME: check at least the status code!
                 session = self.invite_incoming_response(msg)
+                
+                if self.invite.request.get("sdp"):
+                    self.invite_outgoing_ack(None)
+                    
                 if session:
-                    self.report(dict(type="session", **session))
+                    self.report(dict(type="session", session=session))
+                    
                 return
 
             elif not is_response and method == "BYE":

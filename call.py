@@ -165,7 +165,7 @@ class Routing(Loggable):
                 # FIXME: of course don't reject the incoming leg immediately
                 self.reject(action["status"])
             elif type == "ring":
-                if action.get("offer") or action.get("answer"):
+                if action.get("session"):
                     action["type"] = "session"
                     self.queue(li, action)
                     
@@ -422,8 +422,6 @@ class Bridge(Routable):
 
 class RecordingBridge(Bridge):
     def hack_media(self, li, answer):
-        if not answer:
-            return
             
         old = len(self.incoming_leg.media_legs)
         new = len(answer.channels)
@@ -453,10 +451,10 @@ class RecordingBridge(Bridge):
 
 
     def bridge(self, li, action):
-        answer = action.get("answer")
+        session = action.get("session")
         
-        if answer:
-            self.hack_media(li, answer)
+        if session and session.is_answer and session.sdp:
+            self.hack_media(li, session.sdp)
         
         Bridge.bridge(self, li, action)
 

@@ -240,16 +240,7 @@ class Channel(object):
                 self.attributes.append(x)
 
 
-class EmptySdp(object):
-    def is_empty(self):
-        return True
-        
-        
-    def is_session(self):
-        return False
-        
-
-class Sdp(EmptySdp):
+class Sdp:
     def __init__(self, origin, bandwidth, attributes, channels):
         # v ignored
         self.origin = origin
@@ -355,3 +346,9 @@ class Sdp(EmptySdp):
                 pass
     
         return cls(origin, bandwidth, attributes, channels)
+
+
+class Session:
+    def __init__(self, is_answer, sdp):
+        self.is_answer = is_answer
+        self.sdp = sdp

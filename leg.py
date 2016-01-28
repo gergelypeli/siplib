@@ -82,7 +82,7 @@ class Leg(Loggable):
         legs.append(self)
         
 
-class Session(object):
+class SessionState(object):
     def __init__(self):
         self.local_sdp = None
         self.remote_sdp = None
@@ -113,30 +113,24 @@ class Session(object):
             
             
     def set_local_answer(self, sdp):
-        if sdp is None:
-            raise Error("No SDP specified!")
-        elif not self.pending_remote_sdp:
+        if not self.pending_remote_sdp:
             raise Error("Incoming offer not pending!")
+        elif sdp is None:  # rejected
+            self.pending_remote_sdp = None
         else:
-            # empty is rejection
-            if not sdp.is_empty():
-                self.remote_sdp = self.pending_remote_sdp
-                self.local_sdp = sdp
-                
+            self.remote_sdp = self.pending_remote_sdp
+            self.local_sdp = sdp
             self.pending_remote_sdp = None
 
 
     def set_remote_answer(self, sdp):
-        if sdp is None:
-            raise Error("No SDP specified!")
-        elif not self.pending_local_sdp:
+        if not self.pending_local_sdp:
             raise Error("Outgoing offer not pending!")
+        elif sdp is None:  # rejected
+            self.pending_local_sdp = None
         else:
-            # empty is rejection
-            if not sdp.is_empty():
-                self.local_sdp = self.pending_local_sdp
-                self.remote_sdp = sdp
-                
+            self.local_sdp = self.pending_local_sdp
+            self.remote_sdp = sdp
             self.pending_local_sdp = None
 
 
@@ -160,7 +154,7 @@ class Session(object):
         elif self.pending_remote_sdp:
             raise Error("Incoming offer still pending!")
         elif not self.local_sdp:
-            raise Error("No outgoing answer yet!")
+            raise Error("No local answer yet!")
         else:
             return self.local_sdp
 
@@ -171,7 +165,7 @@ class Session(object):
         elif self.pending_remote_sdp:
             raise Error("Incoming offer is pending!")
         elif not self.remote_sdp:
-            raise Error("No incoming answer yet!")
+            raise Error("No remote answer yet!")
         else:
             return self.remote_sdp
 
