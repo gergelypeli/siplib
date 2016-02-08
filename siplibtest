@@ -12,7 +12,7 @@ from transactions import TransactionManager
 #from dialog import Dialog, DialogManager
 from leg import PlannedLeg
 from call import Call, SimpleRouting, PlannedRouting
-from sdp import Sdp, Direction
+from sdp import Sdp
 from authority import Authority
 from registrar import RecordManager
 from account import Account
@@ -128,7 +128,7 @@ class CalleeLeg(PlannedLeg):
         answer = self.make_answer(self.offer)
         
         media_leg = self.make_media_leg(0, "player")
-        media_leg.play("playback.wav", ("PCMA", 8000), volume=0.2, fade=3)
+        media_leg.play("playback.wav", ("PCMA", 8000, 1, None), volume=0.2, fade=3)
         # No refresh_media here, because we are the sender leg of the answer
         self.report(dict(type="accept", session=answer))
 

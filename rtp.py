@@ -11,7 +11,7 @@ from util import Loggable
 
 class Error(Exception): pass
 
-Format = collections.namedtuple("Format", [ "encoding", "clock" ])
+Format = collections.namedtuple("Format", [ "encoding", "clock", "encp", "fmtp" ])
 
 Packet = collections.namedtuple("Packet", [ "format", "timestamp", "marker", "payload" ])
 
@@ -139,9 +139,9 @@ def prid(sid):
 class RtpBase(Loggable):
     PTIME = 20
     PLAY_INFO = {
-        Format("*",    8000): (1,),  # artificial codec for recording
-        Format("PCMU", 8000): (1,),
-        Format("PCMA", 8000): (1,)
+        Format("*",    8000, 1, None): (1,),  # artificial codec for recording
+        Format("PCMU", 8000, 1, None): (1,),
+        Format("PCMA", 8000, 1, None): (1,)
     }
     BYTES_PER_SAMPLE = 2
     

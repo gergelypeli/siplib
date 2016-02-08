@@ -6,10 +6,10 @@ import re
 #from pprint import pprint
 
 STATIC_PAYLOAD_TYPES = {
-    0: ("PCMU", 8000),
-    3: ("GSM",  8000),
-    8: ("PCMA", 8000),
-    9: ("G722", 8000)
+    0: ("PCMU", 8000, 1, None),
+    3: ("GSM",  8000, 1, None),
+    8: ("PCMA", 8000, 1, None),
+    9: ("G722", 8000, 1, None)
 }
 
 class Error(Exception): pass
@@ -119,8 +119,8 @@ class Origin(collections.namedtuple("Origin", "username session_id session_versi
 
 class RtpFormat(object):
     def __init__(self, pt, encoding=None, clock=None, encp=None, fmtp=None):
-        if not encoding and not clock:
-            encoding, clock = STATIC_PAYLOAD_TYPES.get(pt, (None, None))
+        if encoding is None:
+            encoding, clock, encp, fmtp = STATIC_PAYLOAD_TYPES.get(pt, (None, None, None, None))
         
         self.payload_type = pt
         self.encoding = encoding
@@ -138,7 +138,7 @@ class RtpFormat(object):
     def print_rtpmap(self):
         if self.encoding:
             s = "%s/%d" % (self.encoding, self.clock)
-            if self.encp:
+            if self.encp != 1:
                 s += "/%d" % self.encp
             return s
         else:
@@ -156,6 +156,8 @@ class RtpFormat(object):
         self.clock = int(enc[1])
         if len(enc) > 2:
             self.encp = int(enc[2])
+        else:
+            self.encp = 1
 
             
     def parse_fmtp(self, x):
@@ -351,11 +353,11 @@ class SdpBuilder:
         self.last_session_version = 0
         
         
-    def set_channel_info(self, i, addr, pts_by_encoding):
+    def set_channel_info(self, i, addr, formats_by_pt):
         while i >= len(self.channel_infos):
             self.channel_infos.append(None)
             
-        self.channel_infos[i] = dict(addr=addr, pts_by_encoding=pts_by_encoding)
+        self.channel_infos[i] = dict(addr=addr, formats_by_pt=formats_by_pt)
         
         
     def build(self, session):
@@ -364,9 +366,8 @@ class SdpBuilder:
         for i, c in enumerate(session["channels"]):
             info = self.channel_infos[i]
             addr = info["addr"]
-            pts_by_encoding = info["pts_by_encoding"]
+            formats_by_pt = info["formats_by_pt"]
             
-            clock = c["clock"]
             send = c["send"]
             recv = c["recv"]
             type = c["type"]
@@ -375,9 +376,16 @@ class SdpBuilder:
             
             for f in c["formats"]:
                 encoding = f.get("encoding")
+                clock = f.get("clock")
                 fmtp = f.get("fmtp")
                 encp = f.get("encp")
-                pt = pts_by_encoding.get(encoding)
+                
+                # No hashable dict for reverse lookup...
+                for pt, format in formats_by_pt.items():
+                    if format == f:
+                        break
+                else:
+                    raise Exception("No payload type for format %s" % (f,))
                 
                 format = RtpFormat(pt, encoding, clock, encp, fmtp)
                 formats.append(format)
@@ -416,7 +424,7 @@ class SdpParser:
     def get_channel_info(self, i):
         info = self.channel_infos[i]
         
-        return info["addr"], info["encodings_by_pt"]
+        return info["addr"], info["formats_by_pt"]
         
         
     def parse(self, sdp, is_answer):
@@ -426,32 +434,25 @@ class SdpParser:
             while i >= len(self.channel_infos):
                 self.channel_infos.append(None)
                 
-            encodings_by_pt = {}
+            formats_by_pt = {}
             
-            self.channel_infos[i] = dict(addr=c.addr, encodings_by_pt=encodings_by_pt)
+            self.channel_infos[i] = dict(addr=c.addr, formats_by_pt=formats_by_pt)
             
-            clock = None
             formats = []
             
             for f in c.formats:
-                encodings_by_pt[f.payload_type] = f.encoding
-                
-                if clock and clock != f.clock:
-                    self.logger.error("Invalid channel clock!")
-                    
-                clock = f.clock
-                
                 format = dict(
                     encoding=f.encoding,
-                    fmtp=f.fmtp,
-                    encp=f.encp
+                    clock=f.clock,
+                    encp=f.encp,
+                    fmtp=f.fmtp
                 )
                 formats.append(format)
+                formats_by_pt[f.payload_type] = format
                 
             channel = dict(
                 type=c.type,
                 proto=c.proto,
-                clock=clock,
                 send=c.direction.send,
                 recv=c.direction.recv,
                 formats=formats,

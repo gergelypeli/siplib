@@ -60,14 +60,18 @@ class SipLeg(Leg):
             raise Error("Respond to what?")
 
 
+    def flatten_formats(self, formats_by_pt):
+        return { pt: (f["encoding"], f["clock"], f["encp"], f["fmtp"]) for pt, f in formats_by_pt.items() }
+
+
     def refresh_media(self):
         for i, ml in enumerate(self.media_legs):
-            addr, encodings_by_pt = self.sdp_parser.get_channel_info(i)
+            addr, formats_by_pt = self.sdp_parser.get_channel_info(i)
             
             self.media_leg_params[i].update(
                 remote_addr=addr,
                 # FIXME: must use encp and fmtp for identification, too!
-                send_formats={ k: (v, 8000) for k, v in encodings_by_pt.items() }  # FIXME
+                send_formats=self.flatten_formats(formats_by_pt)
             )
             
             self.logger.debug("Refreshing media leg %d: %s" % (i, self.media_leg_params[i]))
@@ -84,30 +88,27 @@ class SipLeg(Leg):
             self.media_leg_params.append({})
         
         for i, c in enumerate(channels):
-            clock = c["clock"]
             addr = self.media_legs[i].local_addr
-            pts_by_encoding = {}
-            encodings_by_pt = {}
+            formats_by_pt = {}
             next_pt = 96
             
             for f in c["formats"]:
-                encoding = f["encoding"]
+                x = (f["encoding"], f["clock"], f["encp"], f["fmtp"])
                 
-                for pt, encoding_clock in STATIC_PAYLOAD_TYPES.items():
-                    if encoding_clock == (encoding, clock):
+                for pt, info in STATIC_PAYLOAD_TYPES.items():
+                    if info == x:
                         break
                 else:
                     pt = next_pt
                     next_pt += 1
                     #raise Exception("Couldn't find payload type for %s!" % (encoding, clock))
 
-                pts_by_encoding[encoding] = pt
-                encodings_by_pt[pt] = encoding
+                formats_by_pt[pt] = f
                         
-            self.sdp_builder.set_channel_info(i, addr, pts_by_encoding)
+            self.sdp_builder.set_channel_info(i, addr, formats_by_pt)
             
             self.media_leg_params[i].update(
-                recv_formats={ k: (v, 8000) for k, v in encodings_by_pt.items() }  # FIXME, too!
+                recv_formats=self.flatten_formats(formats_by_pt)
             )
 
 
