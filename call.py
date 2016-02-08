@@ -424,7 +424,7 @@ class RecordingBridge(Bridge):
     def hack_media(self, li, answer):
             
         old = len(self.incoming_leg.media_legs)
-        new = len(answer.channels)
+        new = len(answer["channels"])
         
         for i in range(old, new):
             this = self.incoming_leg.make_media_leg(i, "pass")
@@ -440,21 +440,21 @@ class RecordingBridge(Bridge):
             
         self.call.refresh_media()
         
-        if len(answer.channels) >= 1:
-            d = answer.channels[0].direction
+        if len(answer["channels"]) >= 1:
+            c = answer["channels"][0]
 
-            if not d.send:
+            if not c["send"]:
                 self.logger.debug("Hah, the %s put us on hold!" % ("callee" if li == 0 else "caller"))
 
-            if not d.recv:
+            if not c["recv"]:
                 self.logger.debug("Hah, the %s put us on hold!" % ("caller" if li == 0 else "callee"))
 
 
     def bridge(self, li, action):
         session = action.get("session")
         
-        if session and session.is_answer and session.sdp:
-            self.hack_media(li, session.sdp)
+        if session and session["is_answer"] and len(session) > 1:
+            self.hack_media(li, session)
         
         Bridge.bridge(self, li, action)
 

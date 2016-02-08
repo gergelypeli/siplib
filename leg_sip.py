@@ -1,19 +1,14 @@
-from copy import deepcopy
-
 from async import WeakMethod
 from format import Status, make_virtual_response
-from util import build_oid
+from util import build_oid, resolve
 from leg import Leg, SessionState, Error
-from sdp import Session
+from sdp import SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES
 
 
 class InviteState(object):
     def __init__(self, request, is_outgoing):
         self.request = request
         self.is_outgoing = is_outgoing
-        
-        #self.had_offer_in_request = bool(request.get("sdp"))  # FIXME: unnecessary!
-        
         self.responded_sdp = None
         self.rpr_session_done = False
         self.final_response = None
@@ -36,6 +31,10 @@ class SipLeg(Leg):
         self.state = self.DOWN
         self.invite = None
         self.session = SessionState()
+        host = resolve(dialog.dialog_manager.get_local_addr())[0]  # TODO: not nice
+        self.sdp_builder = SdpBuilder(host)
+        self.sdp_parser = SdpParser()
+        self.media_leg_params = []
         
         self.dialog.set_report(WeakMethod(self.process))
 
@@ -62,75 +61,88 @@ class SipLeg(Leg):
 
 
     def refresh_media(self):
-        def extract_formats(c):
-            return { r.payload_type: (r.encoding, r.clock) for r in c.formats }
-
-        # Negotiated session parameters, must have the same length
-        lsdp = self.session.local_sdp
-        rsdp = self.session.remote_sdp
-        channel_count = min(len(lsdp.channels), len(rsdp.channels)) if lsdp and rsdp else 0
-
-        for i in range(channel_count):
-            lc = lsdp.channels[i]
-            rc = rsdp.channels[i]
-            ml = self.media_legs[i]  # must also have the same number of media legs
-            #print("XXX local: %s (%s), remote: %s (%s)" % (lc.addr, id(lc.addr), rc.addr, id(rc.addr)))
+        for i, ml in enumerate(self.media_legs):
+            addr, encodings_by_pt = self.sdp_parser.get_channel_info(i)
             
-            ml.update(
-                remote_addr=rc.addr,
-                send_formats=extract_formats(rc),
-                recv_formats=extract_formats(lc)
+            self.media_leg_params[i].update(
+                remote_addr=addr,
+                # FIXME: must use encp and fmtp for identification, too!
+                send_formats={ k: (v, 8000) for k, v in encodings_by_pt.items() }  # FIXME
             )
             
+            self.logger.debug("Refreshing media leg %d: %s" % (i, self.media_leg_params[i]))
+            ml.update(**self.media_leg_params[i])
+    
         Leg.refresh_media(self)
             
 
-    def preprocess_outgoing_sdp(self, sdp):
-        for i in range(len(self.media_legs), len(sdp.channels)):
-            self.make_media_leg(i, "net", report=WeakMethod(self.notified))
+    def preprocess_outgoing_session(self, session):
+        channels = session["channels"]
         
-        for i in range(len(sdp.channels)):
-            # No need to make a copy again here
-            if sdp.channels[i].addr:
-                raise Exception("Outgoing session has channel address set! %s" % id(sdp.channels[i]))
+        for i in range(len(self.media_legs), len(channels)):
+            self.make_media_leg(i, "net", report=WeakMethod(self.notified))
+            self.media_leg_params.append({})
+        
+        for i, c in enumerate(channels):
+            clock = c["clock"]
+            addr = self.media_legs[i].local_addr
+            pts_by_encoding = {}
+            encodings_by_pt = {}
+            next_pt = 96
+            
+            for f in c["formats"]:
+                encoding = f["encoding"]
                 
-            sdp.channels[i].addr = self.media_legs[i].local_addr
+                for pt, encoding_clock in STATIC_PAYLOAD_TYPES.items():
+                    if encoding_clock == (encoding, clock):
+                        break
+                else:
+                    pt = next_pt
+                    next_pt += 1
+                    #raise Exception("Couldn't find payload type for %s!" % (encoding, clock))
+
+                pts_by_encoding[encoding] = pt
+                encodings_by_pt[pt] = encoding
+                        
+            self.sdp_builder.set_channel_info(i, addr, pts_by_encoding)
             
-        return sdp  # For the sake of consistency
+            self.media_leg_params[i].update(
+                recv_formats={ k: (v, 8000) for k, v in encodings_by_pt.items() }  # FIXME, too!
+            )
 
 
-    def postprocess_incoming_sdp(self, sdp):
-        sdp = deepcopy(sdp)
-
-        for i in range(len(sdp.channels)):
-            sdp.channels[i].addr = None  # Just to be sure
-            
-        return sdp
+    def postprocess_incoming_session(self, session):
+        # TODO: this should extract the remote addr and encodings_by_pt?
+        pass
 
         
     def process_incoming_offer(self, sdp):
-        self.session.set_remote_offer(sdp)
-        sdp = self.postprocess_incoming_sdp(sdp)
-        return sdp
+        session = self.sdp_parser.parse(sdp, is_answer=False)
+        self.session.set_remote_offer(session)
+        self.postprocess_incoming_session(session)
+        return session
 
     
     def process_incoming_answer(self, sdp):
-        self.session.set_remote_answer(sdp)
+        session = self.sdp_parser.parse(sdp, is_answer=True)
+        self.session.set_remote_answer(session)
         self.refresh_media()
-        sdp = self.postprocess_incoming_sdp(sdp)
+        self.postprocess_incoming_session(session)
+        return session
+
+    
+    def process_outgoing_offer(self, session):
+        self.preprocess_outgoing_session(session)
+        self.session.set_local_offer(session)
+        sdp = self.sdp_builder.build(session)
         return sdp
 
     
-    def process_outgoing_offer(self, sdp):
-        sdp = self.preprocess_outgoing_sdp(sdp)
-        self.session.set_local_offer(sdp)
-        return sdp
-
-    
-    def process_outgoing_answer(self, sdp):
-        sdp = self.preprocess_outgoing_sdp(sdp)
-        self.session.set_local_answer(sdp)
+    def process_outgoing_answer(self, session):
+        self.preprocess_outgoing_session(session)
+        self.session.set_local_answer(session)
         self.refresh_media()
+        sdp = self.sdp_builder.build(session)
         return sdp
 
 
@@ -139,11 +151,11 @@ class SipLeg(Leg):
             raise Exception("Invalid outgoing INVITE request!")
         
         if not session:
-            raise Exception("No session for INVITE request!")
-        elif session.is_answer:
+            msg["sdp"] = None  #raise Exception("No session for INVITE request!")
+        elif session["is_answer"]:
             raise Exception("Session answer for INVITE request!")
-        elif session.sdp:
-            msg["sdp"] = self.process_outgoing_offer(session.sdp)
+        else:
+            msg["sdp"] = self.process_outgoing_offer(session)
             
         self.invite = InviteState(msg, True)
         self.send_request(msg)  # Will be extended!
@@ -162,16 +174,16 @@ class SipLeg(Leg):
             # No session yet in INVITE responses, take this one
             
             if self.invite.request.get("sdp"):
-                session = Session(is_answer=True, sdp=self.process_incoming_answer(sdp))
+                session = self.process_incoming_answer(sdp)
             else:
-                session = Session(is_answer=False, sdp=self.process_incoming_offer(sdp))
+                session = self.process_incoming_offer(sdp)
 
-            self.invite.responded_sdp = session.sdp  # just to ignore any further
+            self.invite.responded_sdp = sdp  # just to ignore any further
 
         if status.code >= 300:
             # Transactions sent the ACK
             self.invite = None
-            return Session(is_answer=True, sdp=None)
+            return dict(is_answer=True)  # rejection
         elif status.code >= 200:
             self.invite.final_response = msg
                 
@@ -192,10 +204,10 @@ class SipLeg(Leg):
             if not session:
                 # This function is only called for the no-SDP-in-request case
                 raise Error("Missing session for ACK!")
-            elif not session.is_answer:
+            elif not session["is_answer"]:
                 raise Error("Answer expected for ACK!")
             else:
-                sdp = self.process_outgoing_answer(session.sdp)
+                sdp = self.process_outgoing_answer(session)
         
         self.send_request(dict(method="ACK", sdp=sdp), self.invite.final_response)
         self.invite = None
@@ -209,9 +221,9 @@ class SipLeg(Leg):
         session = None
         
         if sdp:
-            session = Session(is_answer=False, sdp=self.process_incoming_offer(sdp))
+            session = self.process_incoming_offer(sdp)
         else:
-            session = Session(is_answer=False, sdp=None)
+            session = None
             
         self.invite = InviteState(msg, False)
         
@@ -231,16 +243,16 @@ class SipLeg(Leg):
                 
             return False
         elif self.invite.request.get("sdp"):
-            if not session.is_answer:
+            if not session["is_answer"]:
                 raise Exception("Ignoring outgoing session, because answer is expected!")
             
-            self.invite.responded_sdp = self.process_outgoing_answer(session.sdp)
+            self.invite.responded_sdp = self.process_outgoing_answer(session)
             return True
         else:
-            if session.is_answer or not session.sdp:
+            if session["is_answer"]:
                 raise Exception("Ignoring outgoing session, because offer is expected!")
             
-            self.invite.responded_sdp = self.process_outgoing_offer(session.sdp)
+            self.invite.responded_sdp = self.process_outgoing_offer(session)
             return True
 
 
@@ -248,13 +260,15 @@ class SipLeg(Leg):
         if not self.invite or self.invite.is_outgoing:
             raise Exception("Invalid outgoing INVITE response!")
         
-        if self.invite.responded_sdp:
+        is_reject = (msg["status"].code >= 300)
+        
+        if self.invite.responded_sdp and not is_reject:
             msg["sdp"] = self.invite.responded_sdp
             
         self.invite.final_response = msg  # Note: this is an incomplete message, but OK here
         self.send_response(self.invite.final_response, self.invite.request)
         
-        if msg["status"].code >= 300:
+        if is_reject:
             self.invite = None
     
     
@@ -272,7 +286,7 @@ class SipLeg(Leg):
             if not sdp:
                 self.logger.debug("Unexpected sessionless ACK!")
             else:
-                session = Session(is_answer=True, sdp=self.process_incoming_answer(sdp))
+                session = self.process_incoming_answer(sdp)
             
         # Stop the retransmission of the final answer
         self.send_response(make_virtual_response(), self.invite.request)

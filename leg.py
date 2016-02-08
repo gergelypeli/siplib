@@ -84,90 +84,90 @@ class Leg(Loggable):
 
 class SessionState(object):
     def __init__(self):
-        self.local_sdp = None
-        self.remote_sdp = None
-        self.pending_local_sdp = None
-        self.pending_remote_sdp = None
+        self.local_session = None
+        self.remote_session = None
+        self.pending_local_session = None
+        self.pending_remote_session = None
         
         
-    def set_local_offer(self, sdp):
-        if sdp is None:
-            raise Error("No SDP specified!")
-        elif self.pending_local_sdp:
+    def set_local_offer(self, session):
+        if session is None:
+            raise Error("No session specified!")
+        elif self.pending_local_session:
             raise Error("Outgoing offer already pending!")
-        elif self.pending_remote_sdp:
+        elif self.pending_remote_session:
             raise Error("Incoming offer also pending!")
         else:
-            self.pending_local_sdp = sdp
+            self.pending_local_session = session
 
 
-    def set_remote_offer(self, sdp):
-        if sdp is None:
-            raise Error("No SDP specified!")
-        elif self.pending_local_sdp:
+    def set_remote_offer(self, session):
+        if session is None:
+            raise Error("No session specified!")
+        elif self.pending_local_session:
             raise Error("Outgoing offer also pending!")
-        elif self.pending_remote_sdp:
+        elif self.pending_remote_session:
             raise Error("Incoming offer already pending!")
         else:
-            self.pending_remote_sdp = sdp
+            self.pending_remote_session = session
             
             
-    def set_local_answer(self, sdp):
-        if not self.pending_remote_sdp:
+    def set_local_answer(self, session):
+        if not self.pending_remote_session:
             raise Error("Incoming offer not pending!")
-        elif sdp is None:  # rejected
-            self.pending_remote_sdp = None
+        elif session is None:  # rejected
+            self.pending_remote_session = None
         else:
-            self.remote_sdp = self.pending_remote_sdp
-            self.local_sdp = sdp
-            self.pending_remote_sdp = None
+            self.remote_session = self.pending_remote_session
+            self.local_session = session
+            self.pending_remote_session = None
 
 
-    def set_remote_answer(self, sdp):
-        if not self.pending_local_sdp:
+    def set_remote_answer(self, session):
+        if not self.pending_local_session:
             raise Error("Outgoing offer not pending!")
-        elif sdp is None:  # rejected
-            self.pending_local_sdp = None
+        elif session is None:  # rejected
+            self.pending_local_session = None
         else:
-            self.local_sdp = self.pending_local_sdp
-            self.remote_sdp = sdp
-            self.pending_local_sdp = None
+            self.local_session = self.pending_local_session
+            self.remote_session = session
+            self.pending_local_session = None
 
 
     def get_local_offer(self):
-        if self.pending_local_sdp:
-            return self.pending_local_sdp
+        if self.pending_local_session:
+            return self.pending_local_session
         else:
             raise Error("Outgoing offer not pending!")
         
         
     def get_remote_offer(self):
-        if self.pending_remote_sdp:
-            return self.pending_remote_sdp
+        if self.pending_remote_session:
+            return self.pending_remote_session
         else:
             raise Error("Incoming offer not pending!")
             
             
     def get_local_answer(self):
-        if self.pending_local_sdp:
+        if self.pending_local_session:
             raise Error("Outgoing offer is pending!")
-        elif self.pending_remote_sdp:
+        elif self.pending_remote_session:
             raise Error("Incoming offer still pending!")
-        elif not self.local_sdp:
+        elif not self.local_session:
             raise Error("No local answer yet!")
         else:
-            return self.local_sdp
+            return self.local_session
 
 
     def get_remote_answer(self):
-        if self.pending_local_sdp:
+        if self.pending_local_session:
             raise Error("Outgoing offer still pending!")
-        elif self.pending_remote_sdp:
+        elif self.pending_remote_session:
             raise Error("Incoming offer is pending!")
-        elif not self.remote_sdp:
+        elif not self.remote_session:
             raise Error("No remote answer yet!")
         else:
-            return self.remote_sdp
+            return self.remote_session
 
 
 class PlannedLeg(Planned, Leg):

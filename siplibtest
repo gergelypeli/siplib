@@ -3,15 +3,16 @@
 from datetime import timedelta
 import logging
 import logging.config
-from async import Metapoll, WeakMethod, Weak
+from copy import deepcopy
 
+from async import Metapoll, WeakMethod, Weak
 from format import Addr, Uri, Nameaddr, Status, SipError
 from transport import UdpTransport
 from transactions import TransactionManager
 #from dialog import Dialog, DialogManager
 from leg import PlannedLeg
 from call import Call, SimpleRouting, PlannedRouting
-from sdp import Sdp, Direction, Session
+from sdp import Sdp, Direction
 from authority import Authority
 from registrar import RecordManager
 from account import Account
@@ -116,7 +117,7 @@ class CalleeLeg(PlannedLeg):
         self.logger.debug("Callee created.")
         
         action = yield from self.wait_action("dial")
-        self.offer = action.get("session").sdp
+        self.offer = action.get("session")
         self.logger.debug("Got offer:\n%s" % repr(self.offer))
         self.anchor()
         
@@ -127,24 +128,21 @@ class CalleeLeg(PlannedLeg):
         answer = self.make_answer(self.offer)
         
         media_leg = self.make_media_leg(0, "player")
-        # No refresh_media here, because we are the sender leg of the answer
-        self.report(dict(type="accept", session=Session(is_answer=True, sdp=answer)))
-        # TODO: It shouldn't be legal to answer without channels existing already!
-        
         media_leg.play("playback.wav", ("PCMA", 8000), volume=0.2, fade=3)
+        # No refresh_media here, because we are the sender leg of the answer
+        self.report(dict(type="accept", session=answer))
 
-        action = yield from self.wait_action("session")
-        answer = self.make_answer(action["session"].sdp)
-        self.report(dict(type="session", session=Session(is_answer=True, sdp=answer)))
-
-        action = yield from self.wait_action("session")
-        answer = self.make_answer(action["session"].sdp)
-        self.report(dict(type="session", session=Session(is_answer=True, sdp=answer)))
-        
-        action = yield from self.wait_action("tone")
-        self.logger.debug("Okay, go a tone %s, fading out..." % action["name"])
+        while True:
+            action = yield from self.wait_action()
+            
+            if action["type"] == "session":
+                answer = self.make_answer(action["session"])
+                self.report(dict(type="session", session=answer))
+            elif action["type"] == "tone":
+                self.logger.debug("Okay, go a tone %s, fading out..." % action["name"])
+                break
+                
         media_leg.play(volume=0, fade=3)
-        
         yield from self.sleep(3)
         self.report(dict(type="hangup"))
 
@@ -152,10 +150,11 @@ class CalleeLeg(PlannedLeg):
         
 
     def make_answer(self, offer):
-        answer = offer
+        answer = deepcopy(offer)
+        answer["is_answer"] = True
         
-        for c in answer.channels:
-            c.direction = Direction(send=c.direction.recv, recv=c.direction.send)
+        for c in answer["channels"]:
+            c["send"], c["recv"] = c["recv"], c["send"]
             
         return answer
 
@@ -168,7 +167,8 @@ class CallerLeg(PlannedLeg):
         self.ctx["from"] = CALLER_NAMEADDR
         self.ctx["to"] = Nameaddr(CALLEE_NAMEADDR.uri)
         # FIXME: how is this working without setting the uri, too?
-        self.report(dict(type="dial", ctx=self.ctx, session=Session(is_answer=False, sdp=CALLER_SDP)))
+        offer = None  # FIXME: make one from CALLER_SDP!
+        self.report(dict(type="dial", ctx=self.ctx, session=offer))
 
         action = yield from self.wait_action("accept")
         self.logger.debug("Accepted with SDP:\n%s" % repr(action.get("session")))

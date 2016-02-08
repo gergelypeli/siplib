@@ -118,14 +118,15 @@ class Origin(collections.namedtuple("Origin", "username session_id session_versi
 
 
 class RtpFormat(object):
-    def __init__(self, pt):
-        encoding, clock = STATIC_PAYLOAD_TYPES.get(pt, (None, None))
+    def __init__(self, pt, encoding=None, clock=None, encp=None, fmtp=None):
+        if not encoding and not clock:
+            encoding, clock = STATIC_PAYLOAD_TYPES.get(pt, (None, None))
         
         self.payload_type = pt
         self.encoding = encoding
         self.clock = clock
-        self.encp = None
-        self.fmtp = None
+        self.encp = encp
+        self.fmtp = fmtp
 
 
     def __repr__(self):
@@ -162,13 +163,13 @@ class RtpFormat(object):
 
 
 class Channel(object):
-    def __init__(self, session_host, session_direction):
-        self.type = None
-        self.addr = (session_host, None)  # default
-        self.proto = None
-        self.formats = []
+    def __init__(self, session_addr, session_direction, type=None, proto=None, formats=None, attributes=None):
+        self.type = type
+        self.addr = session_addr  # default
+        self.proto = proto
+        self.formats = formats or []
         self.direction = session_direction  # default
-        self.attributes = []
+        self.attributes = attributes or []
         
         
     def __repr__(self):
@@ -241,7 +242,7 @@ class Channel(object):
 
 
 class Sdp:
-    def __init__(self, origin, bandwidth, attributes, channels):
+    def __init__(self, origin, bandwidth, channels, attributes):
         # v ignored
         self.origin = origin
         # s, i, u, e, p ignored
@@ -249,8 +250,8 @@ class Sdp:
         self.bandwidth = bandwidth
         # t, r, z, k ignored
         #self.direction = direction
-        self.attributes = attributes
         self.channels = channels
+        self.attributes = attributes
 
 
     def __repr__(self):
@@ -258,18 +259,6 @@ class Sdp:
             self.origin, self.bandwidth, self.attributes, self.channels
         )
 
-
-    def is_empty(self):
-        return False
-        
-        
-    def is_session(self):
-        return True
-
-
-    #def copy(self):
-    #    return Sdp(self.origin, self.bandwidth, self.attributes, self.channels)
-        
 
     def print(self):
         directions = set(c.direction for c in self.channels)
@@ -322,7 +311,7 @@ class Sdp:
                 raise Error("Invalid SDP line: %r" % line)
         
             if key == "m":
-                current_channel = Channel(session_host, session_direction)
+                current_channel = Channel((session_host, None), session_direction)
                 channels.append(current_channel)
         
             if current_channel:
@@ -345,10 +334,153 @@ class Sdp:
             else:
                 pass
     
-        return cls(origin, bandwidth, attributes, channels)
+        return cls(origin, bandwidth, channels, attributes)
 
 
-class Session:
-    def __init__(self, is_answer, sdp):
-        self.is_answer = is_answer
-        self.sdp = sdp
+#class Session:
+#    def __init__(self, is_answer, sdp):
+#        self.is_answer = is_answer
+#        self.sdp = sdp
+
+
+class SdpBuilder:
+    def __init__(self, host):
+        self.host = host
+        self.channel_infos = []
+        self.session_id = generate_session_id()
+        self.last_session_version = 0
+        
+        
+    def set_channel_info(self, i, addr, pts_by_encoding):
+        while i >= len(self.channel_infos):
+            self.channel_infos.append(None)
+            
+        self.channel_infos[i] = dict(addr=addr, pts_by_encoding=pts_by_encoding)
+        
+        
+    def build(self, session):
+        channels = []
+        
+        for i, c in enumerate(session["channels"]):
+            info = self.channel_infos[i]
+            addr = info["addr"]
+            pts_by_encoding = info["pts_by_encoding"]
+            
+            clock = c["clock"]
+            send = c["send"]
+            recv = c["recv"]
+            type = c["type"]
+            proto = c["proto"]
+            formats = []
+            
+            for f in c["formats"]:
+                encoding = f.get("encoding")
+                fmtp = f.get("fmtp")
+                encp = f.get("encp")
+                pt = pts_by_encoding.get(encoding)
+                
+                format = RtpFormat(pt, encoding, clock, encp, fmtp)
+                formats.append(format)
+                
+            channel = Channel(addr, Direction(send, recv), type, proto, formats, c["attributes"])
+            channels.append(channel)
+        
+        self.last_session_version += 1
+        
+        origin = Origin(
+            username="siplib",
+            session_id=self.session_id,
+            session_version=self.last_session_version,
+            net_type="IN",
+            addr_type="IP4",
+            host=self.host
+        )
+        
+        bandwidth = session.pop("bandwidth")
+        
+        sdp = Sdp(
+            origin=origin,
+            bandwidth=bandwidth,
+            channels=channels,
+            attributes=session["attributes"]
+        )
+        
+        return sdp
+
+
+class SdpParser:
+    def __init__(self):
+        self.channel_infos = []
+
+
+    def get_channel_info(self, i):
+        info = self.channel_infos[i]
+        
+        return info["addr"], info["encodings_by_pt"]
+        
+        
+    def parse(self, sdp, is_answer):
+        channels = []
+        
+        for i, c in enumerate(sdp.channels):
+            while i >= len(self.channel_infos):
+                self.channel_infos.append(None)
+                
+            encodings_by_pt = {}
+            
+            self.channel_infos[i] = dict(addr=c.addr, encodings_by_pt=encodings_by_pt)
+            
+            clock = None
+            formats = []
+            
+            for f in c.formats:
+                encodings_by_pt[f.payload_type] = f.encoding
+                
+                if clock and clock != f.clock:
+                    self.logger.error("Invalid channel clock!")
+                    
+                clock = f.clock
+                
+                format = dict(
+                    encoding=f.encoding,
+                    fmtp=f.fmtp,
+                    encp=f.encp
+                )
+                formats.append(format)
+                
+            channel = dict(
+                type=c.type,
+                proto=c.proto,
+                clock=clock,
+                send=c.direction.send,
+                recv=c.direction.recv,
+                formats=formats,
+                attributes=c.attributes
+            )
+            channels.append(channel)
+            
+        session = dict(
+            is_answer=is_answer,
+            channels=channels,
+            bandwidth=sdp.bandwidth,
+            attributes=sdp.attributes
+        )
+        
+        return session
+
+
+# dict(
+#   is_answer=False,
+#   bandwidth=0,
+#   channels=[
+#     dict(
+#       clock=8000,
+#       ptime=20,
+#       send=True,
+#       recv=True,
+#       formats=[
+#         dict(encoding="G729", fmtp="annexb=no", encp=1)
+#       ]
+#     )
+#   ]
+#)
