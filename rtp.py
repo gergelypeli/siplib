@@ -1,7 +1,7 @@
 import struct
-import datetime
+#import datetime
 import wave
-import math
+#import math
 import collections
 
 import g711
@@ -12,19 +12,32 @@ from util import Loggable
 BYTES_PER_SAMPLE = 2
 
 
+class Base(Loggable):
+    def millisecs(self, ticks, clock):
+        q, r = divmod(ticks * 1000, clock)
+    
+        if r:
+            self.logger.warning("Ticks imprecise: %d / %d!" % (ticks, clock))
+            
+        return q
+        
+        
+    def ticks(self, millisecs, clock):
+        return millisecs * clock // 1000
+        
+        
+    def packet_duration(self, packet):
+        if packet.format.encoding in ("PCMA", "PCMU") and packet.format.encp == 1:
+            return len(packet.payload)
+        else:
+            raise Exception("Can't compute duration of %s!" % packet.format.encoding)
+        
+
 class Error(Exception): pass
 
 Format = collections.namedtuple("Format", [ "encoding", "clock", "encp", "fmtp" ])
 
 Packet = collections.namedtuple("Packet", [ "format", "timestamp", "marker", "payload" ])
-
-
-def get_payload_type(packet):
-    return packet[1] & 0x7f
-    
-    
-def set_payload_type(packet, pt):
-    packet[1] = packet[1] & 0x80 | pt & 0x7f
 
 
 def read_wav(filename):
@@ -86,7 +99,6 @@ def decode_samples(encoding, payload):
     return samples
 
 
-# TODO: add the marker flag!
 def build_rtp(ssrc, seq, timestamp, marker, payload_type, payload):
     version = 2
     padding = 0
@@ -115,6 +127,11 @@ def parse_rtp(packet):
     return ssrc, seq, timestamp, marker, payload_type, payload
 
 
+def build_telephone_event(event, end, volume, duration):
+    te = (event & 0xff) << 24 | (int(end) & 0x1) << 23 | (volume & 0x3f) << 16 | (duration & 0xffff)
+    return struct.pack('!I', te)
+
+    
 def parse_telephone_event(payload):
     te = struct.unpack_from("!I", payload)[0]
     event = (te & 0xff000000) >> 24
@@ -125,24 +142,12 @@ def parse_telephone_event(payload):
     return event, end, volume, duration
 
 
-def build_telephone_event(event, end, volume, duration):
-    te = (event & 0xff) << 24 | (int(end) & 0x1) << 23 | (volume & 0x3f) << 16 | (duration & 0xffff)
-    return struct.pack('!I', te)
-    
-
-def prid(sid):
-    addr, label = sid
-    host, port = addr
-    
-    return "%s:%d@%s" % (host, port, label)
-
-
-class RtpProcessor(Loggable):
+class RtpProcessor(Base):
     pass
     
 
 class RtpPlayer(RtpProcessor):
-    def __init__(self, metapoll, format, data, handler, volume=1, fade=0, ptime=None):
+    def __init__(self, metapoll, format, data, handler, volume=1, fade=0, ptime_ms=20):
         RtpProcessor.__init__(self)
 
         self.timestamp = 0
@@ -150,14 +155,14 @@ class RtpPlayer(RtpProcessor):
         self.metapoll = metapoll
         self.data = data  # mono 16 bit LSB LPCM
         self.handler = handler
-        self.ptime = ptime or datetime.timedelta(milliseconds=20)
+        self.ptime_ms = ptime_ms
         self.format = format
         
         self.volume = 0
         self.set_volume(volume, fade)
         
         if data:
-            self.handle = self.metapoll.register_timeout(self.ptime, WeakMethod(self.play), repeat=True)
+            self.handle = self.metapoll.register_timeout(self.ptime_ms / 1000, WeakMethod(self.play), repeat=True)
         
         
     def __del__(self):
@@ -166,13 +171,13 @@ class RtpPlayer(RtpProcessor):
 
 
     def set_volume(self, volume, fade):
-        self.fade_steps = int(fade / self.ptime.total_seconds()) + 1
+        self.fade_steps = fade * 1000 // self.ptime_ms + 1
         self.fade_step = (volume - self.volume) / self.fade_steps
         
 
     def play(self):
         timestamp = self.timestamp
-        self.timestamp += int(self.format.clock * self.ptime.total_seconds())
+        self.timestamp += self.ticks(self.ptime_ms, self.format.clock)
         
         old_offset = timestamp * BYTES_PER_SAMPLE
         new_offset = self.timestamp * BYTES_PER_SAMPLE
@@ -197,14 +202,14 @@ class RtpPlayer(RtpProcessor):
 
 
 class RtpRecorder(RtpProcessor):
-    def __init__(self, format, ptime=None):
+    def __init__(self, format, ptime_ms=20):
         RtpProcessor.__init__(self)
         
         # Even if internal timestamps are relative, we'll need the start
         # time of the recording, too.
         self.base_timestamp = None
         self.base_clock = None
-        self.ptime = ptime or datetime.timedelta(milliseconds=20)
+        self.ptime_ms = ptime_ms
         
         if format.encoding != "L16":
             raise Error("Unknown encoding for recording: %s" % (format.encoding,))
@@ -219,11 +224,11 @@ class RtpRecorder(RtpProcessor):
             self.base_timestamp = packet.timestamp
             self.base_clock = packet.format.clock
             
-        rec_time = packet.timestamp / packet.format.clock - self.base_timestamp / self.base_clock
-        if rec_time < 0:
+        rec_time_ms = self.millisecs(packet.timestamp, packet.format.clock) - self.millisecs(self.base_timestamp, self.base_clock)
+        if rec_time_ms < 0:
             return  # Oops, started recording later!
         
-        rec_index = int(rec_time / self.ptime.total_seconds())
+        rec_index = rec_time_ms // self.ptime_ms
         #self.logger.info("Recording chunk %d" % n)
 
         samples = decode_samples(packet.format.encoding, packet.payload)
@@ -238,16 +243,15 @@ class RtpRecorder(RtpProcessor):
         
         
     def get(self):
-        silence = bytes(int(self.format.clock * self.ptime.total_seconds()) * BYTES_PER_SAMPLE)
+        silence = bytes(self.ticks(self.ptime_ms, self.format.clock) * BYTES_PER_SAMPLE)
         
         samples = b"".join(chunk or silence for chunk in self.chunks)
 
         return samples
 
 
-class DtmfBase:
-    MIN_DURATION = datetime.timedelta(milliseconds=40)
-    DTMF_PTIME = datetime.timedelta(milliseconds=20)
+class DtmfBase(Base):
+    DTMF_DURATION_MS = 40
     
     keys_by_event = {
         0: "0", 1: "1", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9",
@@ -263,8 +267,7 @@ class DtmfBase:
 class DtmfExtractor(DtmfBase):
     def __init__(self, report):
         self.report = report
-        self.last_timestamp = None
-        self.last_duration = None
+        self.next_time_ms = None
         
         
     def process(self, packet):
@@ -273,19 +276,21 @@ class DtmfExtractor(DtmfBase):
             
         #ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
 
-        if self.last_timestamp is not None:
-            if packet.timestamp < self.last_timestamp + self.last_duration:
+        this_time_ms = self.millisecs(packet.timestamp, packet.format.clock)
+
+        if self.next_time_ms is not None:
+            if this_time_ms < self.next_time_ms:
                 return True
 
         event, end, volume, duration = parse_telephone_event(packet.payload)
+        this_duration_ms = self.millisecs(duration, packet.format.clock)
         
-        if duration < int(packet.format.clock * self.MIN_DURATION.total_seconds()):
+        if this_duration_ms < self.DTMF_DURATION_MS:
             return True
             
-        self.last_timestamp = packet.timestamp
-        self.last_duration = duration
+        self.next_time_ms = this_time_ms + this_duration_ms
+
         key = self.keys_by_event.get(event)
-        
         if key:
             self.report(key)
             
@@ -295,17 +300,16 @@ class DtmfExtractor(DtmfBase):
 class DtmfInjector(DtmfBase):
     def __init__(self):
         self.format = None
-        self.dtmf_duration = None
+        #self.dtmf_duration = None
         
-        self.last_timestamp = None
-        self.last_duration = None
+        self.next_time_ms = None
 
 
     def set_format(self, format):
         self.format = format
         
-        dtmf_length = self.DTMF_PTIME * math.ceil(self.MIN_DURATION / self.DTMF_PTIME)
-        self.dtmf_duration = int(self.format.clock * dtmf_length.total_seconds())
+        #dtmf_length = self.DTMF_PTIME * math.ceil(self.MIN_DURATION / self.DTMF_PTIME)
+        #self.dtmf_duration = int(self.format.clock * dtmf_length.total_seconds())
         
         
     def inject(self, name):
@@ -318,25 +322,28 @@ class DtmfInjector(DtmfBase):
             return []
 
         volume = 10
-
-        self.last_timestamp += self.last_duration
-        self.last_duration = self.dtmf_duration
+        timestamp = self.ticks(self.next_time_ms, self.format.clock)
+        duration = self.ticks(self.DTMF_DURATION_MS, self.format.clock)
     
-        payload = build_telephone_event(event, True, volume, self.last_duration)
-        packet = Packet(self.format, self.last_timestamp, True, payload)
+        payload = build_telephone_event(event, True, volume, duration)
+        packet = Packet(self.format, timestamp, True, payload)
+        
+        self.next_time_ms += self.DTMF_DURATION_MS
         
         return [ packet, packet, packet ]
         
         
     def process(self, packet):
-        #ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
+        this_time_ms = self.millisecs(packet.timestamp, packet.format.clock)
         
-        if self.last_timestamp:
-            if packet.timestamp < self.last_timestamp + self.last_duration:
+        if self.next_time_ms is not None:
+            if this_time_ms < self.next_time_ms:
                 return True
         
-        self.last_timestamp = packet.timestamp
-        self.last_duration = int(self.DTMF_PTIME.total_seconds() * self.format.clock)
+        duration = self.packet_duration(packet)
+        duration_ms = self.millisecs(duration, packet.format.clock)
+        
+        self.next_time_ms = this_time_ms + duration_ms
             
         return False
 
