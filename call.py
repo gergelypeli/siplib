@@ -435,7 +435,7 @@ class RecordingBridge(Bridge):
             
             #f = answer.channels[0].formats[0]
             #format = (f.encoding, f.clock)
-            format = ("*", 8000, 1, None)
+            format = ("L16", 8000, 1, None)
             this.refresh(dict(filename="recorded.wav", format=format, record=True))
             
         self.call.refresh_media()

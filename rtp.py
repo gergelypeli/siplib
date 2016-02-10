@@ -9,6 +9,9 @@ from async import WeakMethod
 from util import Loggable
 
 
+BYTES_PER_SAMPLE = 2
+
+
 class Error(Exception): pass
 
 Format = collections.namedtuple("Format", [ "encoding", "clock", "encp", "fmtp" ])
@@ -55,8 +58,6 @@ def write_wav(filename, data1, data2 = None):
 
 
 def amplify_wav(samples, volume):
-    BYTES_PER_SAMPLE = 2
-    
     for i in range(int(len(samples) / BYTES_PER_SAMPLE)):
         offset = i * BYTES_PER_SAMPLE
         old = struct.unpack_from("<h", samples, offset)[0]
@@ -136,49 +137,27 @@ def prid(sid):
     return "%s:%d@%s" % (host, port, label)
 
 
-class RtpBase(Loggable):
-    PTIME = 20
-    PLAY_INFO = {
-        Format("*",    8000, 1, None): (1,),  # artificial codec for recording
-        Format("PCMU", 8000, 1, None): (1,),
-        Format("PCMA", 8000, 1, None): (1,)
-    }
-    BYTES_PER_SAMPLE = 2
-    
-    
-    def __init__(self):
-        self.format = None
-        self.bytes_per_sample = None
-        self.samples_per_packet = None
-
-        
-    def set_format(self, format):
-        if format not in self.PLAY_INFO:
-            raise Error("Unknown format for playing: %s" % (format,))
-            
-        self.format = format
-        self.bytes_per_sample, = self.PLAY_INFO[format]
-        self.samples_per_packet = int(self.format.clock * self.PTIME / 1000)
+class RtpProcessor(Loggable):
+    pass
     
 
-class RtpPlayer(RtpBase):
-    def __init__(self, metapoll, format, data, handler, volume=1, fade=0):
-        RtpBase.__init__(self)
+class RtpPlayer(RtpProcessor):
+    def __init__(self, metapoll, format, data, handler, volume=1, fade=0, ptime=None):
+        RtpProcessor.__init__(self)
 
         self.timestamp = 0
         
         self.metapoll = metapoll
         self.data = data  # mono 16 bit LSB LPCM
         self.handler = handler
+        self.ptime = ptime or datetime.timedelta(milliseconds=20)
+        self.format = format
         
         self.volume = 0
-        
-        self.set_format(format)
         self.set_volume(volume, fade)
         
         if data:
-            ptime = datetime.timedelta(milliseconds=self.PTIME)
-            self.handle = self.metapoll.register_timeout(ptime, WeakMethod(self.play), repeat=True)
+            self.handle = self.metapoll.register_timeout(self.ptime, WeakMethod(self.play), repeat=True)
         
         
     def __del__(self):
@@ -187,23 +166,25 @@ class RtpPlayer(RtpBase):
 
 
     def set_volume(self, volume, fade):
-        self.fade_steps = int(fade * 1000 / self.PTIME) + 1
+        self.fade_steps = int(fade / self.ptime.total_seconds()) + 1
         self.fade_step = (volume - self.volume) / self.fade_steps
         
 
     def play(self):
         timestamp = self.timestamp
-        self.timestamp += self.samples_per_packet
+        self.timestamp += int(self.format.clock * self.ptime.total_seconds())
         
-        old_offset = timestamp * self.BYTES_PER_SAMPLE
-        new_offset = self.timestamp * self.BYTES_PER_SAMPLE
+        old_offset = timestamp * BYTES_PER_SAMPLE
+        new_offset = self.timestamp * BYTES_PER_SAMPLE
         samples = self.data[old_offset:new_offset]
         
         if self.fade_steps:
             self.fade_steps -= 1
             self.volume += self.fade_step
         
+        # TODO: resample? Must know the input clock, too!
         amplify_wav(samples, self.volume)
+
         payload = encode_samples(self.format.encoding, samples)
             
         packet = Packet(self.format, timestamp, True, payload)
@@ -215,41 +196,49 @@ class RtpPlayer(RtpBase):
             self.handle = None
 
 
-class RtpRecorder(RtpBase):
-    def __init__(self, format):
-        RtpBase.__init__(self)
+class RtpRecorder(RtpProcessor):
+    def __init__(self, format, ptime=None):
+        RtpProcessor.__init__(self)
         
+        # Even if internal timestamps are relative, we'll need the start
+        # time of the recording, too.
         self.base_timestamp = None
+        self.base_clock = None
+        self.ptime = ptime or datetime.timedelta(milliseconds=20)
+        
+        if format.encoding != "L16":
+            raise Error("Unknown encoding for recording: %s" % (format.encoding,))
+        
+        self.format = format
+        
         self.chunks = []  # mono 16 bit LSB LPCM
-
-        self.set_format(format)
         
         
     def record_packet(self, packet):
-        if packet.format.clock != self.format.clock:
-            self.logger.warning("Clock %s is not the expected %s!" % (packet.format.clock, self.format.clock))
-            return
-            
-        #ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
-    
         if self.base_timestamp is None:
             self.base_timestamp = packet.timestamp
-        elif packet.timestamp < self.base_timestamp:
+            self.base_clock = packet.format.clock
+            
+        rec_time = packet.timestamp / packet.format.clock - self.base_timestamp / self.base_clock
+        if rec_time < 0:
             return  # Oops, started recording later!
         
-        n = int((packet.timestamp - self.base_timestamp) / self.samples_per_packet)
+        rec_index = int(rec_time / self.ptime.total_seconds())
         #self.logger.info("Recording chunk %d" % n)
 
         samples = decode_samples(packet.format.encoding, packet.payload)
         
-        while n >= len(self.chunks):
+        if packet.format.clock != self.format.clock:
+            pass  # resample!
+        
+        while rec_index >= len(self.chunks):
             self.chunks.append(None)
             
-        self.chunks[n] = samples
+        self.chunks[rec_index] = samples
         
         
     def get(self):
-        silence = bytes(self.samples_per_packet * self.BYTES_PER_SAMPLE)
+        silence = bytes(int(self.format.clock * self.ptime.total_seconds()) * BYTES_PER_SAMPLE)
         
         samples = b"".join(chunk or silence for chunk in self.chunks)
 
@@ -258,7 +247,7 @@ class RtpRecorder(RtpBase):
 
 class DtmfBase:
     MIN_DURATION = datetime.timedelta(milliseconds=40)
-    PTIME = datetime.timedelta(milliseconds=20)
+    DTMF_PTIME = datetime.timedelta(milliseconds=20)
     
     keys_by_event = {
         0: "0", 1: "1", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9",
@@ -315,7 +304,7 @@ class DtmfInjector(DtmfBase):
     def set_format(self, format):
         self.format = format
         
-        dtmf_length = self.PTIME * math.ceil(self.MIN_DURATION / self.PTIME)
+        dtmf_length = self.DTMF_PTIME * math.ceil(self.MIN_DURATION / self.DTMF_PTIME)
         self.dtmf_duration = int(self.format.clock * dtmf_length.total_seconds())
         
         
@@ -347,7 +336,7 @@ class DtmfInjector(DtmfBase):
                 return True
         
         self.last_timestamp = packet.timestamp
-        self.last_duration = int(self.PTIME.total_seconds() * self.format.clock)
+        self.last_duration = int(self.DTMF_PTIME.total_seconds() * self.format.clock)
             
         return False
 

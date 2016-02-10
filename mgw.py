@@ -107,11 +107,6 @@ class PassLeg(Leg):
         if "format" in params:
             self.format = Format(*params["format"])
             
-            if self.recv_recorder:
-                self.recv_recorder.set_format(self.format)
-            if self.send_recorder:
-                self.send_recorder.set_format(self.format)
-            
         if "filename" in params:
             self.flush()
                 
@@ -317,9 +312,6 @@ class PlayerLeg(Leg):
 
         if "format" in params:
             self.format = Format(*params["format"])
-            
-            if self.rtp_player:
-                self.rtp_player.set_format(self.format)
                 
         if "filename" in params:
             samples = read_wav(params["filename"])
