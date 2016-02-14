@@ -20,39 +20,39 @@ def generate_session_id():
     global last_session_id
     last_session_id += 1
     return last_session_id
-    
 
-class Direction(collections.namedtuple("Direction", "send recv")):
-    @staticmethod
-    def is_valid(s):
-        return s in ("inactive", "sendonly", "recvonly", "sendrecv")
-        
-        
-    @classmethod
-    def parse(cls, s):
-        if s == "inactive":
-            return cls(False, False)
-        elif s == "sendonly":
-            return cls(True, False)
-        elif s == "recvonly":
-            return cls(False, True)
-        elif s == "sendrecv":
-            return cls(True, True)
+
+def rip_direction(attributes):
+    for i, (k, v) in enumerate(attributes):
+        if k == "sendrecv":
+            attributes.pop(i)
+            return True, True
+        elif k == "sendonly":
+            attributes.pop(i)
+            return True, False
+        elif k == "recvonly":
+            attributes.pop(i)
+            return False, True
+        elif k == "inactive":
+            attributes.pop(i)
+            return False, False
+
+    return None
+
+
+def add_direction(attributes, send, recv):
+    if send:
+        if recv:
+            dir_attr = "sendrecv"
         else:
-            raise Error("Invalid direction: %s!" % s)
-            
-            
-    def print(self):
-        if self.send:
-            if self.recv:
-                return "sendrecv"
-            else:
-                return "sendonly"
+            dir_attr = "sendonly"
+    else:
+        if recv:
+            dir_attr = "recvonly"
         else:
-            if self.recv:
-                return "recvonly"
-            else:
-                return "inactive"
+            dir_attr = "inactive"
+            
+    attributes.append((dir_attr, None))
 
 
 class Timing(collections.namedtuple("Timing", "start stop")):
@@ -165,31 +165,27 @@ class RtpFormat(object):
 
 
 class Channel(object):
-    def __init__(self, session_addr, session_direction, type=None, proto=None, formats=None, attributes=None):
+    def __init__(self, session_addr, type=None, proto=None, formats=None, attributes=None):
         self.type = type
         self.addr = session_addr  # default
         self.proto = proto
         self.formats = formats or []
-        self.direction = session_direction  # default
         self.attributes = attributes or []
         
         
     def __repr__(self):
-        return "Channel(type=%r, addr=%r, proto=%r, formats=%r, direction=%r, attributes=%r)" % (
-            self.type, self.addr, self.proto, self.formats, self.direction, self.attributes
+        return "Channel(type=%r, addr=%r, proto=%r, formats=%r, attributes=%r)" % (
+            self.type, self.addr, self.proto, self.formats, self.attributes
         )
         
         
-    def print(self, session_host, session_direction):
+    def print(self, session_host):
         payload_types = [ str(f.payload_type) for f in self.formats ]
         media = "%s %d %s %s" % (self.type, self.addr[1], self.proto, " ".join(payload_types))
         result = [ ("m", media) ]
 
         if self.addr[0] != session_host:
             result.append(("c", Connection("IN", "IP4", self.addr[0]).print()))
-        
-        if self.direction != session_direction:
-            result.append(("a", self.direction.print()))
         
         for f in self.formats:
             rtpmap = f.print_rtpmap()
@@ -221,9 +217,7 @@ class Channel(object):
         elif key == "a":
             x = value.split(":", 1) if ":" in value else (value, None)
 
-            if Direction.is_valid(x[0]):
-                self.direction = Direction.parse(x[0])
-            elif x[0] == "rtpmap":
+            if x[0] == "rtpmap":
                 pt, rtpmap = x[1].split(None, 1)
                 for f in self.formats:
                     if f.payload_type == int(pt):
@@ -248,10 +242,8 @@ class Sdp:
         # v ignored
         self.origin = origin
         # s, i, u, e, p ignored
-        #self.connection = connection
         self.bandwidth = bandwidth
         # t, r, z, k ignored
-        #self.direction = direction
         self.channels = channels
         self.attributes = attributes
 
@@ -263,9 +255,6 @@ class Sdp:
 
 
     def print(self):
-        directions = set(c.direction for c in self.channels)
-        session_direction = directions.pop() if len(directions) == 1 else None
-
         hosts = set(c.addr[0] for c in self.channels)
         session_host = hosts.pop() if len(hosts) == 1 else None
 
@@ -283,14 +272,11 @@ class Sdp:
             
         lines.append("t=%s" % Timing(Timing.NTP_EPOCH, Timing.NTP_EPOCH).print())
             
-        if session_direction:
-            lines.append("a=%s" % session_direction.print())
-
         for k, v in self.attributes:
             lines.append("a=%s" % ("%s:%s" % (k, v) if v is not None else k))
             
         for c in self.channels:
-            for k, v in c.print(session_host, session_direction):
+            for k, v in c.print(session_host):
                 lines.append("%s=%s" % (k, v))
                 
         return "\n".join(lines) + "\n"
@@ -298,7 +284,7 @@ class Sdp:
 
     @classmethod
     def parse(cls, s):
-        origin, session_host, bandwidth, session_direction = None, None, None, None
+        origin, session_host, bandwidth = None, None, None
         channels = []
         attributes = []  # one key may appear multiple times, also keep order just in case
         current_channel = None
@@ -313,7 +299,7 @@ class Sdp:
                 raise Error("Invalid SDP line: %r" % line)
         
             if key == "m":
-                current_channel = Channel((session_host, None), session_direction)
+                current_channel = Channel((session_host, None))
                 channels.append(current_channel)
         
             if current_channel:
@@ -328,21 +314,11 @@ class Sdp:
                 bandwidth = Bandwidth.parse(value)
             elif key == "a":
                 x = value.split(":", 1) if ":" in value else (value, None)
-
-                if Direction.is_valid(x[0]):
-                    session_direction = Direction.parse(x[0])
-                else:
-                    attributes.append(x)
+                attributes.append(x)
             else:
                 pass
     
         return cls(origin, bandwidth, channels, attributes)
-
-
-#class Session:
-#    def __init__(self, is_answer, sdp):
-#        self.is_answer = is_answer
-#        self.sdp = sdp
 
 
 class SdpBuilder:
@@ -368,8 +344,6 @@ class SdpBuilder:
             addr = info["addr"]
             formats_by_pt = info["formats_by_pt"]
             
-            send = c["send"]
-            recv = c["recv"]
             type = c["type"]
             proto = c["proto"]
             formats = []
@@ -390,7 +364,9 @@ class SdpBuilder:
                 format = RtpFormat(pt, encoding, clock, encp, fmtp)
                 formats.append(format)
                 
-            channel = Channel(addr, Direction(send, recv), type, proto, formats, c["attributes"])
+            attributes = list(c["attributes"])
+            add_direction(attributes, c["send"], c["recv"])
+            channel = Channel(addr, type, proto, formats, attributes)
             channels.append(channel)
         
         self.last_session_version += 1
@@ -429,11 +405,16 @@ class SdpParser:
         
     def parse(self, sdp, is_answer):
         channels = []
+        session_attributes = list(sdp.attributes)
+        session_dir = rip_direction(session_attributes) or (True, True)
         
         for i, c in enumerate(sdp.channels):
             while i >= len(self.channel_infos):
                 self.channel_infos.append(None)
                 
+            channel_attributes = list(c.attributes)
+            channel_dir = rip_direction(channel_attributes) or session_dir
+
             formats_by_pt = {}
             
             self.channel_infos[i] = dict(addr=c.addr, formats_by_pt=formats_by_pt)
@@ -453,10 +434,10 @@ class SdpParser:
             channel = dict(
                 type=c.type,
                 proto=c.proto,
-                send=c.direction.send,
-                recv=c.direction.recv,
+                send=channel_dir[0],
+                recv=channel_dir[1],
                 formats=formats,
-                attributes=c.attributes
+                attributes=channel_attributes
             )
             channels.append(channel)
             
@@ -464,7 +445,7 @@ class SdpParser:
             is_answer=is_answer,
             channels=channels,
             bandwidth=sdp.bandwidth,
-            attributes=sdp.attributes
+            attributes=session_attributes
         )
         
         return session
