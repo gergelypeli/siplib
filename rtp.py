@@ -1,7 +1,5 @@
 import struct
-#import datetime
 import wave
-#import math
 import collections
 
 import g711
@@ -13,19 +11,24 @@ BYTES_PER_SAMPLE = 2
 
 
 class Base(Loggable):
-    def millisecs(self, ticks, clock):
+    def msecs(self, ticks, clock):
         q, r = divmod(ticks * 1000, clock)
     
         if r:
-            self.logger.warning("Ticks imprecise: %d / %d!" % (ticks, clock))
+            self.logger.warning("Ticks rounded: %d / %d!" % (ticks, clock))
             
         return q
         
         
-    def ticks(self, millisecs, clock):
-        return millisecs * clock // 1000
+    def ticks(self, msecs, clock):
+        q, r = divmod(msecs * clock, 1000)
         
-        
+        if r:
+            self.logger.warning("Msecs rounded: %d / %d!" % (msecs, clock))
+            
+        return q
+
+
     def packet_duration(self, packet):
         if packet.format.encoding in ("PCMA", "PCMU") and packet.format.encp == 1:
             return len(packet.payload)
@@ -224,7 +227,7 @@ class RtpRecorder(RtpProcessor):
             self.base_timestamp = packet.timestamp
             self.base_clock = packet.format.clock
             
-        rec_time_ms = self.millisecs(packet.timestamp, packet.format.clock) - self.millisecs(self.base_timestamp, self.base_clock)
+        rec_time_ms = self.msecs(packet.timestamp, packet.format.clock) - self.msecs(self.base_timestamp, self.base_clock)
         if rec_time_ms < 0:
             return  # Oops, started recording later!
         
@@ -274,16 +277,14 @@ class DtmfExtractor(DtmfBase):
         if packet.format.encoding != "telephone-event":
             return False
             
-        #ssrc, seq, timestamp, payload_type, payload = parse_rtp(packet)
-
-        this_time_ms = self.millisecs(packet.timestamp, packet.format.clock)
+        this_time_ms = self.msecs(packet.timestamp, packet.format.clock)
 
         if self.next_time_ms is not None:
             if this_time_ms < self.next_time_ms:
                 return True
 
         event, end, volume, duration = parse_telephone_event(packet.payload)
-        this_duration_ms = self.millisecs(duration, packet.format.clock)
+        this_duration_ms = self.msecs(duration, packet.format.clock)
         
         if this_duration_ms < self.DTMF_DURATION_MS:
             return True
@@ -300,16 +301,11 @@ class DtmfExtractor(DtmfBase):
 class DtmfInjector(DtmfBase):
     def __init__(self):
         self.format = None
-        #self.dtmf_duration = None
-        
         self.next_time_ms = None
 
 
     def set_format(self, format):
         self.format = format
-        
-        #dtmf_length = self.DTMF_PTIME * math.ceil(self.MIN_DURATION / self.DTMF_PTIME)
-        #self.dtmf_duration = int(self.format.clock * dtmf_length.total_seconds())
         
         
     def inject(self, name):
@@ -334,14 +330,14 @@ class DtmfInjector(DtmfBase):
         
         
     def process(self, packet):
-        this_time_ms = self.millisecs(packet.timestamp, packet.format.clock)
+        this_time_ms = self.msecs(packet.timestamp, packet.format.clock)
         
         if self.next_time_ms is not None:
             if this_time_ms < self.next_time_ms:
                 return True
         
         duration = self.packet_duration(packet)
-        duration_ms = self.millisecs(duration, packet.format.clock)
+        duration_ms = self.msecs(duration, packet.format.clock)
         
         self.next_time_ms = this_time_ms + duration_ms
             
