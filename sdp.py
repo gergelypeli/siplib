@@ -165,27 +165,28 @@ class RtpFormat(object):
 
 
 class Channel(object):
-    def __init__(self, session_addr, type=None, proto=None, formats=None, attributes=None):
+    def __init__(self, connection=None, port=None, type=None, proto=None, formats=None, attributes=None):
+        self.connection = connection
+        self.port = port
         self.type = type
-        self.addr = session_addr  # default
         self.proto = proto
         self.formats = formats or []
         self.attributes = attributes or []
         
         
     def __repr__(self):
-        return "Channel(type=%r, addr=%r, proto=%r, formats=%r, attributes=%r)" % (
-            self.type, self.addr, self.proto, self.formats, self.attributes
+        return "Channel(type=%r, conn=%r, port=%r, proto=%r, formats=%r, attributes=%r)" % (
+            self.type, self.conn, self.port, self.proto, self.formats, self.attributes
         )
         
         
-    def print(self, session_host):
+    def print(self):
         payload_types = [ str(f.payload_type) for f in self.formats ]
-        media = "%s %d %s %s" % (self.type, self.addr[1], self.proto, " ".join(payload_types))
+        media = "%s %d %s %s" % (self.type, self.port, self.proto, " ".join(payload_types))
         result = [ ("m", media) ]
 
-        if self.addr[0] != session_host:
-            result.append(("c", Connection("IN", "IP4", self.addr[0]).print()))
+        if self.connection:
+            result.append(("c", self.connection.print()))
         
         for f in self.formats:
             rtpmap = f.print_rtpmap()
@@ -209,11 +210,11 @@ class Channel(object):
                 raise Error("Media with not RTP protocol: '%s'" % proto)
             
             self.type = type
-            self.addr = (self.addr[0], int(port))
+            self.port = int(port)
             self.proto = proto
             self.formats = [ RtpFormat(int(pt)) for pt in formats.split() ]
         elif key == "c":
-            self.addr = (Connection.parse(value).host, self.addr[1])
+            self.connection = Connection.parse(value)
         elif key == "a":
             x = value.split(":", 1) if ":" in value else (value, None)
 
@@ -238,9 +239,10 @@ class Channel(object):
 
 
 class Sdp:
-    def __init__(self, origin, bandwidth, channels, attributes):
+    def __init__(self, origin, connection, bandwidth, channels, attributes):
         # v ignored
         self.origin = origin
+        self.connection = connection
         # s, i, u, e, p ignored
         self.bandwidth = bandwidth
         # t, r, z, k ignored
@@ -249,23 +251,20 @@ class Sdp:
 
 
     def __repr__(self):
-        return "Sdp(origin=%r, bandwidth=%r, attributes=%r, channels=%r)" % (
-            self.origin, self.bandwidth, self.attributes, self.channels
+        return "Sdp(origin=%r, connection=%r, bandwidth=%r, attributes=%r, channels=%r)" % (
+            self.origin, self.connection, self.bandwidth, self.attributes, self.channels
         )
 
 
     def print(self):
-        hosts = set(c.addr[0] for c in self.channels)
-        session_host = hosts.pop() if len(hosts) == 1 else None
-
         lines = [
             "v=%s" % 0,
             "o=%s" % self.origin.print(),
             "s=%s" % " "
         ]
 
-        if session_host:
-            lines.append("c=%s" % Connection("IN", "IP4", session_host).print())
+        if self.connection:
+            lines.append("c=%s" % self.connection.print())
             
         if self.bandwidth:
             lines.append("b=%s" % self.bandwidth.print())
@@ -276,7 +275,7 @@ class Sdp:
             lines.append("a=%s" % ("%s:%s" % (k, v) if v is not None else k))
             
         for c in self.channels:
-            for k, v in c.print(session_host):
+            for k, v in c.print():
                 lines.append("%s=%s" % (k, v))
                 
         return "\n".join(lines) + "\n"
@@ -284,7 +283,7 @@ class Sdp:
 
     @classmethod
     def parse(cls, s):
-        origin, session_host, bandwidth = None, None, None
+        origin, connection, bandwidth = None, None, None
         channels = []
         attributes = []  # one key may appear multiple times, also keep order just in case
         current_channel = None
@@ -299,7 +298,7 @@ class Sdp:
                 raise Error("Invalid SDP line: %r" % line)
         
             if key == "m":
-                current_channel = Channel((session_host, None))
+                current_channel = Channel()
                 channels.append(current_channel)
         
             if current_channel:
@@ -309,7 +308,7 @@ class Sdp:
             if key == "o":
                 origin = Origin.parse(value)
             elif key == "c":
-                session_host = Connection.parse(value).host
+                connection = Connection.parse(value)
             elif key == "b":
                 bandwidth = Bandwidth.parse(value)
             elif key == "a":
@@ -318,7 +317,7 @@ class Sdp:
             else:
                 pass
     
-        return cls(origin, bandwidth, channels, attributes)
+        return cls(origin, connection, bandwidth, channels, attributes)
 
 
 class SdpBuilder:
@@ -338,6 +337,12 @@ class SdpBuilder:
         
     def build(self, session):
         channels = []
+        
+        directions = set((c["send"], c["recv"]) for c in session["channels"])
+        session_direction = directions.pop() if len(directions) == 1 else None
+        
+        hosts = set(ci["addr"][0] for ci in self.channel_infos)
+        session_host = hosts.pop() if len(hosts) == 1 else None
         
         for i, c in enumerate(session["channels"]):
             info = self.channel_infos[i]
@@ -365,8 +370,13 @@ class SdpBuilder:
                 formats.append(format)
                 
             attributes = list(c["attributes"])
-            add_direction(attributes, c["send"], c["recv"])
-            channel = Channel(addr, type, proto, formats, attributes)
+            if not session_direction:
+                add_direction(attributes, c["send"], c["recv"])
+                
+            connection = Connection("IN", "IP4", addr[0]) if not session_host else None
+            port = addr[1]
+            
+            channel = Channel(connection, port, type, proto, formats, attributes)
             channels.append(channel)
         
         self.last_session_version += 1
@@ -380,13 +390,19 @@ class SdpBuilder:
             host=self.host
         )
         
+        connection = Connection("IN", "IP4", session_host) if session_host else None
         bandwidth = session.pop("bandwidth")
+        attributes = list(session["attributes"])
+        
+        if session_direction:
+            add_direction(attributes, *session_direction)
         
         sdp = Sdp(
             origin=origin,
+            connection=connection,
             bandwidth=bandwidth,
             channels=channels,
-            attributes=session["attributes"]
+            attributes=attributes
         )
         
         return sdp
@@ -407,6 +423,7 @@ class SdpParser:
         channels = []
         session_attributes = list(sdp.attributes)
         session_dir = rip_direction(session_attributes) or (True, True)
+        session_connection = sdp.connection
         
         for i, c in enumerate(sdp.channels):
             while i >= len(self.channel_infos):
@@ -415,9 +432,12 @@ class SdpParser:
             channel_attributes = list(c.attributes)
             channel_dir = rip_direction(channel_attributes) or session_dir
 
+            channel_connection = c.connection or session_connection
+            addr = (channel_connection.host, c.port)
+
             formats_by_pt = {}
             
-            self.channel_infos[i] = dict(addr=c.addr, formats_by_pt=formats_by_pt)
+            self.channel_infos[i] = dict(addr=addr, formats_by_pt=formats_by_pt)
             
             formats = []
             
