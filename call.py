@@ -206,10 +206,10 @@ class SimpleRouting(Routing):
             try:
                 self.route(action)
             except SipError as e:
-                self.logger.error("Simple routing SIP error: %s" % e.status)
+                self.logger.error("Simple routing SIP error: %s" % (e.status,))
                 self.reject(e.status)
             except Exception as e:
-                self.logger.error("Simple routing internal error: %s" % e)
+                self.logger.error("Simple routing internal error: %s" % (e,))
                 self.reject(Status(500))
             else:
                 self.dial(action)

@@ -6,7 +6,7 @@ import logging.config
 from copy import deepcopy
 
 from async import Metapoll, WeakMethod, Weak
-from format import Addr, Uri, Nameaddr, Status, SipError
+from format import Addr, Uri, Nameaddr, Status, SipError, Hop
 from transport import UdpTransport
 from transactions import TransactionManager
 #from dialog import Dialog, DialogManager
@@ -28,26 +28,17 @@ B_ADDR = Addr(HOST, 5062)
 A_DOMAIN = "a.switch"
 B_DOMAIN = "b.switch"
 
-#caller_uri = Uri(, "caller")
-#caller_name = "Caller"
-CALLER_NAMEADDR = Nameaddr(Uri(Addr(A_DOMAIN, None), "caller"), "Caller")
+CALLER_NAMEADDR = Nameaddr(Uri(Addr(B_DOMAIN, None), "caller"), "Caller")
 
-#callee_uri = Uri(b_addr, "callee")
-#callee_name = "Callee"
-#callee_nameaddr = Nameaddr(callee_uri, callee_name)
 CALLEE_NAMEADDR = Nameaddr(Uri(Addr(B_DOMAIN, None), "callee"), "Callee")
 
-#wrong_uri = Uri(local_addr, "wrong")
-
-#CALLER_CRED = ("CALLER_AUTHNAME", "CALLER_HA1")
-#CALLEE_CRED = ("CALLEE_AUTHNAME", "CALLEE_HA1")
 A_CRED = ("A_AUTHNAME", "A_HA1")
 B_CRED = ("B_AUTHNAME", "B_HA1")
 
-PHONE_CALLERID = "phone"
-PHONE_NUMBER = "555"
-#phone_cred = ("phone", "29947c88227ea55104f09dbdd5e6c48e")  # md5(phone:A-NET:secret)
-PHONE_CRED = ("phone", "38450ead4036feb352c45462d8008511")  # md5(phone:a.switch:secret)
+SNOM_NUMBER = "phone"
+SNOM_CRED = ("phone", "38450ead4036feb352c45462d8008511")  # md5(phone:a.switch:secret)
+
+CALLEE_NUMBER = "555"
 
 CALLER_SDP = Sdp.parse("""
 v=0
@@ -65,11 +56,7 @@ a=rtpmap:99 h263-1998/90000
 """)
 
 MGW_HOST = "localhost"
-#MGC1_HOST = "localhost"
-#MGC2_HOST = "localhost"
 MGW_ADDR = Addr(MGW_HOST, 20000)
-#MGC1_ADDR = Addr(MGC1_HOST, 20001)
-#MGC2_ADDR = Addr(MGC2_HOST, 20002)
 
 MEDIA_HOST = "otthon"
 
@@ -160,18 +147,34 @@ class CalleeLeg(PlannedLeg):
 
 
 class CallerLeg(PlannedLeg):
+    # TODO: call the phone without SDP!
     def plan(self):
         self.logger.debug("Caller created")
         
         yield from self.sleep(0)
+        
+        uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
         self.ctx["from"] = CALLER_NAMEADDR
-        self.ctx["to"] = Nameaddr(CALLEE_NAMEADDR.uri)
-        # FIXME: how is this working without setting the uri, too?
+        self.ctx["to"] = Nameaddr(uri, "Snom")
+        self.ctx["uri"] = uri
+        
         offer = None  # FIXME: make one from CALLER_SDP!
         self.report(dict(type="dial", ctx=self.ctx, session=offer))
 
-        action = yield from self.wait_action("accept")
-        self.logger.debug("Accepted with SDP:\n%s" % repr(action.get("session")))
+        action = yield from self.wait_action()
+        
+        if action["type"] == "reject":
+            self.logger.error("Oops, we got rejected!")
+            return
+        elif action["type"] != "accept":
+            self.logger.error("Oops, WTF: %s!" % action["type"])
+            return
+            
+        offer = action.get("session")
+        self.logger.debug("Accepted with SDP:\n%s" % repr(offer))
+
+        answer = self.make_answer(offer)
+        self.report(dict(type="session", session=answer))
 
         action = yield from self.expect("action")
         assert action["type"] == "hangup"
@@ -179,6 +182,16 @@ class CallerLeg(PlannedLeg):
         self.logger.debug("Caller done.")
         #yield from self.sleep(3)
         #self.leg.do(dict(type="hangup"))
+
+
+    def make_answer(self, offer):
+        answer = deepcopy(offer)
+        answer["is_answer"] = True
+        
+        for c in answer["channels"]:
+            c["send"], c["recv"] = c["recv"], c["send"]
+            
+        return answer
 
 
 class TestRecordManager(RecordManager):
@@ -211,16 +224,16 @@ class TestController(Controller):
 class TestRouting(SimpleRouting):
     def route(self, action):
         ctx = action["ctx"]
-        uri = ctx["uri"]
-        self.logger.debug("Checking registered SIP contact: %s" % (uri,))
-        contacts = self.call.switch.record_manager.lookup_contacts(uri)
+        to_uri = ctx["to"].uri
+        self.logger.debug("Checking registered SIP contact: %s" % (to_uri,))
+        contacts = self.call.switch.record_manager.lookup_contacts(to_uri)
             
         if len(contacts) == 1:
             uri, hop = contacts[0]
             ctx["uri"] = uri  # Only update the RURI for forwarding
             ctx["hop"] = hop
         else:
-            self.logger.debug("Has %d registered SIP contacts: %s" % (len(contacts), uri,))
+            self.logger.debug("Has %d registered SIP contacts: %s" % (len(contacts), to_uri,))
             raise SipError(Status(404))
 
 
@@ -285,12 +298,19 @@ class SwitchA(TestSwitch):
     def __init__(self, metapoll, *args):
         super().__init__(metapoll, *args, routing_class=TestRouting)
         
-        player_uri = Uri(Addr(A_DOMAIN, None), PHONE_NUMBER)
-        phone_uri = Uri(Addr(A_DOMAIN, None), PHONE_CALLERID)
+        # This can register to accept calls
+        callee_uri = Uri(Addr(A_DOMAIN, None), CALLEE_NUMBER)
+        self.account_manager.add_account(callee_uri, "Callee", Account.AUTH_IF_UNREGISTERED, B_CRED[0], B_CRED[1])
         
-        self.account_manager.add_account(player_uri, "Playa", Account.AUTH_IF_UNREGISTERED, B_CRED[0], B_CRED[1])
-        self.account_manager.add_account(phone_uri, "Phone", Account.AUTH_IF_UNREGISTERED, PHONE_CRED[0], PHONE_CRED[1])
-
+        # The Snom, too
+        snom_uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
+        self.account_manager.add_account(snom_uri, "Snom", Account.AUTH_IF_UNREGISTERED, SNOM_CRED[0], SNOM_CRED[1])
+        
+        # This is to accept calls from it TODO: compute hop nicely!
+        b_uri = Uri(Addr(B_DOMAIN, None), None)
+        hop = Hop(local_addr=resolve(A_ADDR), remote_addr=resolve(B_ADDR), interface='eth0')
+        self.account_manager.add_account(b_uri, "B", Account.AUTH_BY_HOP, None, None, hops=[ hop ])
+        
         self.account_manager.set_our_credentials(*A_CRED)
         
         #metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_dialing))
@@ -303,7 +323,7 @@ class SwitchA(TestSwitch):
         #self.start_call(incoming_leg)
         
         #incoming_leg.dial()
-    
+
 
 class SwitchB(TestSwitch):
     class RoutingClass(PlannedRouting):
@@ -313,12 +333,15 @@ class SwitchB(TestSwitch):
             ctx = action["ctx"]
             uri = ctx["uri"]
             
-            if uri.user == PHONE_NUMBER:
-                self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("record:444@a.switch"))))
+            if uri.user == CALLEE_NUMBER:
+                self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("record:444@b.switch"))))
             elif uri.user == "444":
                 self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:unreachable"))))
                 self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:ringing"))))
                 self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:callee"))))
+            elif uri.user == SNOM_NUMBER:
+                self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri(A_ADDR, SNOM_NUMBER))))
+                
             #li, action = yield from self.wait_action()
             #self.forward(li, action)
             
@@ -329,13 +352,13 @@ class SwitchB(TestSwitch):
             uri = ctx["uri"]
             
             # For the phone call only
-            if uri.user == PHONE_NUMBER:
-                self.logger.debug("Routing to CalleeLeg for %s" % PHONE_NUMBER)
+            if uri.user == CALLEE_NUMBER:
+                self.logger.debug("Routing to CalleeLeg for %s" % CALLEE_NUMBER)
                 ctx["uri"] = Uri.parse("builtin:callee")
                 #return CalleeLeg(self.call, self.switch.metapoll)
-                #self.logger.debug("Returning UnreachableLeg for %s" % PHONE_NUMBER)
+                #self.logger.debug("Returning UnreachableLeg for %s" % CALLEE_NUMBER)
                 #return UnreachableLeg(self.call, self.switch.metapoll)
-                #self.logger.debug("Returning RejectingLeg for %s" % PHONE_NUMBER)
+                #self.logger.debug("Returning RejectingLeg for %s" % CALLEE_NUMBER)
                 #return RejectingLeg(self.call, self.switch.metapoll)
             else:
                 TestRouting.route(self, action)
@@ -344,24 +367,31 @@ class SwitchB(TestSwitch):
     def __init__(self, metapoll, *args):
         super().__init__(metapoll, *args, routing_class=self.RoutingClass)
         
-        phone_uri = Uri(Addr(A_DOMAIN, None), PHONE_CALLERID)
+        phone_uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
         
         self.account_manager.add_account(phone_uri, "Phone", Account.AUTH_IF_UNREGISTERED, A_CRED[0], A_CRED[1])
         
         self.account_manager.set_our_credentials(*B_CRED)
 
-        metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
+        #metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
+        metapoll.register_timeout(timedelta(seconds=10), WeakMethod(self.test_dialing))
 
 
     def test_registering(self):
-        self.logger.debug("Registering begins.")
+        self.logger.debug("Registering to Switch A.")
 
         self.registration_manager.start_registration(
-        #    a_registrar, callee_uri, callee_uri
             registrar_uri=Uri(A_ADDR),
-            record_uri=Uri(Addr(A_DOMAIN, None), PHONE_NUMBER),
-            contact_uri=Uri(B_ADDR, PHONE_NUMBER)
+            record_uri=Uri(Addr(A_DOMAIN, None), CALLEE_NUMBER),
+            contact_uri=Uri(B_ADDR, CALLEE_NUMBER)
         )
+        
+        
+    def test_dialing(self):
+        self.logger.debug("Dialing begins.")
+
+        incoming_leg = CallerLeg(self.metapoll)
+        self.start_call(incoming_leg)
 
 
 def main():

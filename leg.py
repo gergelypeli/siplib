@@ -91,8 +91,10 @@ class SessionState(object):
         
         
     def set_local_offer(self, session):
-        if session is None:
-            raise Error("No session specified!")
+        if not session:
+            raise Error("No outgoing offer specified!")
+        elif session["is_answer"]:
+            raise Error("Outgoing offer is an answer!")
         elif self.pending_local_session:
             raise Error("Outgoing offer already pending!")
         elif self.pending_remote_session:
@@ -102,8 +104,10 @@ class SessionState(object):
 
 
     def set_remote_offer(self, session):
-        if session is None:
-            raise Error("No session specified!")
+        if not session:
+            raise Error("No incoming offer specified!")
+        elif session["is_answer"]:
+            raise Error("Incoming offer is an answer!")
         elif self.pending_local_session:
             raise Error("Outgoing offer also pending!")
         elif self.pending_remote_session:
@@ -113,9 +117,13 @@ class SessionState(object):
             
             
     def set_local_answer(self, session):
-        if not self.pending_remote_session:
+        if not session:
+            raise Error("No outgoing answer specified!")
+        elif not self.pending_remote_session:
             raise Error("Incoming offer not pending!")
-        elif session is None:  # rejected
+        elif not session["is_answer"]:
+            raise Error("Outgoing answer is an offer!")
+        elif len(session) == 1:  # rejected
             self.pending_remote_session = None
         else:
             self.remote_session = self.pending_remote_session
@@ -124,9 +132,13 @@ class SessionState(object):
 
 
     def set_remote_answer(self, session):
-        if not self.pending_local_session:
+        if not session:
+            raise Error("No incoming answer specified!")
+        elif not self.pending_local_session:
             raise Error("Outgoing offer not pending!")
-        elif session is None:  # rejected
+        elif not session["is_answer"]:
+            raise Error("Incoming answer is an offer!")
+        elif len(session) == 1:  # rejected
             self.pending_local_session = None
         else:
             self.local_session = self.pending_local_session

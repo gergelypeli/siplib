@@ -99,7 +99,7 @@ class Switch(Loggable):
         return Call(Weak(self))
         
         
-    def start_call(self, params):  # TODO: params unused
+    def start_call(self, incoming_leg):
         call = self.make_call()
         
         oid = build_oid(self.oid, "call", self.call_count)
@@ -108,12 +108,17 @@ class Switch(Loggable):
         
         self.calls_by_oid[oid] = call
 
+        call.start(incoming_leg)
+
+
+    def start_sip_call(self, params):  # TODO: params unused
         incoming_dialog = Dialog(Weak(self.dialog_manager))
         incoming_leg = SipLeg(incoming_dialog)
-        call.start(incoming_leg)
+        
+        self.start_call(incoming_leg)
         
         return WeakMethod(incoming_dialog.recv_request)
-    
+        
 
     def finish_call(self, oid):
         self.logger.debug("Finishing call %s" % oid)
@@ -139,17 +144,18 @@ class Switch(Loggable):
         elif auth_policy == Account.AUTH_ALWAYS:
             self.logger.debug("Challenging request because authentication is always needed")
         elif auth_policy == Account.AUTH_IF_UNREGISTERED:
-            must_auth = (hop not in self.record_manager.lookup_contact_hops(from_uri))
+            hop_unknown = hop not in self.record_manager.lookup_contact_hops(from_uri)
             
-            if must_auth:
+            if hop_unknown:
                 self.logger.debug("Challenging request because account is not registered")
             else:
                 self.logger.debug("Accepting request because account is registered")
                 return None
-        elif auth_policy == Account.AUTH_BY_ADDRESS:
-            must_auth = hop not in self.record_manager.lookup_contact_hops(from_uri)
+        elif auth_policy == Account.AUTH_BY_HOP:
+            self.logger.debug("Hop: %r, hops: %r" % (hop, self.account_manager.get_account_hops(from_uri)))
+            hop_unknown = hop not in self.account_manager.get_account_hops(from_uri)
             
-            if must_auth:
+            if hop_unknown:
                 self.logger.debug("Rejecting request because hop address is not allowed")
                 return WeakMethod(self.reject_request, Status(403, "Forbidden"))
             else:
@@ -190,7 +196,7 @@ class Switch(Loggable):
             return report
     
         if method == "INVITE" and "tag" not in params["to"].params:
-            return self.start_call(params)
+            return self.start_sip_call(params)
     
         return WeakMethod(self.reject_request, Status(400, "Bad request"))
         
