@@ -560,6 +560,7 @@ class Call(Routable):
         
     def dirty(self, channel_index):
         # TODO: this should be more intelligent!
+        self.logger.debug("Channel %d is dirty!" % channel_index)
         self.refresh_media()
         
         
@@ -570,11 +571,21 @@ class Call(Routable):
             return
             
         leg_count = len(self.legs)
-        channel_count = max(len(leg.media_legs) if leg else 0 for leg in self.legs)
+        media_leg_lists = [ leg.media_legs if leg else [] for leg in self.legs ]
+        channel_count = max(len(mll) for mll in media_leg_lists)
         
         for ci in range(channel_count):
             li = 0
-            media_legs = [ leg.media_legs[ci] if leg and ci < len(leg.media_legs) else None for leg in self.legs ]
+            
+            # Pretend that unrealized legs don't exist
+            media_legs = [ mll[ci] if ci < len(mll) and mll[ci].is_created else None for mll in media_leg_lists ]
+            
+            # Sanity check
+            sids = set(ml.sid for ml in media_legs if ml)
+            if len(sids) != 1:
+                raise Exception("Channel %d media legs has %d sids!" % (ci, len(sids)))
+                
+            sid = sids.pop()
             spans = set()
             
             while li < leg_count:
@@ -634,7 +645,7 @@ class Call(Routable):
                 else:
                     mc = media_contexts_by_span[span]
                     
-                mc.set_legs([ media_legs[left], media_legs[right] ])
+                mc.set_sid_and_leg_oids(sid, [ media_legs[left].oid, media_legs[right].oid ])
                 
         
     def forward(self, li, action):

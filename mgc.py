@@ -128,24 +128,18 @@ class MediaContext(Loggable):
         
         self.mgc = mgc
         self.sid = None
-        self.legs = []
+        self.leg_oids = []
         self.is_created = False
         
 
-    def set_legs(self, legs):
-        if legs != self.legs:
-            self.legs = legs
+    def set_sid_and_leg_oids(self, sid, leg_oids):
+        if self.sid and sid != self.sid:
+            raise Exception("Context sid changed!")
             
-            leg_sids = set(leg.sid for leg in self.legs)
-            if len(leg_sids) != 1:
-                raise Exception("Multiple sids among media legs!")
-
-            sid = leg_sids.pop()
-                
-            if self.sid and self.sid != sid:
-                raise Exception("Context sid changed!")
-                
-            self.sid = sid
+        self.sid = sid
+        
+        if leg_oids != self.leg_oids:
+            self.leg_oids = leg_oids
             self.refresh()
         else:
             self.logger.debug("Context not changed.")
@@ -160,29 +154,27 @@ class MediaContext(Loggable):
         
     def refresh(self):
         # TODO: implement leg deletion
-        leg_oids = [ leg.realize() for leg in self.legs ]
-        
         params = {
             'id': self.oid,
             'type': 'proxy',
-            'legs': leg_oids
+            'legs': self.leg_oids
         }
         
         if not self.is_created:
             self.is_created = True
-            self.logger.debug("Creating context %s" % (self.oid,))
+            self.logger.debug("Creating context")
             
-            #request_handler = WeakMethod(self.process_mgw_request)
             response_handler = WeakMethod(self.process_mgw_response)
             self.mgc.create_context(self.sid, params, response_handler=response_handler)
         else:
-            self.logger.debug("Modifying context %s" % (self.oid,))
+            self.logger.debug("Modifying context")
             response_handler = WeakMethod(self.process_mgw_response)
             self.mgc.modify_context(self.sid, params, response_handler=response_handler)
     
 
     def delete(self, handler=None):
         if self.is_created:
+            self.logger.debug("Deleting context")
             params = dict(id=self.oid)
             response_handler = lambda msgid, params: handler()  # TODO
             self.mgc.delete_context(self.sid, params, response_handler=response_handler)
