@@ -285,6 +285,7 @@ class DtmfExtractor(DtmfBase):
 
         event, end, volume, duration = parse_telephone_event(packet.payload)
         this_duration_ms = self.msecs(duration, packet.format.clock)
+        self.logger.debug("A DTMF with duration %s = %dms" % (duration, this_duration_ms))
         
         if this_duration_ms < self.DTMF_DURATION_MS:
             return True

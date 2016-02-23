@@ -120,11 +120,15 @@ class SessionState(object):
         elif not session["is_answer"]:
             raise Error("Outgoing answer is an offer!")
         elif len(session) == 1:  # rejected
+            s = self.pending_remote_session
             self.pending_remote_session = None
+            return s
         else:
             self.remote_session = self.pending_remote_session
             self.local_session = session
             self.pending_remote_session = None
+            
+        return None
 
 
     def set_remote_answer(self, session):
@@ -135,11 +139,15 @@ class SessionState(object):
         elif not session["is_answer"]:
             raise Error("Incoming answer is an offer!")
         elif len(session) == 1:  # rejected
+            s = self.pending_local_session
             self.pending_local_session = None
+            return s
         else:
             self.local_session = self.pending_local_session
             self.remote_session = session
             self.pending_local_session = None
+            
+        return None
 
 
     def get_local_offer(self):

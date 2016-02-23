@@ -59,17 +59,50 @@ class SipLeg(Leg):
             raise Error("Respond to what?")
 
 
-    #def flatten_formats(self, formats_by_pt):
-    #    return { pt: (f["encoding"], f["clock"], f["encp"], f["fmtp"]) for pt, f in formats_by_pt.items() }
-
-
     def flatten_formats(self, formats, pt_key):
         return { f[pt_key]: (f["encoding"], f["clock"], f["encp"], f["fmtp"]) for f in formats }
 
 
-    def realize_media_legs(self):
+    def allocate_local_media(self, old_session, new_session):
+        new_channels = new_session["channels"] if new_session else []
+        old_channels = old_session["channels"] if old_session else []
+        
+        for i, new_channel in enumerate(new_channels):
+            if i >= len(old_channels):
+                self.logger.debug("Allocating local media address for channel %d" % i)
+                local_addr = self.call.allocate_media_address(i)  # TODO: deallocate!
+            else:
+                local_addr = old_channels[i]["rtp_local_addr"]
+        
+            new_channel["rtp_local_addr"] = local_addr
+            next_pt = 96
+            
+            for f in new_channel["formats"]:
+                x = (f["encoding"], f["clock"], f["encp"], f["fmtp"])
+                
+                for pt, info in STATIC_PAYLOAD_TYPES.items():
+                    if info == x:
+                        break
+                else:
+                    pt = next_pt
+                    next_pt += 1
+                    #raise Exception("Couldn't find payload type for %s!" % (encoding, clock))
+
+                f["rtp_local_payload_type"] = pt
+                
+                
+    def deallocate_local_media(self, old_session, new_session):
+        new_channels = new_session["channels"] if new_session else []
+        old_channels = old_session["channels"] if old_session else []
+        
+        for i in range(len(old_channels), len(new_channels)):
+            self.logger.debug("Deallocating local media address for channel %d" % i)
+            self.call.deallocate_media_address(new_channels[i]["rtp_local_addr"])
+
+
+    def realize_local_media(self):
         # This must only be called after an answer is accepted
-        self.logger.debug("realize_media_legs")
+        self.logger.debug("realize_local_media")
         local_channels = self.session.local_session["channels"]
         remote_channels = self.session.remote_session["channels"]
         
@@ -78,6 +111,7 @@ class SipLeg(Leg):
         
         for i in range(len(local_channels)):
             if i >= len(self.media_legs):
+                self.logger.debug("Making media leg for channel %d" % i)
                 self.make_media_leg(i, "net", report=WeakMethod(self.notified))
                 
             lc = local_channels[i]
@@ -94,66 +128,35 @@ class SipLeg(Leg):
             self.media_legs[i].update(**params)
             
 
-    def preprocess_outgoing_session(self, session):
-        # TODO: handle rejection, too!
-        self.logger.debug("preprocess_outgoing_session")
-        channels = session["channels"]
-        old_channels = self.session.local_session["channels"] if self.session.local_session else []
-        
-        for i, c in enumerate(channels):
-            if i >= len(old_channels):
-                local_addr = self.call.allocate_media_address(i)  # TODO: deallocate!
-            else:
-                local_addr = old_channels[i]["rtp_local_addr"]
-        
-            c["rtp_local_addr"] = local_addr
-            next_pt = 96
-            
-            for f in c["formats"]:
-                x = (f["encoding"], f["clock"], f["encp"], f["fmtp"])
-                
-                for pt, info in STATIC_PAYLOAD_TYPES.items():
-                    if info == x:
-                        break
-                else:
-                    pt = next_pt
-                    next_pt += 1
-                    #raise Exception("Couldn't find payload type for %s!" % (encoding, clock))
-
-                f["rtp_local_payload_type"] = pt
-                
-
-    def postprocess_incoming_session(self, session):
-        # TODO: this should extract the remote addr and encodings_by_pt?
-        pass
-
-        
     def process_incoming_offer(self, sdp):
         session = self.sdp_parser.parse(sdp, is_answer=False)
         self.session.set_remote_offer(session)
-        self.postprocess_incoming_session(session)
         return session
 
     
     def process_incoming_answer(self, sdp):
         session = self.sdp_parser.parse(sdp, is_answer=True)
-        self.session.set_remote_answer(session)
-        self.realize_media_legs()  # necessary to realize leg with the cached params
-        self.postprocess_incoming_session(session)
+        rejected_local_offer = self.session.set_remote_answer(session)
+        
+        if rejected_local_offer:
+            self.deallocate_local_media(self.session.local_session, rejected_local_offer)
+        else:
+            self.realize_local_media()
+            
         return session
 
     
     def process_outgoing_offer(self, session):
-        self.preprocess_outgoing_session(session)
+        self.allocate_local_media(self.session.local_session, session)
         self.session.set_local_offer(session)
         sdp = self.sdp_builder.build(session)
         return sdp
 
     
     def process_outgoing_answer(self, session):
-        self.preprocess_outgoing_session(session)
-        self.session.set_local_answer(session)
-        self.realize_media_legs()
+        self.allocate_local_media(self.session.local_session, session)
+        self.session.set_local_answer(session)  # don't care about rejected remote offers
+        self.realize_local_media()
         sdp = self.sdp_builder.build(session)
         return sdp
 
@@ -316,6 +319,11 @@ class SipLeg(Leg):
                 
         self.invite = None
     
+
+    def finish_media(self, error=None):
+        self.deallocate_local_media(None, self.session.local_session)
+        Leg.finish_media(self, error)
+        
 
     def do(self, action):
         self.logger.debug("Doing %s" % action)

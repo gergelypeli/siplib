@@ -582,10 +582,13 @@ class Call(Routable):
             
             # Sanity check
             sids = set(ml.sid for ml in media_legs if ml)
-            if len(sids) != 1:
+            if not sids:
+                sid = None  # happens on cleanup
+            elif len(sids) == 1:
+                sid = sids.pop()
+            else:
                 raise Exception("Channel %d media legs has %d sids!" % (ci, len(sids)))
                 
-            sid = sids.pop()
             spans = set()
             
             while li < leg_count:
@@ -630,14 +633,14 @@ class Call(Routable):
                 
                 if span not in spans:
                     self.logger.debug("Removing media context for channel %d span %d-%d" % (ci, left, right))
-                    media_contexts_by_span.pop(span)
+                    media_contexts_by_span.pop(span).delete()
                     
             for span in spans:
                 left, right = span
                 
                 if span not in media_contexts_by_span:
                     self.logger.debug("Adding media context for channel %d span %d-%d" % (ci, left, right))
-                    mc = MediaContext(self.switch.mgc)
+                    mc = MediaContext(self.switch.mgc, sid)
                     soid = build_oid(self.oid, "legs", "%d-%d" % (left, right))
                     coid = build_oid(soid, "channel", ci)
                     mc.set_oid(coid)
@@ -645,7 +648,7 @@ class Call(Routable):
                 else:
                     mc = media_contexts_by_span[span]
                     
-                mc.set_sid_and_leg_oids(sid, [ media_legs[left].oid, media_legs[right].oid ])
+                mc.set_leg_oids([ media_legs[left].oid, media_legs[right].oid ])
                 
         
     def forward(self, li, action):
@@ -685,7 +688,7 @@ class Call(Routable):
         for ci, mcbs in enumerate(self.media_channels):
             for span, mc in mcbs.items():
                 left, right = span
-                self.logger.debug("Finishing media channel %d span %d-%d." % (ci, left, right))
+                self.logger.debug("XXX Finishing media channel %d span %d-%d." % (ci, left, right))
                 mc.delete(WeakMethod(self.media_finished, ci, span))
             
         self.may_finish()

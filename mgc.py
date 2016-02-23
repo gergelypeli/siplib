@@ -46,6 +46,7 @@ class MediaLeg(Loggable):
         
     def delete(self, handler=None):
         if self.is_created:
+            self.is_created = False  # Call uses this to ignore such MediaLeg-s
             params = dict(id=self.oid)
             response_handler = lambda msgid, params: handler()  # TODO
             self.mgc.delete_leg(self.sid, params, response_handler=response_handler)
@@ -123,26 +124,21 @@ class ProxiedMediaLeg(MediaLeg):
         
         
 class MediaContext(Loggable):
-    def __init__(self, mgc):
+    def __init__(self, mgc, sid):
         Loggable.__init__(self)
         
         self.mgc = mgc
-        self.sid = None
+        self.sid = sid
         self.leg_oids = []
         self.is_created = False
         
 
-    def set_sid_and_leg_oids(self, sid, leg_oids):
-        if self.sid and sid != self.sid:
-            raise Exception("Context sid changed!")
-            
-        self.sid = sid
-        
+    def set_leg_oids(self, leg_oids):
         if leg_oids != self.leg_oids:
             self.leg_oids = leg_oids
             self.refresh()
         else:
-            self.logger.debug("Context not changed.")
+            self.logger.debug("Context legs not changed.")
 
         
     def process_mgw_response(self, msgid, params):
@@ -176,7 +172,7 @@ class MediaContext(Loggable):
         if self.is_created:
             self.logger.debug("Deleting context")
             params = dict(id=self.oid)
-            response_handler = lambda msgid, params: handler()  # TODO
+            response_handler = lambda msgid, params: handler() if handler else None
             self.mgc.delete_context(self.sid, params, response_handler=response_handler)
         else:
             handler()
