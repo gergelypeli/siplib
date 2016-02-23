@@ -437,6 +437,7 @@ class RecordingBridge(Bridge):
             #format = (f.encoding, f.clock)
             format = ("L16", 8000, 1, None)
             this.refresh(dict(filename="recorded.wav", format=format, record=True))
+            that.refresh({})
             
         self.call.refresh_media()
         
@@ -542,6 +543,16 @@ class Call(Routable):
             self.refresh_media()
 
 
+    def allocate_media_address(self, channel_index):
+        # TODO
+        sid_affinity = None
+        return self.switch.mgc.allocate_media_address(sid_affinity)
+        
+        
+    def deallocate_media_address(self, addr):
+        self.switch.mgc.deallocate_media_address(addr)
+        
+
     def make_media_leg(self, channel_index, type, **kwargs):
         # TODO
         sid_affinity = None
@@ -562,11 +573,11 @@ class Call(Routable):
             return
             
         leg_count = len(self.legs)
-        channel_count = max(len(leg.media_legs) for leg in self.legs)
+        channel_count = max(len(leg.media_legs) if leg else 0 for leg in self.legs)
         
         for ci in range(channel_count):
             li = 0
-            media_legs = [ leg.media_legs[ci] if ci < len(leg.media_legs) else None for leg in self.legs ]
+            media_legs = [ leg.media_legs[ci] if leg and ci < len(leg.media_legs) else None for leg in self.legs ]
             spans = set()
             
             while li < leg_count:
@@ -606,7 +617,7 @@ class Call(Routable):
                 
             media_contexts_by_span = self.media_channels[ci]
             
-            for span in media_contexts_by_span:
+            for span in list(media_contexts_by_span.keys()):
                 left, right = span
                 
                 if span not in spans:

@@ -323,16 +323,8 @@ class Sdp:
 class SdpBuilder:
     def __init__(self, host):
         self.host = host
-        self.channel_infos = []
         self.session_id = generate_session_id()
         self.last_session_version = 0
-        
-        
-    def set_channel_info(self, i, addr, formats_by_pt):
-        while i >= len(self.channel_infos):
-            self.channel_infos.append(None)
-            
-        self.channel_infos[i] = dict(addr=addr, formats_by_pt=formats_by_pt)
         
         
     def build(self, session):
@@ -341,13 +333,11 @@ class SdpBuilder:
         directions = set((c["send"], c["recv"]) for c in session["channels"])
         session_direction = directions.pop() if len(directions) == 1 else None
         
-        hosts = set(ci["addr"][0] for ci in self.channel_infos)
+        hosts = set(c["rtp_local_addr"][0] for c in session["channels"])
         session_host = hosts.pop() if len(hosts) == 1 else None
         
         for i, c in enumerate(session["channels"]):
-            info = self.channel_infos[i]
-            addr = info["addr"]
-            formats_by_pt = info["formats_by_pt"]
+            addr = c["rtp_local_addr"]
             
             type = c["type"]
             proto = c["proto"]
@@ -358,13 +348,7 @@ class SdpBuilder:
                 clock = f.get("clock")
                 fmtp = f.get("fmtp")
                 encp = f.get("encp")
-                
-                # No hashable dict for reverse lookup...
-                for pt, format in formats_by_pt.items():
-                    if format == f:
-                        break
-                else:
-                    raise Exception("No payload type for format %s" % (f,))
+                pt = f.get("rtp_local_payload_type")
                 
                 format = RtpFormat(pt, encoding, clock, encp, fmtp)
                 formats.append(format)
@@ -410,15 +394,9 @@ class SdpBuilder:
 
 class SdpParser:
     def __init__(self):
-        self.channel_infos = []
+        pass
+        
 
-
-    def get_channel_info(self, i):
-        info = self.channel_infos[i]
-        
-        return info["addr"], info["formats_by_pt"]
-        
-        
     def parse(self, sdp, is_answer):
         channels = []
         session_attributes = list(sdp.attributes)
@@ -426,19 +404,12 @@ class SdpParser:
         session_connection = sdp.connection
         
         for i, c in enumerate(sdp.channels):
-            while i >= len(self.channel_infos):
-                self.channel_infos.append(None)
-                
             channel_attributes = list(c.attributes)
             channel_dir = rip_direction(channel_attributes) or session_dir
 
             channel_connection = c.connection or session_connection
             addr = (channel_connection.host, c.port)
 
-            formats_by_pt = {}
-            
-            self.channel_infos[i] = dict(addr=addr, formats_by_pt=formats_by_pt)
-            
             formats = []
             
             for f in c.formats:
@@ -446,10 +417,10 @@ class SdpParser:
                     encoding=f.encoding,
                     clock=f.clock,
                     encp=f.encp,
-                    fmtp=f.fmtp
+                    fmtp=f.fmtp,
+                    rtp_remote_payload_type=f.payload_type
                 )
                 formats.append(format)
-                formats_by_pt[f.payload_type] = format
                 
             channel = dict(
                 type=c.type,
@@ -457,7 +428,8 @@ class SdpParser:
                 send=channel_dir[0],
                 recv=channel_dir[1],
                 formats=formats,
-                attributes=channel_attributes
+                attributes=channel_attributes,
+                rtp_remote_addr=addr
             )
             channels.append(channel)
             

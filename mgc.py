@@ -99,17 +99,15 @@ class PlayerMediaLeg(MediaLeg):
 
 
 class ProxiedMediaLeg(MediaLeg):
-    def __init__(self, mgc, sid, local_addr, report=None):
+    def __init__(self, mgc, sid, report=None):
         super().__init__(mgc, sid, "net")
 
-        self.local_addr = local_addr
         self.report = report
         self.committed = {}
 
 
     def update(self, **kwargs):  # TODO: rename to refresh?
-        new = dict(kwargs, local_addr=self.local_addr)
-        changes = { k: v for k, v in new.items() if v != self.committed.get(k) }
+        changes = { k: v for k, v in kwargs.items() if v != self.committed.get(k) }
         self.committed.update(changes)
         self.refresh(changes)
         
@@ -285,7 +283,7 @@ class Controller(Loggable):
         raise NotImplementedError()
 
 
-    def deallocate_media_address(self, sid, addr):
+    def deallocate_media_address(self, addr):
         raise NotImplementedError()
 
     
@@ -299,7 +297,6 @@ class Controller(Loggable):
         elif type == "player":
             return PlayerMediaLeg(Weak(self), sid, **kwargs)
         elif type == "net":
-            local_addr = self.allocate_media_address(sid)
-            return ProxiedMediaLeg(Weak(self), sid, local_addr, **kwargs)
+            return ProxiedMediaLeg(Weak(self), sid, **kwargs)
         else:
             raise Exception("No such media leg type: %s!" % type)

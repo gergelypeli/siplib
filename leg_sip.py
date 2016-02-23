@@ -34,7 +34,6 @@ class SipLeg(Leg):
         host = resolve(dialog.dialog_manager.get_local_addr())[0]  # TODO: not nice
         self.sdp_builder = SdpBuilder(host)
         self.sdp_parser = SdpParser()
-        self.media_leg_params = []
         
         self.dialog.set_report(WeakMethod(self.process))
 
@@ -60,39 +59,56 @@ class SipLeg(Leg):
             raise Error("Respond to what?")
 
 
-    def flatten_formats(self, formats_by_pt):
-        return { pt: (f["encoding"], f["clock"], f["encp"], f["fmtp"]) for pt, f in formats_by_pt.items() }
+    #def flatten_formats(self, formats_by_pt):
+    #    return { pt: (f["encoding"], f["clock"], f["encp"], f["fmtp"]) for pt, f in formats_by_pt.items() }
+
+
+    def flatten_formats(self, formats, pt_key):
+        return { f[pt_key]: (f["encoding"], f["clock"], f["encp"], f["fmtp"]) for f in formats }
 
 
     def realize_media_legs(self):
+        # This must only be called after an answer is accepted
         self.logger.debug("realize_media_legs")
+        local_channels = self.session.local_session["channels"]
+        remote_channels = self.session.remote_session["channels"]
         
-        for i, ml in enumerate(self.media_legs):
-            addr, formats_by_pt = self.sdp_parser.get_channel_info(i)
+        if len(local_channels) != len(remote_channels):
+            raise Exception("Channel count mismatch!")
+        
+        for i in range(len(local_channels)):
+            if i >= len(self.media_legs):
+                self.make_media_leg(i, "net", report=WeakMethod(self.notified))
+                
+            lc = local_channels[i]
+            rc = remote_channels[i]
             
-            self.media_leg_params[i].update(
-                remote_addr=addr,
-                # FIXME: must use encp and fmtp for identification, too!
-                send_formats=self.flatten_formats(formats_by_pt)
-            )
+            params = {
+                'local_addr': lc["rtp_local_addr"],
+                'remote_addr': rc["rtp_remote_addr"],
+                'send_formats': self.flatten_formats(rc["formats"], "rtp_remote_payload_type"),
+                'recv_formats': self.flatten_formats(lc["formats"], "rtp_local_payload_type")
+            }
             
-            self.logger.debug("Refreshing media leg %d: %s" % (i, self.media_leg_params[i]))
-            ml.update(**self.media_leg_params[i])
-    
+            self.logger.debug("Refreshing media leg %d: %s" % (i, params))
+            self.media_legs[i].update(**params)
+            
         #Leg.refresh_media(self)
             
 
     def preprocess_outgoing_session(self, session):
+        # TODO: handle rejection, too!
         self.logger.debug("preprocess_outgoing_session")
         channels = session["channels"]
-        
-        for i in range(len(self.media_legs), len(channels)):
-            self.make_media_leg(i, "net", report=WeakMethod(self.notified))
-            self.media_leg_params.append({})
+        old_channels = self.session.local_session["channels"] if self.session.local_session else []
         
         for i, c in enumerate(channels):
-            addr = self.media_legs[i].local_addr
-            formats_by_pt = {}
+            if i >= len(old_channels):
+                local_addr = self.call.allocate_media_address(i)  # TODO: deallocate!
+            else:
+                local_addr = old_channels[i]["rtp_local_addr"]
+        
+            c["rtp_local_addr"] = local_addr
             next_pt = 96
             
             for f in c["formats"]:
@@ -106,15 +122,8 @@ class SipLeg(Leg):
                     next_pt += 1
                     #raise Exception("Couldn't find payload type for %s!" % (encoding, clock))
 
-                formats_by_pt[pt] = f
-                        
-            self.sdp_builder.set_channel_info(i, addr, formats_by_pt)
-            
-            self.logger.debug("Setting recv_formats for channel %d: %s" % (i, formats_by_pt))
-            self.media_leg_params[i].update(
-                recv_formats=self.flatten_formats(formats_by_pt)
-            )
-
+                f["rtp_local_payload_type"] = pt
+                
 
     def postprocess_incoming_session(self, session):
         # TODO: this should extract the remote addr and encodings_by_pt?

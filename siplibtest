@@ -225,7 +225,7 @@ class TestController(Controller):
         return self.media_addresses.pop()
     
     
-    def deallocate_media_address(self, sid, addr):
+    def deallocate_media_address(self, addr):
         self.media_addresses.add(addr)
         
         
