@@ -433,14 +433,10 @@ class RecordingBridge(Bridge):
             this.pair(Weak(that))
             that.pair(Weak(this))
             
-            #f = answer.channels[0].formats[0]
-            #format = (f.encoding, f.clock)
             format = ("L16", 8000, 1, None)
             this.refresh(dict(filename="recorded.wav", format=format, record=True))
             that.refresh({})
             
-        self.call.refresh_media()
-        
         if len(answer["channels"]) >= 1:
             c = answer["channels"][0]
 
@@ -563,6 +559,7 @@ class Call(Routable):
         
         
     def dirty(self, channel_index):
+        # TODO: this should be more intelligent!
         self.refresh_media()
         
         

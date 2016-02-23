@@ -115,7 +115,6 @@ class CalleeLeg(PlannedLeg):
         
         media_leg = self.make_media_leg(0, "player")
         media_leg.play("playback.wav", ("PCMA", 8000, 1, None), volume=0.2, fade=3)
-        # No refresh_media here, because we are the sender leg of the answer
         
         answer = self.make_answer(self.offer)
         self.report(dict(type="accept", session=answer))
@@ -179,7 +178,6 @@ class CallerLeg(PlannedLeg):
 
         media_leg = self.make_media_leg(0, "player")
         media_leg.play("playback.wav", ("PCMA", 8000, 1, None), volume=0.2, fade=3)
-        # No refresh_media here, because we are the sender leg of the answer
 
         answer = self.make_answer(offer)
         self.report(dict(type="session", session=answer))
@@ -390,8 +388,8 @@ class SwitchB(TestSwitch):
         
         self.account_manager.set_our_credentials(*B_CRED)
 
-        #metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
-        metapoll.register_timeout(timedelta(seconds=10), WeakMethod(self.test_dialing))
+        metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
+        #metapoll.register_timeout(timedelta(seconds=10), WeakMethod(self.test_dialing))
 
 
     def test_registering(self):

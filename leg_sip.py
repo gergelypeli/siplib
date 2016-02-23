@@ -93,8 +93,6 @@ class SipLeg(Leg):
             self.logger.debug("Refreshing media leg %d: %s" % (i, params))
             self.media_legs[i].update(**params)
             
-        #Leg.refresh_media(self)
-            
 
     def preprocess_outgoing_session(self, session):
         # TODO: handle rejection, too!
