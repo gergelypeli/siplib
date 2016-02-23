@@ -40,8 +40,8 @@ class Leg(Loggable):
         self.report(dict(type="finish", error=error))
 
 
-    def refresh_media(self):
-        self.call.refresh_media()
+    #def refresh_media(self):
+    #    self.call.refresh_media()
 
 
     def make_media_leg(self, channel_index, type, **kwargs):

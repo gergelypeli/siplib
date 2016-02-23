@@ -14,13 +14,19 @@ class MediaLeg(Loggable):
         self.sid = sid
         self.type = type
         self.is_created = False
+        self.report_dirty = None
 
+
+    def set_report_dirty(self, report_dirty):
+        self.report_dirty = report_dirty
+        
 
     def realize(self):
         if not self.is_created:
+            raise Exception("Leg was not realized but needed for a context!")
             # This shouldn't happen, unless one Leg was lazy
-            self.logger.warning("Leg was forcedly realized!")
-            self.refresh({})
+            #self.logger.warning("Leg was forcedly realized!")
+            #self.refresh({})
 
         return self.oid
         
@@ -32,6 +38,7 @@ class MediaLeg(Loggable):
             #self.sid = self.mgc.select_gateway_sid(self.affinity)
             params = dict(params, id=self.oid, type=self.type)
             self.mgc.create_leg(self.sid, params, response_handler=lambda x, y: None, request_handler=WeakMethod(self.process_request))  # TODO
+            self.report_dirty()
         else:
             params = dict(params, id=self.oid)
             self.mgc.modify_leg(self.sid, params, response_handler=lambda x, y: None)  # TODO
@@ -42,6 +49,7 @@ class MediaLeg(Loggable):
             params = dict(id=self.oid)
             response_handler = lambda msgid, params: handler()  # TODO
             self.mgc.delete_leg(self.sid, params, response_handler=response_handler)
+            self.report_dirty()
         else:
             handler()
 

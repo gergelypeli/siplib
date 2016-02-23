@@ -64,7 +64,9 @@ class SipLeg(Leg):
         return { pt: (f["encoding"], f["clock"], f["encp"], f["fmtp"]) for pt, f in formats_by_pt.items() }
 
 
-    def refresh_media(self):
+    def realize_media_legs(self):
+        self.logger.debug("realize_media_legs")
+        
         for i, ml in enumerate(self.media_legs):
             addr, formats_by_pt = self.sdp_parser.get_channel_info(i)
             
@@ -77,10 +79,11 @@ class SipLeg(Leg):
             self.logger.debug("Refreshing media leg %d: %s" % (i, self.media_leg_params[i]))
             ml.update(**self.media_leg_params[i])
     
-        Leg.refresh_media(self)
+        #Leg.refresh_media(self)
             
 
     def preprocess_outgoing_session(self, session):
+        self.logger.debug("preprocess_outgoing_session")
         channels = session["channels"]
         
         for i in range(len(self.media_legs), len(channels)):
@@ -107,6 +110,7 @@ class SipLeg(Leg):
                         
             self.sdp_builder.set_channel_info(i, addr, formats_by_pt)
             
+            self.logger.debug("Setting recv_formats for channel %d: %s" % (i, formats_by_pt))
             self.media_leg_params[i].update(
                 recv_formats=self.flatten_formats(formats_by_pt)
             )
@@ -127,7 +131,7 @@ class SipLeg(Leg):
     def process_incoming_answer(self, sdp):
         session = self.sdp_parser.parse(sdp, is_answer=True)
         self.session.set_remote_answer(session)
-        self.refresh_media()
+        self.realize_media_legs()  # necessary to realize leg with the cached params
         self.postprocess_incoming_session(session)
         return session
 
@@ -142,7 +146,7 @@ class SipLeg(Leg):
     def process_outgoing_answer(self, session):
         self.preprocess_outgoing_session(session)
         self.session.set_local_answer(session)
-        self.refresh_media()
+        self.realize_media_legs()
         sdp = self.sdp_builder.build(session)
         return sdp
 
@@ -208,6 +212,7 @@ class SipLeg(Leg):
             elif not session["is_answer"]:
                 raise Error("Answer expected for ACK!")
             else:
+                #self.logger.debug("invite_outgoing_ack with answer")
                 sdp = self.process_outgoing_answer(session)
         
         self.send_request(dict(method="ACK", sdp=sdp), self.invite.final_response)

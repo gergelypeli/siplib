@@ -112,11 +112,12 @@ class CalleeLeg(PlannedLeg):
         self.report(dict(type="ring"))
         
         yield from self.sleep(1)
-        answer = self.make_answer(self.offer)
         
         media_leg = self.make_media_leg(0, "player")
         media_leg.play("playback.wav", ("PCMA", 8000, 1, None), volume=0.2, fade=3)
         # No refresh_media here, because we are the sender leg of the answer
+        
+        answer = self.make_answer(self.offer)
         self.report(dict(type="accept", session=answer))
 
         while True:
@@ -161,22 +162,29 @@ class CallerLeg(PlannedLeg):
         offer = None  # FIXME: make one from CALLER_SDP!
         self.report(dict(type="dial", ctx=self.ctx, session=offer))
 
-        action = yield from self.wait_action()
+        while True:
+            action = yield from self.wait_action()
         
-        if action["type"] == "reject":
-            self.logger.error("Oops, we got rejected!")
-            return
-        elif action["type"] != "accept":
-            self.logger.error("Oops, WTF: %s!" % action["type"])
-            return
+            if action["type"] == "reject":
+                self.logger.error("Oops, we got rejected!")
+                return
+            elif action["type"] == "accept":
+                self.logger.error("Yay, accepted!")
+                break
+            else:
+                self.logger.error("Hm, we got: %s!" % action["type"])
             
         offer = action.get("session")
         self.logger.debug("Accepted with SDP:\n%s" % repr(offer))
 
+        media_leg = self.make_media_leg(0, "player")
+        media_leg.play("playback.wav", ("PCMA", 8000, 1, None), volume=0.2, fade=3)
+        # No refresh_media here, because we are the sender leg of the answer
+
         answer = self.make_answer(offer)
         self.report(dict(type="session", session=answer))
 
-        action = yield from self.expect("action")
+        action = yield from self.wait_action()
         assert action["type"] == "hangup"
         
         self.logger.debug("Caller done.")
@@ -230,8 +238,16 @@ class TestRouting(SimpleRouting):
             
         if len(contacts) == 1:
             uri, hop = contacts[0]
-            ctx["uri"] = uri  # Only update the RURI for forwarding
-            ctx["hop"] = hop
+            
+            out_ctx = {
+                'uri': uri,  # Only update the RURI for forwarding
+                'hop': hop,
+                'from': ctx["from"],
+                'to': ctx["to"]
+            }
+            
+            out_action = dict(action, ctx=out_ctx)
+            self.dial("sip", out_action)
         else:
             self.logger.debug("Has %d registered SIP contacts: %s" % (len(contacts), to_uri,))
             raise SipError(Status(404))
@@ -274,20 +290,15 @@ class TestSwitch(Switch):
         metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
 
 
-    def make_leg(self, call, uri):
-        if uri.scheme == "builtin":
-            subtype = uri.addr.host
-            
-            if subtype == "callee":
-                return CalleeLeg(self.metapoll)
-            elif subtype == "unreachable":
-                return UnreachableLeg(self.metapoll)
-            elif subtype == "ringing":
-                return RingingLeg(self.metapoll)
-            else:
-                raise Exception("Unknown builtin URI '%s'!" % uri.addr.host)
+    def make_leg(self, call, type):
+        if type == "callee":
+            return CalleeLeg(self.metapoll)
+        elif type == "unreachable":
+            return UnreachableLeg(self.metapoll)
+        elif type == "ringing":
+            return RingingLeg(self.metapoll)
         else:
-            return Switch.make_leg(self, call, uri)
+            return Switch.make_leg(self, call, type)
 
 
     def make_call(self):
@@ -331,16 +342,22 @@ class SwitchB(TestSwitch):
             self.logger.debug("Routing plan started.")
             yield from self.sleep(0)  # yield necessary in a generator
             ctx = action["ctx"]
-            uri = ctx["uri"]
+            to = ctx["to"]
             
-            if uri.user == CALLEE_NUMBER:
-                self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("record:444@b.switch"))))
-            elif uri.user == "444":
-                self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:unreachable"))))
-                self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:ringing"))))
-                self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:callee"))))
-            elif uri.user == SNOM_NUMBER:
-                self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri(A_ADDR, SNOM_NUMBER))))
+            if to.uri.user == CALLEE_NUMBER:
+                to2 = to._replace(uri=to.uri._replace(user="444"))
+                action2 = dict(action, ctx=dict(ctx, to=to2))
+                self.dial("record", action2)
+            elif to.uri.user == "444":
+                self.dial("unreachable", action)
+                self.dial("ringing", action)
+                self.dial("callee", action)
+                #self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:unreachable"))))
+                #self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:ringing"))))
+                #self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:callee"))))
+            elif to.uri.user == SNOM_NUMBER:
+                action2 = dict(action, ctx=dict(ctx, uri=Uri(A_ADDR, SNOM_NUMBER)))
+                self.dial("sip", action2)
                 
             #li, action = yield from self.wait_action()
             #self.forward(li, action)

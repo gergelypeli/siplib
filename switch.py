@@ -84,15 +84,15 @@ class Switch(Loggable):
             self.transaction_manager.send_message(response, msg)
 
 
-    def make_leg(self, call, uri):
-        if uri.scheme == "dial":
+    def make_leg(self, call, type):
+        if type == "dial":
             return call.make_bridge(Bridge).make_incoming_leg()
-        elif uri.scheme == "record":
+        elif type == "record":
             return call.make_bridge(RecordingBridge).make_incoming_leg()
-        elif uri.scheme == "sip":
+        elif type == "sip":
             return SipLeg(Dialog(Weak(self.dialog_manager)))
         else:
-            raise Exception("Unknown URI scheme '%s' for creating outgoing leg!" % uri.scheme)
+            raise Exception("Unknown leg type '%s' for creating outgoing leg!" % type)
 
 
     def make_call(self):

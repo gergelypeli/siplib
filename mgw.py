@@ -157,7 +157,9 @@ class NetLeg(Leg):
         self.rtp_parser = RtpParser()
         self.rtp_builder = RtpBuilder()
         self.dtmf_extractor = DtmfExtractor(WeakMethod(self.dtmf_detected))
+        self.dtmf_extractor.set_oid(build_oid(self.oid, "dtmf-ex"))
         self.dtmf_injector = DtmfInjector()
+        self.dtmf_injector.set_oid(build_oid(self.oid, "dtmf-in"))
         
         
     def __del__(self):
@@ -240,7 +242,7 @@ class NetLeg(Leg):
         udp = self.rtp_builder.build(packet)
         
         if udp is None:
-            self.logger.debug("Ignoring sent unknown payload format %s" % (format,))
+            self.logger.debug("Ignoring sent unknown payload format %s" % (packet.format,))
             return
 
         if not self.remote_addr or not self.remote_addr[1]:

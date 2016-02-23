@@ -346,7 +346,7 @@ class DtmfInjector(DtmfBase):
 
 class RtpBuilder:
     def __init__(self):
-        self.ssrc = 0  # TODO: generate
+        self.ssrc = 1  # TODO: generate, Snom doesn't play SSRC 0???
         self.last_seq = 0  # TODO: generate
         self.base_timestamp = 0  # TODO: generate
         self.payload_types_by_format = {}

@@ -121,13 +121,12 @@ class Routing(Loggable):
             self.establish_anchor()
             
             
-    def dial(self, action):
+    def dial(self, type, action):
         if action["type"] != "dial":
             raise Exception("Dial action is not a dial: %s" % action["type"])
-            
-        uri = action["ctx"]["uri"]
-        self.logger.debug("Dialing out to: %s" % (uri,))
-        leg = self.call.make_leg(uri)
+
+        self.logger.debug("Dialing out to: %s" % (type,))
+        leg = self.call.make_leg(type)
         self.add_leg(leg)
         leg.do(action)
 
@@ -205,14 +204,15 @@ class SimpleRouting(Routing):
         if action["type"] == "dial":
             try:
                 self.route(action)
+                
+                if not self.legs:
+                    raise Exception("Simple routing finished without legs!")
             except SipError as e:
                 self.logger.error("Simple routing SIP error: %s" % (e.status,))
                 self.reject(e.status)
             except Exception as e:
                 self.logger.error("Simple routing internal error: %s" % (e,))
                 self.reject(Status(500))
-            else:
-                self.dial(action)
         else:
             Routing.process(self, li, action)
 
@@ -496,8 +496,8 @@ class Call(Routable):
         return leg
         
 
-    def make_leg(self, uri):
-        return self.pimp_leg(self.switch.make_leg(self, uri))
+    def make_leg(self, type):
+        return self.pimp_leg(self.switch.make_leg(self, type))
 
 
     def make_routing(self):
@@ -545,10 +545,18 @@ class Call(Routable):
     def make_media_leg(self, channel_index, type, **kwargs):
         # TODO
         sid_affinity = None
-        return self.switch.mgc.make_media_leg(sid_affinity, type, **kwargs)
+        ml = self.switch.mgc.make_media_leg(sid_affinity, type, **kwargs)
+        ml.set_report_dirty(WeakMethod(self.dirty, channel_index))
+        
+        return ml
+        
+        
+    def dirty(self, channel_index):
+        self.refresh_media()
         
         
     def refresh_media(self):
+        # TODO: do it more intelligently, only checking the dirty legs!
         if not self.legs:
             # Can happen before anchoring
             return
