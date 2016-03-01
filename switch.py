@@ -3,6 +3,7 @@ from format import Status
 from transport import UdpTransport
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
+from leg import Routing
 from leg_sip import SipLeg
 #from call import Call, Bridge, RecordingBridge
 from ground import Ground, Call
@@ -23,9 +24,6 @@ class Switch(Loggable):
 
         self.calls_by_oid = {}
         self.call_count = 0
-        self.leg_count = 0
-        self.bridge_count = 0
-        self.context_count = 0
 
         self.local_addr = local_addr
         self.metapoll = metapoll
@@ -60,28 +58,6 @@ class Switch(Loggable):
         self.ground = Ground(Weak(self.mgc))
 
 
-    # TODO: these may be changed to CoidNode naming
-    def generate_leg_oid(self):
-        leg_oid = build_oid(self.oid, "leg", self.leg_count)
-        self.leg_count += 1
-        
-        return leg_oid
-
-
-    def generate_bridge_oid(self):
-        bridge_oid = build_oid(self.oid, "bridge", self.bridge_count)
-        self.bridge_count += 1
-        
-        return bridge_oid
-
-
-    def generate_context_oid(self):
-        context_oid = build_oid(self.oid, "context", self.context_count)
-        self.context_count += 1
-        
-        return context_oid
-
-
     def set_oid(self, oid):
         Loggable.set_oid(self, oid)
 
@@ -112,8 +88,10 @@ class Switch(Loggable):
             self.transaction_manager.send_message(response, msg)
 
 
-    def make_leg(self, call, type):
-        if type == "dial":
+    def make_leg(self, type):
+        if type == "routing":
+            return Routing()
+        elif type == "dial":
             raise Exception("XXX Sorry!")
             #return call.make_bridge(Bridge).make_incoming_leg()
         elif type == "record":

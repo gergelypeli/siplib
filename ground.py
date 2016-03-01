@@ -55,6 +55,12 @@ class Ground(Loggable):
         
         
     def link_legs(self, leg_oid0, leg_oid1):
+        if leg_oid0 in self.targets_by_source:
+            raise Exception("First leg already linked: %s!" % leg_oid0)
+
+        if leg_oid1 in self.targets_by_source:
+            raise Exception("Second leg already linked: %s!" % leg_oid1)
+            
         self.targets_by_source[leg_oid0] = leg_oid1
         self.targets_by_source[leg_oid1] = leg_oid0
         
@@ -69,7 +75,12 @@ class Ground(Loggable):
         
     def collapse_legs(self, leg_oid0, leg_oid1, queued_actions=None):
         prev_leg_oid = self.targets_by_source[leg_oid0]
+        if not prev_leg_oid:
+            raise Exception("No previous leg before collapsed leg %s!" % leg_oid0)
+            
         next_leg_oid = self.targets_by_source[leg_oid1]
+        if not next_leg_oid:
+            raise Exception("No next leg after collapsed leg %s!" % leg_oid1)
         
         self.targets_by_source[leg_oid0] = None
         self.targets_by_source[leg_oid1] = None
@@ -156,17 +167,23 @@ class Call(Loggable):
         self.ground = ground
         self.leg_oids = set()
                 
-        self.leg_count = 0
         self.bridge_count = 0
-        self.context_count = 0
 
 
-    def generate_leg_oid(self):
-        leg_oid = build_oid(self.oid, "leg", self.leg_count)
-        self.leg_count += 1
+    def generate_leg_oid(self, type, path):
+        if type == "routing":
+            if path:
+                p = ".".join(str(x) for x in path)
+                return build_oid(build_oid(self.oid, "leg", p), "routing")
+            else:
+                return build_oid(self.oid, "routing")
+        elif type == "slot":
+            p = ".".join(str(x) for x in path[:-1])
+            return build_oid(build_oid(build_oid(self.oid, "leg", p), "routing"), "slot", path[-1])
+        else:
+            p = ".".join(str(x) for x in path)
+            return build_oid(self.oid, "leg", p)
         
-        return leg_oid
-
 
     def generate_bridge_oid(self):
         bridge_oid = build_oid(self.oid, "bridge", self.bridge_count)
@@ -181,9 +198,12 @@ class Call(Loggable):
     #    return bridge
         
         
-    def add_leg(self, leg, oid):
+    def add_leg(self, leg, type, path):
+        oid = self.generate_leg_oid(type, path)
+        
         leg.set_oid(oid)
-        leg.set_call(Weak(self))
+        leg.set_call(Weak(self), path)
+        
         self.leg_oids.add(oid)
         self.ground.add_leg(leg)
 
@@ -194,30 +214,21 @@ class Call(Loggable):
         self.may_finish()
         
 
-    def make_leg(self, type):
-        leg = self.switch.make_leg(self, type)
-        self.add_leg(leg, self.generate_leg_oid())
+    def make_leg(self, type, path):
+        leg = self.switch.make_leg(type)
+        self.add_leg(leg, type, path)
 
         return leg
 
 
     def make_slot_leg(self, owner, li):
         slot_leg = SlotLeg(owner, li)
-        self.add_leg(slot_leg, build_oid(owner.oid, "slot", li))
+        self.add_leg(slot_leg, "slot", owner.path + [ li ])
         
         return slot_leg
 
 
-    def make_routing(self):
-        routing = self.switch.make_routing()
-        self.add_leg(routing, build_oid(self.oid, "routing"))
-        
-        return routing
-        
-
     def link_and_start_legs(self, leg0, leg1):
-        #oid0 = self.ground.add_leg(leg0)
-        #oid1 = self.ground.add_leg(leg1)
         self.ground.link_legs(leg0.oid, leg1.oid)
         
         # Hm, this is used for slots only, so the order shouldn't matter, leg0
@@ -231,9 +242,9 @@ class Call(Loggable):
         
         
     def start(self, incoming_leg):
-        self.add_leg(incoming_leg, self.generate_leg_oid())
+        self.add_leg(incoming_leg, None, [ 0 ])
         
-        routing = self.make_routing()
+        routing = self.make_leg("routing", [])
         
         self.ground.link_legs(incoming_leg.oid, routing.oid)
         self.ground.start_leg(routing.oid)

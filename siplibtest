@@ -283,19 +283,17 @@ class TestSwitch(Switch):
         metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
 
 
-    def make_leg(self, call, type):
-        if type == "callee":
+    def make_leg(self, type):
+        if type == "routing":
+            return TestRouting()
+        elif type == "callee":
             return CalleeLeg(self.metapoll)
         elif type == "unreachable":
             return UnreachableLeg(self.metapoll)
         elif type == "ringing":
             return RingingLeg(self.metapoll)
         else:
-            return Switch.make_leg(self, call, type)
-            
-            
-    def make_routing(self):
-        return TestRouting()
+            return Switch.make_leg(self, type)
 
 
 class SwitchA(TestSwitch):
@@ -337,12 +335,11 @@ class SwitchB(TestSwitch):
             ctx = action["ctx"]
             to = ctx["to"]
             
-            #if to.uri.user == CALLEE_NUMBER:
-            #    to2 = to._replace(uri=to.uri._replace(user="444"))
-            #    action2 = dict(action, ctx=dict(ctx, to=to2))
-            #    self.dial("record", action2)
-            #el
-            if to.uri.user == CALLEE_NUMBER:  #"444":
+            if to.uri.user == CALLEE_NUMBER:
+                to2 = to._replace(uri=to.uri._replace(user="444"))
+                action2 = dict(action, ctx=dict(ctx, to=to2))
+                self.dial("routing", action2)
+            elif to.uri.user == "444":
                 self.dial("unreachable", action)
                 self.dial("ringing", action)
                 self.dial("callee", action)
@@ -388,9 +385,12 @@ class SwitchB(TestSwitch):
         #metapoll.register_timeout(timedelta(seconds=10), WeakMethod(self.test_dialing))
 
 
-    def make_routing(self):
-        return self.RoutingClass(Weak(self.metapoll))
-        
+    def make_leg(self, type):
+        if type == "routing":
+            return self.RoutingClass(Weak(self.metapoll))
+        else:
+            return TestSwitch.make_leg(self, type)
+
 
     def test_registering(self):
         self.logger.debug("Registering to Switch A.")

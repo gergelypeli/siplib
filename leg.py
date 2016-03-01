@@ -11,11 +11,13 @@ class BareLeg(Loggable):
         Loggable.__init__(self)
         
         self.call = None
+        self.path = None  # To prettify oids
         # TODO: may need the media_legs, too!
         
     
-    def set_call(self, call):
+    def set_call(self, call, path):
         self.call = call
+        self.path = path
         
         
     def start(self):
@@ -259,10 +261,7 @@ class Routing(BareLeg):
         self.queued_actions = {}
     
     
-    def add_leg(self, leg):
-        self.leg_count += 1
-        li = self.leg_count  # outgoing legs are numbered from 1
-
+    def add_leg(self, li, leg):
         slot_leg = self.call.make_slot_leg(Weak(self), li)
         self.legs[li] = Weak(slot_leg)
         
@@ -320,8 +319,11 @@ class Routing(BareLeg):
             raise Exception("Dial action is not a dial: %s" % action["type"])
 
         self.logger.debug("Dialing out to: %s" % (type,))
-        leg = self.call.make_leg(type)
-        li = self.add_leg(leg)
+        self.leg_count += 1
+        li = self.leg_count  # outgoing legs are numbered from 1
+        
+        leg = self.call.make_leg(type, self.path + [ li ])
+        self.add_leg(li, leg)
         self.legs[li].report(action)
 
 
