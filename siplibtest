@@ -10,8 +10,9 @@ from format import Addr, Uri, Nameaddr, Status, SipError, Hop
 from transport import UdpTransport
 from transactions import TransactionManager
 #from dialog import Dialog, DialogManager
-from leg import PlannedLeg
-from call import Call, SimpleRouting, PlannedRouting
+from leg import PlannedLeg, SimpleRouting, PlannedRouting
+#from call import Call, SimpleRouting, PlannedRouting
+from ground import Call
 from sdp import Sdp
 from authority import Authority
 from registrar import RecordManager
@@ -67,7 +68,7 @@ class UnreachableLeg(PlannedLeg):
         
         yield from self.wait_action("dial")
         self.logger.debug("Got dial, but not answering anything.")
-        self.anchor()
+        #self.anchor()
 
         yield from self.wait_action("hangup")
         self.logger.debug("And now the caller hung up.")
@@ -79,7 +80,7 @@ class RejectingLeg(PlannedLeg):
         
         yield from self.wait_action("dial")
         self.logger.debug("Got dial, but not now rejecting it.")
-        self.anchor()
+        #self.anchor()
 
         self.report(dict(type="reject", status=Status(603)))
         self.logger.debug("And now done.")
@@ -91,7 +92,7 @@ class RingingLeg(PlannedLeg):
         
         yield from self.wait_action("dial")
         self.logger.debug("Got dial, now ringing forever.")
-        self.anchor()
+        #self.anchor()
 
         self.report(dict(type="ring"))
 
@@ -106,7 +107,7 @@ class CalleeLeg(PlannedLeg):
         action = yield from self.wait_action("dial")
         self.offer = action.get("session")
         self.logger.debug("Got offer:\n%s" % repr(self.offer))
-        self.anchor()
+        #self.anchor()
         
         yield from self.sleep(1)
         self.report(dict(type="ring"))
@@ -126,7 +127,7 @@ class CalleeLeg(PlannedLeg):
                 answer = self.make_answer(action["session"])
                 self.report(dict(type="session", session=answer))
             elif action["type"] == "tone":
-                self.logger.debug("Okay, go a tone %s, fading out..." % action["name"])
+                self.logger.debug("Okay, got a tone %s, fading out..." % action["name"])
                 break
                 
         media_leg.play(volume=0, fade=3)
@@ -252,13 +253,7 @@ class TestRouting(SimpleRouting):
 
 
 class TestSwitch(Switch):
-    def __init__(self, metapoll, local_addr, mgw_addr, media_ports, routing_class):
-        class TestCall(Call):
-            def make_routing(self):
-                return routing_class(Weak(self))
-                
-        self.call_class = TestCall
-        
+    def __init__(self, metapoll, local_addr, mgw_addr, media_ports):
         transport = UdpTransport(metapoll, local_addr, WeakMethod(self.reception))
         transaction_manager = TransactionManager(local_addr, WeakMethod(transport.send))
         record_manager = TestRecordManager(WeakMethod(transaction_manager.send_message))
@@ -297,15 +292,15 @@ class TestSwitch(Switch):
             return RingingLeg(self.metapoll)
         else:
             return Switch.make_leg(self, call, type)
+            
+            
+    def make_routing(self):
+        return TestRouting()
 
-
-    def make_call(self):
-        return self.call_class(Weak(self))
-        
 
 class SwitchA(TestSwitch):
     def __init__(self, metapoll, *args):
-        super().__init__(metapoll, *args, routing_class=TestRouting)
+        super().__init__(metapoll, *args)
         
         # This can register to accept calls
         callee_uri = Uri(Addr(A_DOMAIN, None), CALLEE_NUMBER)
@@ -342,11 +337,12 @@ class SwitchB(TestSwitch):
             ctx = action["ctx"]
             to = ctx["to"]
             
-            if to.uri.user == CALLEE_NUMBER:
-                to2 = to._replace(uri=to.uri._replace(user="444"))
-                action2 = dict(action, ctx=dict(ctx, to=to2))
-                self.dial("record", action2)
-            elif to.uri.user == "444":
+            #if to.uri.user == CALLEE_NUMBER:
+            #    to2 = to._replace(uri=to.uri._replace(user="444"))
+            #    action2 = dict(action, ctx=dict(ctx, to=to2))
+            #    self.dial("record", action2)
+            #el
+            if to.uri.user == CALLEE_NUMBER:  #"444":
                 self.dial("unreachable", action)
                 self.dial("ringing", action)
                 self.dial("callee", action)
@@ -380,7 +376,7 @@ class SwitchB(TestSwitch):
 
 
     def __init__(self, metapoll, *args):
-        super().__init__(metapoll, *args, routing_class=self.RoutingClass)
+        super().__init__(metapoll, *args)
         
         phone_uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
         
@@ -391,6 +387,10 @@ class SwitchB(TestSwitch):
         metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
         #metapoll.register_timeout(timedelta(seconds=10), WeakMethod(self.test_dialing))
 
+
+    def make_routing(self):
+        return self.RoutingClass(Weak(self.metapoll))
+        
 
     def test_registering(self):
         self.logger.debug("Registering to Switch A.")

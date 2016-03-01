@@ -4,7 +4,8 @@ from transport import UdpTransport
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
 from leg_sip import SipLeg
-from call import Call, Bridge, RecordingBridge
+#from call import Call, Bridge, RecordingBridge
+from ground import Ground, Call
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
 from account import Account, AccountManager
@@ -22,6 +23,9 @@ class Switch(Loggable):
 
         self.calls_by_oid = {}
         self.call_count = 0
+        self.leg_count = 0
+        self.bridge_count = 0
+        self.context_count = 0
 
         self.local_addr = local_addr
         self.metapoll = metapoll
@@ -53,6 +57,29 @@ class Switch(Loggable):
         )
         self.account_manager = account_manager or AccountManager(
         )
+        self.ground = Ground(Weak(self.mgc))
+
+
+    # TODO: these may be changed to CoidNode naming
+    def generate_leg_oid(self):
+        leg_oid = build_oid(self.oid, "leg", self.leg_count)
+        self.leg_count += 1
+        
+        return leg_oid
+
+
+    def generate_bridge_oid(self):
+        bridge_oid = build_oid(self.oid, "bridge", self.bridge_count)
+        self.bridge_count += 1
+        
+        return bridge_oid
+
+
+    def generate_context_oid(self):
+        context_oid = build_oid(self.oid, "context", self.context_count)
+        self.context_count += 1
+        
+        return context_oid
 
 
     def set_oid(self, oid):
@@ -65,6 +92,7 @@ class Switch(Loggable):
         self.transport.set_oid(build_oid(oid, "transport"))
         self.dialog_manager.set_oid(build_oid(oid, "diaman"))
         self.mgc.set_oid(build_oid(oid, "mgc"))
+        self.ground.set_oid(build_oid(oid, "ground"))
 
 
     def authing(self, response, request):
@@ -86,9 +114,11 @@ class Switch(Loggable):
 
     def make_leg(self, call, type):
         if type == "dial":
-            return call.make_bridge(Bridge).make_incoming_leg()
+            raise Exception("XXX Sorry!")
+            #return call.make_bridge(Bridge).make_incoming_leg()
         elif type == "record":
-            return call.make_bridge(RecordingBridge).make_incoming_leg()
+            raise Exception("XXX Sorry!")
+            #return call.make_bridge(RecordingBridge).make_incoming_leg()
         elif type == "sip":
             return SipLeg(Dialog(Weak(self.dialog_manager)))
         else:
@@ -96,7 +126,7 @@ class Switch(Loggable):
 
 
     def make_call(self):
-        return Call(Weak(self))
+        return Call(Weak(self), Weak(self.ground))
         
         
     def start_call(self, incoming_leg):
@@ -120,9 +150,9 @@ class Switch(Loggable):
         return WeakMethod(incoming_dialog.recv_request)
         
 
-    def finish_call(self, oid):
-        self.logger.debug("Finishing call %s" % oid)
-        self.calls_by_oid.pop(oid)
+    def call_finished(self, call):
+        self.logger.debug("Finishing call %s" % call.oid)
+        self.calls_by_oid.pop(call.oid)
         
         
     def auth_request(self, params):

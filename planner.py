@@ -24,7 +24,7 @@ class Planned(Loggable):
         self.abort()
         
 
-    def start(self, *args, **kwargs):
+    def start_plan(self, *args, **kwargs):  # Hm, must have renamed it, collided with Leg.start
         if self.generator:
             raise Exception("Plan already started!")
         

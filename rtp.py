@@ -11,11 +11,16 @@ BYTES_PER_SAMPLE = 2
 
 
 class Base(Loggable):
+    def __init__(self):
+        self.msecs_skew = 0
+        
+        
     def msecs(self, ticks, clock):
         q, r = divmod(ticks * 1000, clock)
-    
-        if r:
-            self.logger.warning("Ticks rounded: %d / %d!" % (ticks, clock))
+        
+        if r / clock != self.msecs_skew:
+            self.logger.warning("Ticks skewed by %sms!" % (r / clock))
+            self.msecs_skew = r / clock  # Report once and remember
             
         return q
         
@@ -24,6 +29,7 @@ class Base(Loggable):
         q, r = divmod(msecs * clock, 1000)
         
         if r:
+            # Highly unlikely, since clock is a multiple of 1000
             self.logger.warning("Msecs rounded: %d / %d!" % (msecs, clock))
             
         return q
@@ -269,6 +275,8 @@ class DtmfBase(Base):
 
 class DtmfExtractor(DtmfBase):
     def __init__(self, report):
+        DtmfBase.__init__(self)
+        
         self.report = report
         self.next_time_ms = None
         
@@ -301,6 +309,8 @@ class DtmfExtractor(DtmfBase):
 
 class DtmfInjector(DtmfBase):
     def __init__(self):
+        DtmfBase.__init__(self)
+
         self.format = None
         self.next_time_ms = None
 

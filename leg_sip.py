@@ -347,7 +347,7 @@ class SipLeg(Leg):
                 self.invite_outgoing_request(dict(method="INVITE"), session)
                 self.change_state(self.DIALING_OUT)
                 
-                self.anchor()
+                #self.anchor()
                 return
 
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):

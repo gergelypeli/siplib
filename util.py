@@ -5,6 +5,8 @@ from format import Addr
 from async import WeakMethod
 import sys, traceback
 
+FULL_OIDS = True
+
 
 def resolve(addr):  # TODO: make this an Addr method?
     return Addr(socket.gethostbyname(addr.host), addr.port)
@@ -81,7 +83,26 @@ def setup_exchandler():
     sys.excepthook = my_exchandler
 
 
+# Maybe
+OID_SWITCH = "switch"
+OID_CALL = "call"
+OID_LEG = "leg"
+OID_ROUTING = "routing"
+OID_SLOT = "slot"
+OID_CHANNEL = "channel"
+OID_MGC = "mgc"
+OID_MGW = "mgw"
+OID_DIALOG = "dialog"
+OID_DIALOG_MANAGER = "diaman"
+OID_MSGP = "msgp"
+OID_GROUND = "ground"
+OID_CONTEXT = "context"
+OID_TRANSPORT = "transport"
+OID_AUTHORITY = "authority"
+
+
 def build_oid(parent, key, value=None):
+    key = key[0 if FULL_OIDS else 1] if isinstance(key, tuple) else key
     kv = "%s=%s" % (key, value) if value is not None else key
     return "%s,%s" % (parent, kv) if parent is not None else kv
 
