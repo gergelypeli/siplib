@@ -173,16 +173,13 @@ class Call(Loggable):
     def generate_leg_oid(self, type, path):
         if type == "routing":
             if path:
-                p = ".".join(str(x) for x in path)
-                return build_oid(build_oid(self.oid, "leg", p), "routing")
+                return build_oid(self.oid, "leg", path, "routing")
             else:
                 return build_oid(self.oid, "routing")
         elif type == "slot":
-            p = ".".join(str(x) for x in path[:-1])
-            return build_oid(build_oid(build_oid(self.oid, "leg", p), "routing"), "slot", path[-1])
+            return build_oid(self.oid, "leg", path[:-1], "routing", None, "slot", path[-1])
         else:
-            p = ".".join(str(x) for x in path)
-            return build_oid(self.oid, "leg", p)
+            return build_oid(self.oid, "leg", path)
         
 
     def generate_bridge_oid(self):

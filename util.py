@@ -101,10 +101,21 @@ OID_TRANSPORT = "transport"
 OID_AUTHORITY = "authority"
 
 
-def build_oid(parent, key, value=None):
-    key = key[0 if FULL_OIDS else 1] if isinstance(key, tuple) else key
-    kv = "%s=%s" % (key, value) if value is not None else key
-    return "%s,%s" % (parent, kv) if parent is not None else kv
+def build_oid(parent, *args):
+    args = list(args)
+    oid = parent
+    
+    while args:
+        key = args.pop(0)
+        key = key[0 if FULL_OIDS else 1] if isinstance(key, tuple) else key
+        
+        value = args.pop(0) if args else None
+        value = ".".join(str(x) for x in value) if isinstance(value, list) else value
+        
+        kv = "%s=%s" % (key, value) if value is not None else key
+        oid = "%s,%s" % (oid, kv) if oid is not None else kv
+        
+    return oid
 
 
 class Loggable(object):
