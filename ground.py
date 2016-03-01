@@ -1,7 +1,7 @@
 from async import Weak, WeakMethod
 from mgc import MediaContext
 from util import build_oid, Loggable
-from leg import Routing, SlotLeg
+from leg import SlotLeg
 
 # TODO: CoidNode!
 
@@ -94,6 +94,23 @@ class Ground(Loggable):
                 self.legs_by_oid[prev_leg_oid].do(action)
         
         
+    def insert_legs(self, my_oid, first_oid, second_oid, queued_actions=None):
+        prev_oid = self.targets_by_source[my_oid]
+        if not prev_oid:
+            raise Exception("No previous leg before insert leg %s!" % my_oid)
+            
+        self.targets_by_source[prev_oid] = first_oid
+        self.targets_by_source[first_oid] = prev_oid
+
+        self.targets_by_source[second_oid] = my_oid
+        self.targets_by_source[my_oid] = second_oid
+
+        if queued_actions:
+            for action in queued_actions:
+                self.logger.debug("Forwarding queued action %s" % action["type"])
+                self.legs_by_oid[first_oid].do(action)
+        
+        
     def start_leg(self, leg_oid):
         self.legs_by_oid[leg_oid].start()
         
@@ -167,10 +184,8 @@ class Call(Loggable):
         self.ground = ground
         self.leg_oids = set()
                 
-        self.bridge_count = 0
 
-
-    def generate_leg_oid(self, type, path):
+    def generate_oid(self, type, path):
         if type == "routing":
             if path:
                 return build_oid(self.oid, "leg", path, "routing")
@@ -178,25 +193,40 @@ class Call(Loggable):
                 return build_oid(self.oid, "routing")
         elif type == "slot":
             return build_oid(self.oid, "leg", path[:-1], "routing", None, "slot", path[-1])
+        elif type == "bridge":
+            if len(path) > 1:
+                return build_oid(self.oid, "leg", path[:-1], "bridge", path[-1])
+            else:
+                return build_oid(self.oid, "bridge", path[-1])
+        elif type == "bridge_leg":
+            if len(path) > 2:
+                return build_oid(self.oid, "leg", path[:-2], "bridge", path[-2], "slot", path[-1])
+            else:
+                return build_oid(self.oid, "bridge", path[-2], "slot", path[-1])
         else:
             return build_oid(self.oid, "leg", path)
         
 
-    def generate_bridge_oid(self):
-        bridge_oid = build_oid(self.oid, "bridge", self.bridge_count)
-        self.bridge_count += 1
+    def make_bridge(self, type, path):
+        bridge = self.switch.make_bridge(type)
+        bridge.set_oid(self.generate_oid("bridge", path))
+        bridge.set_call(Weak(self), path)
         
-        return bridge_oid
-
-
-    #def make_bridge(self, bridge_class):
-    #    bridge = bridge_class(Weak(self))
-    #    bridge.set_oid(self.generate_bridge_oid())
-    #    return bridge
+        return bridge
+        
+        
+    def insert_bridge(self, bridge, next_leg, queued_actions=None):
+        incoming_leg = bridge.make_incoming_leg()
+        self.add_leg(incoming_leg, "bridge_leg", bridge.path + [ 0 ])
+        
+        outgoing_leg = bridge.make_outgoing_leg()
+        self.add_leg(outgoing_leg, "bridge_leg", bridge.path + [ 1 ])
+        
+        self.ground.insert_legs(next_leg.oid, incoming_leg.oid, outgoing_leg.oid, queued_actions)
         
         
     def add_leg(self, leg, type, path):
-        oid = self.generate_leg_oid(type, path)
+        oid = self.generate_oid(type, path)
         
         leg.set_oid(oid)
         leg.set_call(Weak(self), path)

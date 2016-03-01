@@ -6,20 +6,24 @@ from format import SipError, Status
 class Error(Exception): pass
 
 
-class BareLeg(Loggable):
+class CallComponent(Loggable):
     def __init__(self):
         Loggable.__init__(self)
         
         self.call = None
         self.path = None  # To prettify oids
-        # TODO: may need the media_legs, too!
         
     
     def set_call(self, call, path):
         self.call = call
         self.path = path
+
+
+class BareLeg(CallComponent):
+    def __init__(self):
+        CallComponent.__init__(self)
         
-        
+    
     def start(self):
         pass  # Useful for Leg types that do something by themselves
 
@@ -259,6 +263,7 @@ class Routing(BareLeg):
         self.legs = {}
         self.sent_ringback = False
         self.queued_actions = {}
+        self.bridge_count = 0
     
     
     def add_leg(self, li, leg):
@@ -326,6 +331,19 @@ class Routing(BareLeg):
         self.add_leg(li, leg)
         self.legs[li].report(action)
 
+
+    def bridge(self, type, action=None):
+        if action and action["type"] != "dial":
+            raise Exception("Bridge action is not a dial: %s" % action["type"])
+        
+        self.logger.debug("Bridging: %s" % (type,))
+        self.bridge_count += 1
+        bi = self.bridge_count  # bridges are numbered from 1
+        
+        bridge = self.call.make_bridge(type, self.path + [ bi ])
+        queued_actions = [ action ] if action else None
+        self.call.insert_bridge(bridge, self, queued_actions)
+        
 
     def do(self, action):
         type = action["type"]
@@ -486,9 +504,9 @@ class BridgeLeg(Leg):
         self.owner.do_bridge(self.is_outgoing, action)
 
 
-class Bridge(Loggable):
+class Bridge(CallComponent):
     def __init__(self):
-        Loggable.__init__(self)
+        CallComponent.__init__(self)
 
         self.incoming_leg = None
         self.outgoing_leg = None
@@ -502,7 +520,7 @@ class Bridge(Loggable):
         
 
     def make_outgoing_leg(self):
-        outgoing_leg = SlotLeg(Weak(self), True)
+        outgoing_leg = BridgeLeg(Weak(self), True)
         self.outgoing_leg = Weak(outgoing_leg)
         return outgoing_leg
         
@@ -518,15 +536,17 @@ class Bridge(Loggable):
             self.incoming_leg.finish_media()
             self.incoming_leg = None
             
+        self.logger.debug("Bridge finished.")
+            
 
-    def do(self, action):
-        type = action["type"]
+    #def do(self, action):
+    #    type = action["type"]
         
-        self.logger.debug("Bridging %s forward" % (type,))
-        self.outgoing_leg.report(action)
+    #    self.logger.debug("Bridging %s forward" % (type,))
+    #    self.outgoing_leg.report(action)
 
-        if type in ("hangup", "reject"):
-            self.may_finish()
+    #    if type in ("hangup", "reject"):
+    #        self.may_finish()
 
 
     def do_bridge(self, is_outgoing, action):

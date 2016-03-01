@@ -3,7 +3,7 @@ from format import Status
 from transport import UdpTransport
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
-from leg import Routing
+from leg import Routing, Bridge, RecordingBridge
 from leg_sip import SipLeg
 #from call import Call, Bridge, RecordingBridge
 from ground import Ground, Call
@@ -100,8 +100,17 @@ class Switch(Loggable):
         elif type == "sip":
             return SipLeg(Dialog(Weak(self.dialog_manager)))
         else:
-            raise Exception("Unknown leg type '%s' for creating outgoing leg!" % type)
+            raise Exception("Unknown leg type '%s'!" % type)
 
+
+    def make_bridge(self, type):
+        if type == "bridge":
+            return Bridge()
+        elif type == "record":
+            return RecordingBridge()
+        else:
+            raise Exception("Unknown bridge type '%s'!" % type)
+            
 
     def make_call(self):
         return Call(Weak(self), Weak(self.ground))

@@ -12,7 +12,7 @@ from transactions import TransactionManager
 #from dialog import Dialog, DialogManager
 from leg import PlannedLeg, SimpleRouting, PlannedRouting
 #from call import Call, SimpleRouting, PlannedRouting
-from ground import Call
+#from ground import Call
 from sdp import Sdp
 from authority import Authority
 from registrar import RecordManager
@@ -336,6 +336,7 @@ class SwitchB(TestSwitch):
             to = ctx["to"]
             
             if to.uri.user == CALLEE_NUMBER:
+                self.bridge("record")
                 to2 = to._replace(uri=to.uri._replace(user="444"))
                 action2 = dict(action, ctx=dict(ctx, to=to2))
                 self.dial("routing", action2)
