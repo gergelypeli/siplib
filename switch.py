@@ -88,29 +88,18 @@ class Switch(Loggable):
             self.transaction_manager.send_message(response, msg)
 
 
-    def make_leg(self, type):
+    def make_thing(self, type):
         if type == "routing":
             return Routing()
-        elif type == "dial":
-            raise Exception("XXX Sorry!")
-            #return call.make_bridge(Bridge).make_incoming_leg()
-        elif type == "record":
-            raise Exception("XXX Sorry!")
-            #return call.make_bridge(RecordingBridge).make_incoming_leg()
         elif type == "sip":
             return SipLeg(Dialog(Weak(self.dialog_manager)))
-        else:
-            raise Exception("Unknown leg type '%s'!" % type)
-
-
-    def make_bridge(self, type):
-        if type == "bridge":
+        elif type == "bridge":
             return Bridge()
         elif type == "record":
             return RecordingBridge()
         else:
-            raise Exception("Unknown bridge type '%s'!" % type)
-            
+            raise Exception("Unknown leg type '%s'!" % type)
+
 
     def make_call(self):
         return Call(Weak(self), Weak(self.ground))

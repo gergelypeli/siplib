@@ -17,17 +17,21 @@ class CallComponent(Loggable):
     def set_call(self, call, path):
         self.call = call
         self.path = path
+        
+        
+    def start(self):
+        pass  # Useful for Leg types that do something by themselves
 
+
+    def stand(self):
+        raise NotImplementedError()
+        
 
 class BareLeg(CallComponent):
     def __init__(self):
         CallComponent.__init__(self)
         
     
-    def start(self):
-        pass  # Useful for Leg types that do something by themselves
-
-        
     def do(self, action):
         raise NotImplementedError()
         
@@ -43,6 +47,12 @@ class BareLeg(CallComponent):
         
     def get_media_leg(self, channel_index):
         return None
+        
+        
+    def stand(self):
+        self.call.add_leg(self)
+        
+        return self
 
 
 class Leg(BareLeg):
@@ -267,11 +277,16 @@ class Routing(BareLeg):
     
     
     def add_leg(self, li, leg):
-        slot_leg = self.call.make_slot_leg(Weak(self), li)
+        slot_leg = SlotLeg(Weak(self), li)
+        slot_leg.set_call(self.call, None)
+        slot_leg.set_oid(build_oid(self.oid, "slot", li))
+        slot_leg.stand()
+        
+        #slot_leg = self.call.make_slot_leg(Weak(self), li)
         self.legs[li] = Weak(slot_leg)
         
         self.queued_actions[li] = []
-        self.call.link_and_start_legs(slot_leg, leg)
+        self.call.link_legs(slot_leg, leg)
         
         return li
 
@@ -327,22 +342,28 @@ class Routing(BareLeg):
         self.leg_count += 1
         li = self.leg_count  # outgoing legs are numbered from 1
         
-        leg = self.call.make_leg(type, self.path + [ li ])
+        thing = self.call.make_thing(type)
+        path = self.path + [ li ]
+        thing.set_call(self.call, path)
+        thing.set_oid(build_oid(self.call.oid, "leg", path))
+        leg = thing.stand()
+        thing.start()
+        
         self.add_leg(li, leg)
         self.legs[li].report(action)
 
 
-    def bridge(self, type, action=None):
-        if action and action["type"] != "dial":
-            raise Exception("Bridge action is not a dial: %s" % action["type"])
+    #def bridge(self, type, action=None):
+    #    if action and action["type"] != "dial":
+    #        raise Exception("Bridge action is not a dial: %s" % action["type"])
         
-        self.logger.debug("Bridging: %s" % (type,))
-        self.bridge_count += 1
-        bi = self.bridge_count  # bridges are numbered from 1
+    #    self.logger.debug("Bridging: %s" % (type,))
+    #    self.bridge_count += 1
+    #    bi = self.bridge_count  # bridges are numbered from 1
         
-        bridge = self.call.make_bridge(type, self.path + [ bi ])
-        queued_actions = [ action ] if action else None
-        self.call.insert_bridge(bridge, self, queued_actions)
+    #    bridge = self.call.make_bridge(type, self.path + [ bi ])
+    #    queued_actions = [ action ] if action else None
+    #    self.call.insert_bridge(bridge, self, queued_actions)
         
 
     def do(self, action):
@@ -523,6 +544,29 @@ class Bridge(CallComponent):
         outgoing_leg = BridgeLeg(Weak(self), True)
         self.outgoing_leg = Weak(outgoing_leg)
         return outgoing_leg
+        
+        
+    def stand(self):
+        incoming_leg = self.make_incoming_leg()
+        incoming_leg.set_call(self.call, None)
+        incoming_leg.set_oid(build_oid(self.oid, "slot", 0))
+        self.call.add_leg(incoming_leg)
+
+        outgoing_leg = self.make_outgoing_leg()
+        outgoing_leg.set_call(self.call, None)
+        outgoing_leg.set_oid(build_oid(self.oid, "slot", 1))
+        self.call.add_leg(outgoing_leg)
+
+        # TODO: copypaste from Call.start
+        routing = self.call.make_thing("routing")
+        routing.set_call(self.call, self.path)
+        routing.set_oid(build_oid(self.oid, "routing"))
+        routing.stand()
+    
+        self.call.link_legs(outgoing_leg, routing)
+        routing.start()
+        
+        return incoming_leg
         
 
     def may_finish(self):  # TODO: this is probably screwed up now

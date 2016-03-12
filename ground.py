@@ -1,9 +1,8 @@
 from async import Weak, WeakMethod
 from mgc import MediaContext
 from util import build_oid, Loggable
-from leg import SlotLeg
+#from leg import SlotLeg
 
-# TODO: CoidNode!
 
 class Ground(Loggable):
     def __init__(self, mgc):
@@ -111,9 +110,9 @@ class Ground(Loggable):
                 self.legs_by_oid[first_oid].do(action)
         
         
-    def start_leg(self, leg_oid):
-        self.legs_by_oid[leg_oid].start()
-        
+    #def start_leg(self, leg_oid):
+    #    self.legs_by_oid[leg_oid].start()
+
     
     def forward(self, leg_oid, action):
         target = self.targets_by_source.get(leg_oid)
@@ -185,53 +184,55 @@ class Call(Loggable):
         self.leg_oids = set()
                 
 
-    def generate_oid(self, type, path):
-        if type == "routing":
-            if path:
-                return build_oid(self.oid, "leg", path, "routing")
-            else:
-                return build_oid(self.oid, "routing")
-        elif type == "slot":
-            return build_oid(self.oid, "leg", path[:-1], "routing", None, "slot", path[-1])
-        elif type == "bridge":
-            if len(path) > 1:
-                return build_oid(self.oid, "leg", path[:-1], "bridge", path[-1])
-            else:
-                return build_oid(self.oid, "bridge", path[-1])
-        elif type == "bridge_leg":
-            if len(path) > 2:
-                return build_oid(self.oid, "leg", path[:-2], "bridge", path[-2], "slot", path[-1])
-            else:
-                return build_oid(self.oid, "bridge", path[-2], "slot", path[-1])
-        else:
-            return build_oid(self.oid, "leg", path)
+    #def generate_oid(self, type, path):
+    #    if type == "routing":
+    #        if path:
+    #            return build_oid(self.oid, "leg", path, "routing")
+    #        else:
+    #            return build_oid(self.oid, "routing")
+    #    elif type == "slot":
+    #        return build_oid(self.oid, "leg", path[:-1], "routing", None, "slot", path[-1])
+    #    elif type == "bridge":
+    #        if len(path) > 1:
+    #            return build_oid(self.oid, "leg", path[:-1], "bridge", path[-1])
+    #        else:
+    #            return build_oid(self.oid, "bridge", path[-1])
+    #    elif type == "bridge_leg":
+    #        if len(path) > 2:
+    #            return build_oid(self.oid, "leg", path[:-2], "bridge", path[-2], "slot", path[-1])
+    #        else:
+    #            return build_oid(self.oid, "bridge", path[-2], "slot", path[-1])
+    #    else:
+    #        return build_oid(self.oid, "leg", path)
         
 
-    def make_bridge(self, type, path):
-        bridge = self.switch.make_bridge(type)
-        bridge.set_oid(self.generate_oid("bridge", path))
-        bridge.set_call(Weak(self), path)
+    #def make_bridge(self, type, path):
+    #    bridge = self.switch.make_bridge(type)
+    #    bridge.set_oid(self.generate_oid("bridge", path))
+    #    bridge.set_call(Weak(self), path)
         
-        return bridge
-        
-        
-    def insert_bridge(self, bridge, next_leg, queued_actions=None):
-        incoming_leg = bridge.make_incoming_leg()
-        self.add_leg(incoming_leg, "bridge_leg", bridge.path + [ 0 ])
-        
-        outgoing_leg = bridge.make_outgoing_leg()
-        self.add_leg(outgoing_leg, "bridge_leg", bridge.path + [ 1 ])
-        
-        self.ground.insert_legs(next_leg.oid, incoming_leg.oid, outgoing_leg.oid, queued_actions)
+    #    return bridge
         
         
-    def add_leg(self, leg, type, path):
-        oid = self.generate_oid(type, path)
+    #def insert_bridge(self, bridge, next_leg, queued_actions=None):
+    #    incoming_leg = bridge.make_incoming_leg()
+    #    self.add_leg(incoming_leg, "bridge_leg", bridge.path + [ 0 ])
         
-        leg.set_oid(oid)
-        leg.set_call(Weak(self), path)
+    #    outgoing_leg = bridge.make_outgoing_leg()
+    #    self.add_leg(outgoing_leg, "bridge_leg", bridge.path + [ 1 ])
         
-        self.leg_oids.add(oid)
+    #    self.ground.insert_legs(next_leg.oid, incoming_leg.oid, outgoing_leg.oid, queued_actions)
+        
+        
+    def add_leg(self, leg):
+        #oid = self.generate_oid(type, path)
+        
+        #leg.set_oid(oid)
+        #leg.set_call(Weak(self), path)
+        if not leg.oid:
+            raise Exception("Leg has no oid!")
+        
+        self.leg_oids.add(leg.oid)
         self.ground.add_leg(leg)
 
 
@@ -241,27 +242,27 @@ class Call(Loggable):
         self.may_finish()
         
 
-    def make_leg(self, type, path):
-        leg = self.switch.make_leg(type)
-        self.add_leg(leg, type, path)
+    def make_thing(self, type):
+        leg = self.switch.make_thing(type)
+        #self.add_leg(leg, type, path)
 
         return leg
 
 
-    def make_slot_leg(self, owner, li):
-        slot_leg = SlotLeg(owner, li)
-        self.add_leg(slot_leg, "slot", owner.path + [ li ])
+    #def make_slot_leg(self, owner, li):
+    #    slot_leg = SlotLeg(owner, li)
+    #    self.add_leg(slot_leg, "slot", owner.path + [ li ])
         
-        return slot_leg
+    #    return slot_leg
 
 
-    def link_and_start_legs(self, leg0, leg1):
+    def link_legs(self, leg0, leg1):
         self.ground.link_legs(leg0.oid, leg1.oid)
         
         # Hm, this is used for slots only, so the order shouldn't matter, leg0
         # won't do anything for start.
-        self.ground.start_leg(leg0.oid)
-        self.ground.start_leg(leg1.oid)
+        #self.ground.start_leg(leg0.oid)
+        #self.ground.start_leg(leg1.oid)
 
 
     def leg_finished(self, leg):
@@ -269,13 +270,21 @@ class Call(Loggable):
         
         
     def start(self, incoming_leg):
-        self.add_leg(incoming_leg, None, [ 0 ])
+        incoming_leg.set_call(Weak(self), [ 0 ])
+        incoming_leg.set_oid(build_oid(self.oid, "leg", 0))
+        incoming_leg.stand()
+        #self.add_leg(incoming_leg, None, [ 0 ])
         
-        routing = self.make_leg("routing", [])
+        routing = self.make_thing("routing")
+        routing.set_call(Weak(self), [])
+        routing.set_oid(build_oid(self.oid, "routing"))  # TODO: reception?
+        routing.stand()
         
         self.ground.link_legs(incoming_leg.oid, routing.oid)
-        self.ground.start_leg(routing.oid)
-        self.ground.start_leg(incoming_leg.oid)
+        routing.start()
+        incoming_leg.start()
+        #self.ground.start_leg(routing.oid)
+        #self.ground.start_leg(incoming_leg.oid)
 
 
     def may_finish(self):

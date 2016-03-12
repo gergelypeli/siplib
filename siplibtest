@@ -283,7 +283,7 @@ class TestSwitch(Switch):
         metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
 
 
-    def make_leg(self, type):
+    def make_thing(self, type):
         if type == "routing":
             return TestRouting()
         elif type == "callee":
@@ -293,7 +293,7 @@ class TestSwitch(Switch):
         elif type == "ringing":
             return RingingLeg(self.metapoll)
         else:
-            return Switch.make_leg(self, type)
+            return Switch.make_thing(self, type)
 
 
 class SwitchA(TestSwitch):
@@ -336,10 +336,10 @@ class SwitchB(TestSwitch):
             to = ctx["to"]
             
             if to.uri.user == CALLEE_NUMBER:
-                self.bridge("record")
+                #self.bridge("record")
                 to2 = to._replace(uri=to.uri._replace(user="444"))
                 action2 = dict(action, ctx=dict(ctx, to=to2))
-                self.dial("routing", action2)
+                self.dial("record", action2)
             elif to.uri.user == "444":
                 self.dial("unreachable", action)
                 self.dial("ringing", action)
@@ -386,11 +386,11 @@ class SwitchB(TestSwitch):
         #metapoll.register_timeout(timedelta(seconds=10), WeakMethod(self.test_dialing))
 
 
-    def make_leg(self, type):
+    def make_thing(self, type):
         if type == "routing":
             return self.RoutingClass(Weak(self.metapoll))
         else:
-            return TestSwitch.make_leg(self, type)
+            return TestSwitch.make_thing(self, type)
 
 
     def test_registering(self):
