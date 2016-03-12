@@ -276,14 +276,12 @@ class Routing(BareLeg):
         self.bridge_count = 0
     
     
-    def add_leg(self, li, leg):
-        slot_leg = self.call.stand_slot(self, li)
+    def add_leg(self, li, thing):
+        slot_leg = self.call.make_slot(self, li)
         self.legs[li] = Weak(slot_leg)
         
         self.queued_actions[li] = []
-        self.call.link_legs(slot_leg, leg)
-        
-        return li
+        self.call.link_leg_to_thing(slot_leg, thing)
 
 
     def remove_leg(self, li):
@@ -337,15 +335,15 @@ class Routing(BareLeg):
         self.leg_count += 1
         li = self.leg_count  # outgoing legs are numbered from 1
         
-        thing = self.call.make_thing(type)
-        leg = self.call.stand_thing(thing, self.path + [ li ], None)
+        thing = self.call.make_thing(type, self.path + [ li ], None)
+        #leg = self.call.stand_thing(thing, )
         #path = self.path + [ li ]
         #thing.set_call(self.call, path)
         #thing.set_oid(build_oid(self.call.oid, "leg", path))
         #leg = thing.stand()
-        thing.start()
+        #thing.start()
         
-        self.add_leg(li, leg)
+        self.add_leg(li, thing)
         self.legs[li].report(action)
 
 
@@ -518,23 +516,23 @@ class Bridge(CallComponent):
         
         
     def stand(self):
-        incoming_leg = self.call.stand_slot(self, 0)
+        incoming_leg = self.call.make_slot(self, 0)
         self.incoming_leg = Weak(incoming_leg)
 
-        outgoing_leg = self.call.stand_slot(self, 1)
+        outgoing_leg = self.call.make_slot(self, 1)
         self.outgoing_leg = Weak(outgoing_leg)
         
         # TODO: copypaste from Call.start
-        routing = self.call.make_thing("routing")
-        self.call.stand_thing(routing, self.path, "routing")
+        routing = self.call.make_thing("routing", self.path, "routing")
+        #self.call.stand_thing(routing, )
         #routing.set_call(self.call, self.path)
         #routing.set_oid(build_oid(self.oid, "routing"))  # TODO: rerouting?
         #routing.stand()
     
-        self.call.link_legs(outgoing_leg, routing)
-        routing.start()
+        self.call.link_leg_to_thing(outgoing_leg, routing)
+        #routing.start()
         
-        return incoming_leg
+        return incoming_leg.stand()
         
 
     def may_finish(self):  # TODO: this is probably screwed up now

@@ -54,6 +54,12 @@ class Ground(Loggable):
         
         
     def link_legs(self, leg_oid0, leg_oid1):
+        if leg_oid0 not in self.legs_by_oid:
+            raise Exception("First leg does not exist: %s!" % leg_oid0)
+
+        if leg_oid1 not in self.legs_by_oid:
+            raise Exception("Second leg does not exist: %s!" % leg_oid1)
+
         if leg_oid0 in self.targets_by_source:
             raise Exception("First leg already linked: %s!" % leg_oid0)
 
@@ -121,7 +127,11 @@ class Ground(Loggable):
             leg = self.legs_by_oid.get(target)
             
             if leg:
+                self.logger.debug("Forwarding %s from %s to %s" % (action["type"], leg_oid, target))
                 leg.do(action)
+                return
+
+        self.logger.error("Couldn't forward %s from %s!" % (action["type"], leg_oid))
 
 
     def refresh_media(self, slid, ci):
@@ -242,23 +252,7 @@ class Call(Loggable):
         self.may_finish()
         
 
-    def make_thing(self, type):
-        leg = self.switch.make_thing(type)
-        #self.add_leg(leg, type, path)
-
-        return leg
-
-
-    def stand_slot(self, owner, li):
-        slot_leg = SlotLeg(owner, li)
-        slot_leg.set_call(Weak(self), None)
-        slot_leg.set_oid(build_oid(owner.oid, "slot", li))
-        slot_leg.stand()
-        
-        return slot_leg
-
-
-    def stand_thing(self, thing, path, suffix):
+    def setup_thing(self, thing, path, suffix):
         thing.set_call(Weak(self), path)
         
         oid = self.oid
@@ -270,13 +264,34 @@ class Call(Loggable):
             oid = build_oid(oid, suffix)
             
         thing.set_oid(oid)
-        
-        return thing.stand()
+        #return thing.stand()
         
 
-    def link_legs(self, leg0, leg1):
-        self.ground.link_legs(leg0.oid, leg1.oid)
+    def make_thing(self, type, path, suffix):
+        thing = self.switch.make_thing(type)
+        
+        self.setup_thing(thing, path, suffix)
 
+        return thing
+
+
+    def make_slot(self, owner, li):
+        slot_leg = SlotLeg(owner, li)
+        
+        slot_leg.set_call(Weak(self), None)
+        slot_leg.set_oid(build_oid(owner.oid, "slot", li))
+        
+        return slot_leg
+
+
+    def link_leg_to_thing(self, leg, thing):
+        leg = leg.stand()
+        thing_leg = thing.stand()
+        
+        self.logger.debug("Linking %s to %s" % (leg.oid, thing_leg.oid))
+        self.ground.link_legs(leg.oid, thing_leg.oid)
+
+        thing.start()
         # Start only the second one, assume the first one is already started
         #self.ground.start_leg(leg1.oid)
 
@@ -286,13 +301,15 @@ class Call(Loggable):
         
         
     def start(self, incoming_leg):
-        self.stand_thing(incoming_leg, [ 0 ], None)
+        self.setup_thing(incoming_leg, [ 0 ], None)
+        #incoming_leg.stand()
         
-        routing = self.make_thing("routing")
-        self.stand_thing(routing, [], "reception")
+        routing = self.make_thing("routing", [], "reception")
+        self.link_leg_to_thing(incoming_leg, routing)
+        #self.stand_thing(routing, [], "reception")
         
-        self.link_legs(incoming_leg, routing)
-        routing.start()
+        #self.link_legs(incoming_leg, routing)
+        #routing.start()
         incoming_leg.start()
 
 
