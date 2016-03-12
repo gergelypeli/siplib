@@ -1,7 +1,7 @@
 from async import Weak, WeakMethod
 from mgc import MediaContext
 from util import build_oid, Loggable
-#from leg import SlotLeg
+from leg import SlotLeg
 
 
 class Ground(Loggable):
@@ -249,19 +249,35 @@ class Call(Loggable):
         return leg
 
 
-    #def make_slot_leg(self, owner, li):
-    #    slot_leg = SlotLeg(owner, li)
-    #    self.add_leg(slot_leg, "slot", owner.path + [ li ])
+    def stand_slot(self, owner, li):
+        slot_leg = SlotLeg(owner, li)
+        slot_leg.set_call(Weak(self), None)
+        slot_leg.set_oid(build_oid(owner.oid, "slot", li))
+        slot_leg.stand()
         
-    #    return slot_leg
+        return slot_leg
 
+
+    def stand_thing(self, thing, path, suffix):
+        thing.set_call(Weak(self), path)
+        
+        oid = self.oid
+        
+        if path:
+            oid = build_oid(oid, "leg", path)
+            
+        if suffix:
+            oid = build_oid(oid, suffix)
+            
+        thing.set_oid(oid)
+        
+        return thing.stand()
+        
 
     def link_legs(self, leg0, leg1):
         self.ground.link_legs(leg0.oid, leg1.oid)
-        
-        # Hm, this is used for slots only, so the order shouldn't matter, leg0
-        # won't do anything for start.
-        #self.ground.start_leg(leg0.oid)
+
+        # Start only the second one, assume the first one is already started
         #self.ground.start_leg(leg1.oid)
 
 
@@ -270,21 +286,14 @@ class Call(Loggable):
         
         
     def start(self, incoming_leg):
-        incoming_leg.set_call(Weak(self), [ 0 ])
-        incoming_leg.set_oid(build_oid(self.oid, "leg", 0))
-        incoming_leg.stand()
-        #self.add_leg(incoming_leg, None, [ 0 ])
+        self.stand_thing(incoming_leg, [ 0 ], None)
         
         routing = self.make_thing("routing")
-        routing.set_call(Weak(self), [])
-        routing.set_oid(build_oid(self.oid, "routing"))  # TODO: reception?
-        routing.stand()
+        self.stand_thing(routing, [], "reception")
         
-        self.ground.link_legs(incoming_leg.oid, routing.oid)
+        self.link_legs(incoming_leg, routing)
         routing.start()
         incoming_leg.start()
-        #self.ground.start_leg(routing.oid)
-        #self.ground.start_leg(incoming_leg.oid)
 
 
     def may_finish(self):

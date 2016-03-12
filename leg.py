@@ -26,7 +26,7 @@ class CallComponent(Loggable):
     def stand(self):
         raise NotImplementedError()
         
-
+        
 class BareLeg(CallComponent):
     def __init__(self):
         CallComponent.__init__(self)
@@ -104,7 +104,7 @@ class Leg(BareLeg):
         return self.media_legs[ci] if ci < len(self.media_legs) else None
             
 
-class SlotLeg(BareLeg):
+class SlotLeg(Leg):
     def __init__(self, owner, number):
         Leg.__init__(self)
         
@@ -267,7 +267,7 @@ class SessionState(object):
 
 class Routing(BareLeg):
     def __init__(self):
-        Leg.__init__(self)
+        BareLeg.__init__(self)
 
         self.leg_count = 0
         self.legs = {}
@@ -277,12 +277,7 @@ class Routing(BareLeg):
     
     
     def add_leg(self, li, leg):
-        slot_leg = SlotLeg(Weak(self), li)
-        slot_leg.set_call(self.call, None)
-        slot_leg.set_oid(build_oid(self.oid, "slot", li))
-        slot_leg.stand()
-        
-        #slot_leg = self.call.make_slot_leg(Weak(self), li)
+        slot_leg = self.call.stand_slot(self, li)
         self.legs[li] = Weak(slot_leg)
         
         self.queued_actions[li] = []
@@ -343,28 +338,16 @@ class Routing(BareLeg):
         li = self.leg_count  # outgoing legs are numbered from 1
         
         thing = self.call.make_thing(type)
-        path = self.path + [ li ]
-        thing.set_call(self.call, path)
-        thing.set_oid(build_oid(self.call.oid, "leg", path))
-        leg = thing.stand()
+        leg = self.call.stand_thing(thing, self.path + [ li ], None)
+        #path = self.path + [ li ]
+        #thing.set_call(self.call, path)
+        #thing.set_oid(build_oid(self.call.oid, "leg", path))
+        #leg = thing.stand()
         thing.start()
         
         self.add_leg(li, leg)
         self.legs[li].report(action)
 
-
-    #def bridge(self, type, action=None):
-    #    if action and action["type"] != "dial":
-    #        raise Exception("Bridge action is not a dial: %s" % action["type"])
-        
-    #    self.logger.debug("Bridging: %s" % (type,))
-    #    self.bridge_count += 1
-    #    bi = self.bridge_count  # bridges are numbered from 1
-        
-    #    bridge = self.call.make_bridge(type, self.path + [ bi ])
-    #    queued_actions = [ action ] if action else None
-    #    self.call.insert_bridge(bridge, self, queued_actions)
-        
 
     def do(self, action):
         type = action["type"]
@@ -513,18 +496,6 @@ class PlannedRouting(Planned, Routing):
         raise NotImplementedError()
 
 
-class BridgeLeg(Leg):
-    def __init__(self, owner, is_outgoing):
-        Leg.__init__(self)
-        
-        self.owner = owner
-        self.is_outgoing = is_outgoing
-        
-        
-    def do(self, action):
-        self.owner.do_bridge(self.is_outgoing, action)
-
-
 class Bridge(CallComponent):
     def __init__(self):
         CallComponent.__init__(self)
@@ -533,35 +504,32 @@ class Bridge(CallComponent):
         self.outgoing_leg = None
         
 
-    def make_incoming_leg(self):
-        # Strong reference to self to keep us alive
-        incoming_leg = BridgeLeg(self, False)
-        self.incoming_leg = Weak(incoming_leg)
-        return incoming_leg
+    #def make_incoming_leg(self):
+    #    # Strong reference to self to keep us alive
+    #    incoming_leg = BridgeLeg(self, False)
+    #    self.incoming_leg = Weak(incoming_leg)
+    #    return incoming_leg
         
 
-    def make_outgoing_leg(self):
-        outgoing_leg = BridgeLeg(Weak(self), True)
-        self.outgoing_leg = Weak(outgoing_leg)
-        return outgoing_leg
+    #def make_outgoing_leg(self):
+    #    outgoing_leg = BridgeLeg(Weak(self), True)
+    #    self.outgoing_leg = Weak(outgoing_leg)
+    #    return outgoing_leg
         
         
     def stand(self):
-        incoming_leg = self.make_incoming_leg()
-        incoming_leg.set_call(self.call, None)
-        incoming_leg.set_oid(build_oid(self.oid, "slot", 0))
-        self.call.add_leg(incoming_leg)
+        incoming_leg = self.call.stand_slot(self, 0)
+        self.incoming_leg = Weak(incoming_leg)
 
-        outgoing_leg = self.make_outgoing_leg()
-        outgoing_leg.set_call(self.call, None)
-        outgoing_leg.set_oid(build_oid(self.oid, "slot", 1))
-        self.call.add_leg(outgoing_leg)
-
+        outgoing_leg = self.call.stand_slot(self, 1)
+        self.outgoing_leg = Weak(outgoing_leg)
+        
         # TODO: copypaste from Call.start
         routing = self.call.make_thing("routing")
-        routing.set_call(self.call, self.path)
-        routing.set_oid(build_oid(self.oid, "routing"))
-        routing.stand()
+        self.call.stand_thing(routing, self.path, "routing")
+        #routing.set_call(self.call, self.path)
+        #routing.set_oid(build_oid(self.oid, "routing"))  # TODO: rerouting?
+        #routing.stand()
     
         self.call.link_legs(outgoing_leg, routing)
         routing.start()
@@ -583,20 +551,10 @@ class Bridge(CallComponent):
         self.logger.debug("Bridge finished.")
             
 
-    #def do(self, action):
-    #    type = action["type"]
-        
-    #    self.logger.debug("Bridging %s forward" % (type,))
-    #    self.outgoing_leg.report(action)
-
-    #    if type in ("hangup", "reject"):
-    #        self.may_finish()
-
-
-    def do_bridge(self, is_outgoing, action):
+    def do_slot(self, li, action):
         type = action["type"]
         
-        if not is_outgoing:
+        if li == 0:
             leg = self.outgoing_leg
             direction = "forward"
         else:
@@ -611,7 +569,7 @@ class Bridge(CallComponent):
 
     
 class RecordingBridge(Bridge):
-    def hack_media(self, is_outgoing, answer):
+    def hack_media(self, li, answer):
             
         old = len(self.incoming_leg.media_legs)
         new = len(answer["channels"])
@@ -631,16 +589,16 @@ class RecordingBridge(Bridge):
             c = answer["channels"][0]
 
             if not c["send"]:
-                self.logger.debug("Hah, the %s put us on hold!" % ("callee" if not is_outgoing else "caller"))
+                self.logger.debug("Hah, the %s put us on hold!" % ("callee" if li == 0 else "caller"))
 
             if not c["recv"]:
-                self.logger.debug("Hah, the %s put us on hold!" % ("caller" if not is_outgoing else "callee"))
+                self.logger.debug("Hah, the %s put us on hold!" % ("caller" if li == 0 else "callee"))
 
 
-    def do_bridge(self, is_outgoing, action):
+    def do_slot(self, li, action):
         session = action.get("session")
         
         if session and session["is_answer"] and len(session) > 1:
-            self.hack_media(is_outgoing, session)
+            self.hack_media(li, session)
         
-        Bridge.do_bridge(self, is_outgoing, action)
+        Bridge.do_slot(self, li, action)
