@@ -336,13 +336,6 @@ class Routing(BareLeg):
         li = self.leg_count  # outgoing legs are numbered from 1
         
         thing = self.call.make_thing(type, self.path + [ li ], None)
-        #leg = self.call.stand_thing(thing, )
-        #path = self.path + [ li ]
-        #thing.set_call(self.call, path)
-        #thing.set_oid(build_oid(self.call.oid, "leg", path))
-        #leg = thing.stand()
-        #thing.start()
-        
         self.add_leg(li, thing)
         self.legs[li].report(action)
 
@@ -377,7 +370,6 @@ class Routing(BareLeg):
         elif type == "accept":
             self.queue(li, action)
             self.anchor(li)
-            #self.hangup_all_outgoing(li)
         elif type == "hangup":
             # Oops, we anchored this leg because it accepted, but now hangs up
             self.report(action)
@@ -501,19 +493,6 @@ class Bridge(CallComponent):
         self.incoming_leg = None
         self.outgoing_leg = None
         
-
-    #def make_incoming_leg(self):
-    #    # Strong reference to self to keep us alive
-    #    incoming_leg = BridgeLeg(self, False)
-    #    self.incoming_leg = Weak(incoming_leg)
-    #    return incoming_leg
-        
-
-    #def make_outgoing_leg(self):
-    #    outgoing_leg = BridgeLeg(Weak(self), True)
-    #    self.outgoing_leg = Weak(outgoing_leg)
-    #    return outgoing_leg
-        
         
     def stand(self):
         incoming_leg = self.call.make_slot(self, 0)
@@ -522,15 +501,8 @@ class Bridge(CallComponent):
         outgoing_leg = self.call.make_slot(self, 1)
         self.outgoing_leg = Weak(outgoing_leg)
         
-        # TODO: copypaste from Call.start
         routing = self.call.make_thing("routing", self.path, "routing")
-        #self.call.stand_thing(routing, )
-        #routing.set_call(self.call, self.path)
-        #routing.set_oid(build_oid(self.oid, "routing"))  # TODO: rerouting?
-        #routing.stand()
-    
         self.call.link_leg_to_thing(outgoing_leg, routing)
-        #routing.start()
         
         return incoming_leg.stand()
         

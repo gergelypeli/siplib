@@ -9,7 +9,6 @@ class Ground(Loggable):
         self.mgc = mgc
         
         self.legs_by_oid = {}
-        #self.unstarted_leg_ids = set()
         self.targets_by_source = {}
         self.media_contexts_by_span = {}
         self.context_count = 0
@@ -27,26 +26,15 @@ class Ground(Loggable):
         if not leg_oid:
             raise Exception("Can't add leg without oid!")
         
-        #leg.set_ground(Weak(self), leg_oid)
         self.logger.debug("Adding leg %s" % leg_oid)
         self.legs_by_oid[leg_oid] = leg
-        #self.unstarted_leg_oids.add(leg_oid)
         
         return leg_oid
     
-    
-    #def make_leg(self, type):
-    #    leg = self.switch.make_leg(type)
-    #    leg.set_oid(self.switch.generate_leg_oid())  # TODO
-    #    leg_oid = self.add_leg(leg)
-        
-    #    return leg_oid
-
 
     def remove_leg(self, leg_oid):
         self.logger.debug("Removing leg %s" % leg_oid)
         self.legs_by_oid.pop(leg_oid)
-        #self.unstarted_leg_oids.discard(leg_oid)
         linked_leg_oid = self.targets_by_source.pop(leg_oid, None)
         
         if linked_leg_oid:
@@ -68,14 +56,6 @@ class Ground(Loggable):
             
         self.targets_by_source[leg_oid0] = leg_oid1
         self.targets_by_source[leg_oid1] = leg_oid0
-        
-        #if leg_oid0 in self.unstarted_leg_oids:
-        #    self.unstarted_leg_oids.remove(leg_oid0)
-        #    self.legs_by_oid[leg_oid0].start()
-            
-        #if leg_oid1 in self.unstarted_leg_oids:
-        #    self.unstarted_leg_oids.remove(leg_oid1)
-        #    self.legs_by_oid[leg_oid1].start()
         
         
     def collapse_legs(self, leg_oid0, leg_oid1, queued_actions=None):
@@ -116,10 +96,6 @@ class Ground(Loggable):
                 self.legs_by_oid[first_oid].do(action)
         
         
-    #def start_leg(self, leg_oid):
-    #    self.legs_by_oid[leg_oid].start()
-
-    
     def forward(self, leg_oid, action):
         target = self.targets_by_source.get(leg_oid)
         
@@ -193,52 +169,8 @@ class Call(Loggable):
         self.ground = ground
         self.leg_oids = set()
                 
-
-    #def generate_oid(self, type, path):
-    #    if type == "routing":
-    #        if path:
-    #            return build_oid(self.oid, "leg", path, "routing")
-    #        else:
-    #            return build_oid(self.oid, "routing")
-    #    elif type == "slot":
-    #        return build_oid(self.oid, "leg", path[:-1], "routing", None, "slot", path[-1])
-    #    elif type == "bridge":
-    #        if len(path) > 1:
-    #            return build_oid(self.oid, "leg", path[:-1], "bridge", path[-1])
-    #        else:
-    #            return build_oid(self.oid, "bridge", path[-1])
-    #    elif type == "bridge_leg":
-    #        if len(path) > 2:
-    #            return build_oid(self.oid, "leg", path[:-2], "bridge", path[-2], "slot", path[-1])
-    #        else:
-    #            return build_oid(self.oid, "bridge", path[-2], "slot", path[-1])
-    #    else:
-    #        return build_oid(self.oid, "leg", path)
-        
-
-    #def make_bridge(self, type, path):
-    #    bridge = self.switch.make_bridge(type)
-    #    bridge.set_oid(self.generate_oid("bridge", path))
-    #    bridge.set_call(Weak(self), path)
-        
-    #    return bridge
-        
-        
-    #def insert_bridge(self, bridge, next_leg, queued_actions=None):
-    #    incoming_leg = bridge.make_incoming_leg()
-    #    self.add_leg(incoming_leg, "bridge_leg", bridge.path + [ 0 ])
-        
-    #    outgoing_leg = bridge.make_outgoing_leg()
-    #    self.add_leg(outgoing_leg, "bridge_leg", bridge.path + [ 1 ])
-        
-    #    self.ground.insert_legs(next_leg.oid, incoming_leg.oid, outgoing_leg.oid, queued_actions)
-        
         
     def add_leg(self, leg):
-        #oid = self.generate_oid(type, path)
-        
-        #leg.set_oid(oid)
-        #leg.set_call(Weak(self), path)
         if not leg.oid:
             raise Exception("Leg has no oid!")
         
@@ -264,7 +196,6 @@ class Call(Loggable):
             oid = build_oid(oid, suffix)
             
         thing.set_oid(oid)
-        #return thing.stand()
         
 
     def make_thing(self, type, path, suffix):
@@ -292,8 +223,6 @@ class Call(Loggable):
         self.ground.link_legs(leg.oid, thing_leg.oid)
 
         thing.start()
-        # Start only the second one, assume the first one is already started
-        #self.ground.start_leg(leg1.oid)
 
 
     def leg_finished(self, leg):
@@ -302,14 +231,10 @@ class Call(Loggable):
         
     def start(self, incoming_leg):
         self.setup_thing(incoming_leg, [ 0 ], None)
-        #incoming_leg.stand()
         
         routing = self.make_thing("routing", [], "reception")
         self.link_leg_to_thing(incoming_leg, routing)
-        #self.stand_thing(routing, [], "reception")
-        
-        #self.link_legs(incoming_leg, routing)
-        #routing.start()
+
         incoming_leg.start()
 
 
@@ -338,7 +263,3 @@ class Call(Loggable):
         ml.set_report_dirty(WeakMethod(self.ground.refresh_media, lid, channel_index))
         
         return ml
-
-
-    #def forward(self, loid, action):
-    #    return self.ground.forward(loid, action)
