@@ -25,7 +25,7 @@ class Ground(Loggable):
         leg_oid = leg.oid
         if not leg_oid:
             raise Exception("Can't add leg without oid!")
-        
+            
         self.logger.debug("Adding leg %s" % leg_oid)
         self.legs_by_oid[leg_oid] = leg
         
@@ -263,3 +263,11 @@ class Call(Loggable):
         ml.set_report_dirty(WeakMethod(self.ground.refresh_media, lid, channel_index))
         
         return ml
+
+
+    def forward(self, leg, action):
+        self.ground.forward(leg.oid, action)
+        
+        
+    def collapse_legs(self, leg0, leg1, queued_actions=None):
+        self.ground.collapse_legs(leg0.oid, leg1.oid, queued_actions)

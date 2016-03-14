@@ -37,7 +37,7 @@ class BareLeg(CallComponent):
         
         
     def report(self, action):
-        self.call.ground.forward(self.oid, action)
+        self.call.forward(self, action)
         
         
     def finished(self):
@@ -265,9 +265,9 @@ class SessionState(object):
             return self.remote_session
 
 
-class Routing(BareLeg):
+class Routing(CallComponent):
     def __init__(self):
-        BareLeg.__init__(self)
+        CallComponent.__init__(self)
 
         self.leg_count = 0
         self.legs = {}
@@ -276,12 +276,22 @@ class Routing(BareLeg):
         self.bridge_count = 0
     
     
-    def add_leg(self, li, thing):
+    def stand(self):
+        slot_leg = self.add_leg()
+        
+        return slot_leg.stand()
+        
+    
+    def add_leg(self):
+        li = self.leg_count  # outgoing legs are numbered from 1
+        self.leg_count += 1
+
         slot_leg = self.call.make_slot(self, li)
         self.legs[li] = Weak(slot_leg)
         
         self.queued_actions[li] = []
-        self.call.link_leg_to_thing(slot_leg, thing)
+        
+        return slot_leg
 
 
     def remove_leg(self, li):
@@ -291,8 +301,13 @@ class Routing(BareLeg):
 
 
     def may_finish(self):
-        if not self.legs:
-            self.finished()
+        # TODO: we must keep the incoming SlotLeg (when we have one) until
+        # we can finish, because removing it may instantly kill us.
+        # So even after anchoring, keep the SlotLeg until this is the only
+        # slot, and this method is called, then remove it here.
+        if len(self.legs) == 1:
+            self.remove_leg(0)
+            #self.finished()
 
 
     def queue(self, li, action):
@@ -302,19 +317,19 @@ class Routing(BareLeg):
 
     def reject(self, status):
         self.logger.warning("Rejecting with status %s" % (status,))
-        self.report(dict(type="reject", status=status))
+        self.legs[0].report(dict(type="reject", status=status))
             
             
     def ringback(self):
         if not self.sent_ringback:
             self.sent_ringback = True
             self.logger.debug("Sending artificial ringback.")
-            self.report(dict(type="ring"))
+            self.legs[0].report(dict(type="ring"))
 
 
     def hangup_all_outgoing(self, except_li):
         for li, leg in list(self.legs.items()):
-            if li != except_li:
+            if li not in (0, except_li):
                 self.logger.debug("Hanging up leg %s" % li)
                 leg.report(dict(type="hangup"))
                 self.remove_leg(li)
@@ -323,38 +338,37 @@ class Routing(BareLeg):
     def anchor(self, li):
         self.logger.debug("Anchored to leg %d." % li)
         self.hangup_all_outgoing(li)
-        self.call.ground.collapse_legs(self.oid, self.legs[li].oid, self.queued_actions[li])
+        self.call.collapse_legs(self.legs[0], self.legs[li], self.queued_actions[li])
         self.remove_leg(li)
-        
-            
+
+
     def dial(self, type, action):
         if action["type"] != "dial":
             raise Exception("Dial action is not a dial: %s" % action["type"])
 
         self.logger.debug("Dialing out to: %s" % (type,))
-        self.leg_count += 1
-        li = self.leg_count  # outgoing legs are numbered from 1
+        
+        slot_leg = self.add_leg()
+        li = slot_leg.number
         
         thing = self.call.make_thing(type, self.path + [ li ], None)
-        self.add_leg(li, thing)
-        self.legs[li].report(action)
-
-
-    def do(self, action):
-        type = action["type"]
-        self.logger.debug("Got %s from the incoming leg." % (type,))
-
-        if type == "dial":
-            raise Exception("Should have handled dial in a subclass!")
-        elif type == "hangup":
-            self.hangup_all_outgoing(None)
-        else:
-            raise Exception("Invalid action from incoming leg: %s" % type)
+        self.call.link_leg_to_thing(slot_leg, thing)
+        slot_leg.report(action)
 
 
     def do_slot(self, li, action):
         type = action["type"]
-        self.logger.debug("Got %s from outgoing leg %d." % (type, li))
+        self.logger.debug("Got %s from leg %d." % (type, li))
+
+        if li == 0:
+            if type == "dial":
+                raise Exception("Should have handled dial in a subclass!")
+            elif type == "hangup":
+                self.hangup_all_outgoing(None)
+            else:
+                raise Exception("Invalid action from incoming leg: %s" % type)
+            
+            return
 
         if type == "reject":
             # FIXME: of course don't reject the incoming leg immediately
@@ -372,7 +386,8 @@ class Routing(BareLeg):
             self.anchor(li)
         elif type == "hangup":
             # Oops, we anchored this leg because it accepted, but now hangs up
-            self.report(action)
+            # FIXME: is this still true?
+            self.legs[0].report(action)
         else:
             raise Exception("Invalid action from outgoing leg %d: %s" % (li, type))
 
@@ -382,8 +397,8 @@ class SimpleRouting(Routing):
         raise NotImplementedError()
 
 
-    def do(self, action):
-        if action["type"] == "dial":
+    def do_slot(self, li, action):
+        if li == 0 and action["type"] == "dial":
             try:
                 self.route(action)
                 
@@ -396,7 +411,7 @@ class SimpleRouting(Routing):
                 self.logger.error("Simple routing internal error: %s" % (e,), exc_info=True)
                 self.reject(Status(500))
         else:
-            Routing.do(self, action)
+            Routing.do_slot(self, li, action)
 
 
 class PlannedRouting(Planned, Routing):
@@ -431,11 +446,7 @@ class PlannedRouting(Planned, Routing):
         for tag, event in self.event_queue:
             if tag == "action":
                 li, action = event
-                
-                if li == 0:
-                    Routing.do(self, action)
-                else:
-                    Routing.do_slot(self, li, action)
+                Routing.do_slot(self, li, action)
                 
         self.event_queue = None
         status = None
@@ -462,21 +473,12 @@ class PlannedRouting(Planned, Routing):
         self.may_finish()
         
         
-    def do(self, action):
+    def do_slot(self, li, action):
         self.logger.debug("Planned routing processing a %s" % action["type"])
         
         if action["type"] == "dial":
             self.start_plan(action)
         elif self.generator:
-            self.resume("action", (0, action))
-        else:
-            Routing.do(self, action)
-
-
-    def do_slot(self, li, action):
-        self.logger.debug("Planned routing processing a %s" % action["type"])
-        
-        if self.generator:
             self.resume("action", (li, action))
         else:
             Routing.do_slot(self, li, action)
@@ -519,6 +521,8 @@ class Bridge(CallComponent):
             self.incoming_leg = None
             
         self.logger.debug("Bridge finished.")
+        # Since only the legs held a reference to self, we may be destroyed
+        # as soon as this method returns.
             
 
     def do_slot(self, li, action):
