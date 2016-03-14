@@ -425,10 +425,10 @@ def main():
     mgw = MediaGateway(metapoll, MGW_ADDR)
     mgw.set_oid("mgw")
 
-    switch_a = SwitchA(Weak(metapoll), A_ADDR, MGW_ADDR, range(30000, 30020, 2))
+    switch_a = SwitchA(Weak(metapoll), resolve(A_ADDR), MGW_ADDR, range(30000, 30020, 2))
     switch_a.set_oid(build_oid(None, "switch", "a"))
     
-    switch_b = SwitchB(Weak(metapoll), B_ADDR, MGW_ADDR, range(40000, 40020, 2))
+    switch_b = SwitchB(Weak(metapoll), resolve(B_ADDR), MGW_ADDR, range(40000, 40020, 2))
     switch_b.set_oid(build_oid(None, "switch", "b"))
 
     #switch_a.transport.set_peer(switch_b.transport)
