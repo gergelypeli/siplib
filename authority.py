@@ -115,7 +115,7 @@ class Authority(Loggable):
             self.logger.debug("Incorrect digest in request")
             return False
 
-        self.logger.debug("Authorized for '%s'" % (authname,))
+        self.logger.debug("Request authorized for '%s'" % (authname,))
         return True
 
 

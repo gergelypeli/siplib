@@ -1,17 +1,25 @@
 from async import WeakMethod
-from format import Status, make_virtual_response
+from format import Status, Rack, make_virtual_response
 from util import build_oid, resolve
 from leg import Leg, SessionState, Error
 from sdp import SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES
 
 
 class InviteState(object):
+    RPR_NONE = "RPR_NONE"
+    RPR_SENT = "RPR_SENT"
+    RPR_PRACKED = "RPR_PRACKED"
+    
     def __init__(self, request, is_outgoing):
         self.request = request
         self.is_outgoing = is_outgoing
         self.responded_sdp = None
-        self.rpr_session_done = False
         self.final_response = None
+        
+        self.rpr_supported_locally = True  # FIXME
+        self.rpr_supported_remotely = True  # FIXME
+        self.rpr_state = self.RPR_NONE
+        self.rpr_rseq = None
 
 
 class SipLeg(Leg):
@@ -161,7 +169,9 @@ class SipLeg(Leg):
         return sdp
 
 
-    def invite_outgoing_request(self, msg, session):
+    # Invite client
+
+    def invite_outgoing_request(self, msg, session, rpr):
         if self.invite:
             raise Exception("Invalid outgoing INVITE request!")
         
@@ -173,6 +183,11 @@ class SipLeg(Leg):
             msg["sdp"] = self.process_outgoing_offer(session)
             
         self.invite = InviteState(msg, True)
+        
+        if rpr:
+            self.invite.rpr_supported_locally = True
+            msg.setdefault("supported", set()).add("100rel")
+        
         self.send_request(msg)  # Will be extended!
 
 
@@ -196,11 +211,18 @@ class SipLeg(Leg):
             self.invite.responded_sdp = sdp  # just to ignore any further
 
         if status.code >= 300:
-            # Transactions sent the ACK
+            # Transactions already sent the ACK
             self.invite = None
-            return dict(is_answer=True)  # rejection
+            return dict(is_answer=True)  # rejection  FIXME: not necessarily an answer!
         elif status.code >= 200:
             self.invite.final_response = msg
+        elif "100rel" in msg.get("required", []):
+            self.invite.rpr_state = self.invite.RPR_SENT
+            
+            if self.invite.request.get("sdp"):
+                self.invite_outgoing_prack(msg)
+            else:
+                raise Exception("Can't PRACK with session yet!")  # TODO
                 
         return session
 
@@ -229,6 +251,21 @@ class SipLeg(Leg):
         self.invite = None
 
 
+    def invite_outgoing_prack(self, rpr):
+        rseq = rpr.get("rseq")
+        cseq = rpr["cseq"]
+        method = rpr["method"]
+        
+        self.send_request(dict(method="PRACK", rack=Rack(rseq, cseq, method)))
+        self.invite.rpr_state = self.invite.RPR_PRACKED
+
+
+    def invite_incoming_prack_ok(self, msg):
+        self.invite.state = self.invite.RPR_NONE
+
+
+    # Invite server
+
     def invite_incoming_request(self, msg):
         if self.invite:
             raise Exception("Unexpected incoming INVITE request!")
@@ -243,12 +280,19 @@ class SipLeg(Leg):
             
         self.invite = InviteState(msg, False)
         
+        self.logger.debug("XXX supported: %s" % msg.get("supported"))
+        if "100rel" in msg.get("supported", set()):
+            self.invite.rpr_supported_remotely = True
+        
         return session
 
 
-    def invite_outgoing_response_session(self, session):
+    def invite_outgoing_response_session(self, session, rpr):
         if not self.invite or self.invite.is_outgoing:
             raise Exception("Invalid outgoing INVITE response session!")
+    
+        if rpr:
+            self.invite.rpr_supported_locally = True
     
         if not session:
             return False
@@ -276,15 +320,25 @@ class SipLeg(Leg):
         if not self.invite or self.invite.is_outgoing:
             raise Exception("Invalid outgoing INVITE response!")
         
-        is_reject = (msg["status"].code >= 300)
+        status = msg["status"]
         
-        if self.invite.responded_sdp and not is_reject:
+        if self.invite.responded_sdp and status.code < 300:
             msg["sdp"] = self.invite.responded_sdp
+
+        if status.code >= 200:
+            self.invite.final_response = msg  # Note: this is an incomplete message, but OK here
             
-        self.invite.final_response = msg  # Note: this is an incomplete message, but OK here
-        self.send_response(self.invite.final_response, self.invite.request)
+        if self.invite.rpr_supported_remotely and self.invite.rpr_supported_locally:
+            msg.setdefault("required", set()).add("100rel")
+
+            self.invite.rpr_rseq = self.invite.rpr_rseq + 1 if self.invite.rpr_rseq is not None else 1
+            msg["rseq"] = self.invite.rpr_rseq
+            
+            self.invite.rpr_state = self.invite.RPR_SENT
+            
+        self.send_response(msg, self.invite.request)
         
-        if is_reject:
+        if status.code >= 300:
             self.invite = None
     
     
@@ -318,7 +372,27 @@ class SipLeg(Leg):
             raise Exception("Unexpected incoming NAK request!")
                 
         self.invite = None
+
+
+    def invite_incoming_prack(self, msg):
+        rseq, cseq, method = msg["rack"]
+        
+        if method != "INVITE":
+            raise Exception("LOLWAT?")
+        elif cseq != self.invite.request["cseq"]:
+            raise Exception("LOLCSEQ?")
+        elif rseq != self.invite.rpr_rseq:
+            raise Exception("LOLRSEQ?")
+            
+        self.invite.rpr_state = self.invite.RPR_PRACKED  # TODO: session...
+
+
+    def invite_outgoing_prack_ok(self, prack):
+        self.send_response(dict(status=Status(200)), prack)
+        self.invite.rpr_state = self.invite.RPR_NONE
+        
     
+    # Others
 
     def finish_media(self, error=None):
         self.deallocate_local_media(None, self.session.local_session)
@@ -344,7 +418,8 @@ class SipLeg(Leg):
                     self.ctx.get("route"), self.ctx.get("hop")
                 )
                 
-                self.invite_outgoing_request(dict(method="INVITE"), session)
+                rpr = "100rel" in action.get("options", set())
+                self.invite_outgoing_request(dict(method="INVITE"), session, rpr)
                 self.change_state(self.DIALING_OUT)
                 
                 #self.anchor()
@@ -362,7 +437,8 @@ class SipLeg(Leg):
                 return
 
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
-            session_changed = self.invite_outgoing_response_session(session)
+            rpr = "100rel" in action.get("options", set())
+            session_changed = self.invite_outgoing_response_session(session, rpr)
 
             if type == "session":
                 if not session_changed:
@@ -405,10 +481,12 @@ class SipLeg(Leg):
             
             if type == "session":
                 if not self.invite:
-                    self.invite_outgoing_request(dict(method="INVITE"), session)
+                    rpr = "100rel" in action.get("options", set())
+                    self.invite_outgoing_request(dict(method="INVITE"), session, rpr)
                 elif not self.invite.final_response:
                     # TODO: handle rejection!
-                    self.invite_outgoing_response_session(session)
+                    rpr = "100rel" in action.get("options", set())
+                    self.invite_outgoing_response_session(session, rpr)
                     self.invite_outgoing_response(dict(status=Status(200)))
                 else:
                     self.invite_outgoing_ack(session)
@@ -433,6 +511,12 @@ class SipLeg(Leg):
         is_response = msg["is_response"]
         method = msg["method"]
         status = msg.get("status")
+        
+        if is_response:
+            self.logger.debug("Processing response %d %s" % (status.code, method))
+        else:
+            self.logger.debug("Processing request %s" % method)
+
         #sdp = msg.get("sdp")
         
         # Note: must change state before report, because that can generate
@@ -447,9 +531,12 @@ class SipLeg(Leg):
                 })
                 
                 session = self.invite_incoming_request(msg)
+                options = set()
+                if self.invite.rpr_supported_remotely:
+                    options.add("100rel")
                 
                 self.change_state(self.DIALING_IN)
-                self.report(dict(type="dial", ctx=self.ctx, session=session))
+                self.report(dict(type="dial", ctx=self.ctx, session=session, options=options))
                 return
                 
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
@@ -460,6 +547,12 @@ class SipLeg(Leg):
                 self.change_state(self.DOWN)
                 self.report(dict(type="hangup"))
                 self.finish_media()
+                return
+                
+                
+            elif not is_response and method == "PRACK":
+                self.invite_incoming_prack(msg)
+                self.invite_outgoing_prack_ok(msg)
                 return
                 
             elif not is_response and method == "ACK":
@@ -509,6 +602,10 @@ class SipLeg(Leg):
                         
                     self.report(dict(type="accept", session=session))
                     return
+        
+            elif is_response and method == "PRACK":
+                self.invite_incoming_prack_ok(msg)
+                return
                     
         elif self.state == self.UP:
             # Re-INVITE stuff

@@ -58,6 +58,18 @@ class Status(collections.namedtuple("Status", [ "code", "reason" ])):
         return super().__new__(cls, code, reason)
 
 
+class Rack(collections.namedtuple("Rack", [ "rseq", "cseq", "method" ])):
+    def print(self):
+        return "%d %d %s" % (self.rseq, self.cseq, self.method)
+        
+        
+    @classmethod
+    def parse(cls, value):
+        rseq, cseq, method = value.split()
+        
+        return cls(int(rseq), int(cseq), method.upper())
+
+
 class Via(collections.namedtuple("Via", [ "addr", "branch" ])):
     def print(self):
         return "SIP/2.0/UDP %s:%d;branch=z9hG4bK%s" % (self.addr + (self.branch,))
@@ -345,12 +357,16 @@ def print_structured_message(params):
     for field in mandatory_fields + other_fields:
         if params[field] is None:
             pass
-        elif field in ("from", "to", "www_authenticate", "authorization"):
+        elif field in ("from", "to", "www_authenticate", "authorization", "rack"):
             p[field] = params[field].print()
         elif field == "cseq":
             p[field] = "%d %s" % (params[field], params["method"])
+        elif field == "rseq":
+            p[field] = "%d" % params[field]
         elif field in ("contact", "via"):
             p[field] = [ f.print() for f in params[field] ]
+        elif field in ("supported", "required"):
+            p[field] = ", ".join(sorted(params[field]))
         elif field not in META_HEADER_FIELDS:
             p[field] = params[field]
 
@@ -384,6 +400,7 @@ def parse_structured_message(msg):
         raise FormatError("Invalid message!")
 
     for field in params:
+        # TODO: refactor a bit!
         if field in ("from", "to"):
             p[field] = Nameaddr.parse(params[field])
         elif field in ("contact",):
@@ -400,8 +417,14 @@ def parse_structured_message(msg):
                     raise FormatError("Mismatching method in cseq field!")
             else:
                 p["method"] = cseq_method.upper()  # Necessary for CANCEL responses
+        elif field == "rseq":
+            p[field] = int(params[field])
+        elif field == "rack":
+            p[field] = Rack.parse(params[field])
         elif field == "via":
             p[field] = [ Via.parse(s) for s in params[field] ]
+        elif field in ("supported", "required"):
+            p[field] = set( x.strip() for x in params[field].split(",") )
         elif field not in META_HEADER_FIELDS:
             p[field] = params[field]
         else:

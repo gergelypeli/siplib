@@ -141,6 +141,10 @@ class Switch(Loggable):
         if method in ("CANCEL", "ACK"):
             self.logger.debug("Accepting request because it can't be authenticated anyway")
             return None
+        elif method == "PRACK":
+            # TODO: this is only for debugging
+            self.logger.debug("Accepting request because we're lazy to authenticate a PRACK")
+            return None
         elif not auth_policy:
             self.logger.debug("Rejecting request because account is unknown")
             return WeakMethod(self.reject_request, Status(403, "Forbidden"))
@@ -148,12 +152,12 @@ class Switch(Loggable):
             self.logger.debug("Accepting request because authentication is never needed")
             return None
         elif auth_policy == Account.AUTH_ALWAYS:
-            self.logger.debug("Challenging request because authentication is always needed")
+            self.logger.debug("Authenticating request because account always needs it")
         elif auth_policy == Account.AUTH_IF_UNREGISTERED:
             hop_unknown = hop not in self.record_manager.lookup_contact_hops(from_uri)
             
             if hop_unknown:
-                self.logger.debug("Challenging request because account is not registered")
+                self.logger.debug("Authenticating request because account is not registered")
             else:
                 self.logger.debug("Accepting request because account is registered")
                 return None

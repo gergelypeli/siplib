@@ -235,8 +235,9 @@ class Dialog(Loggable):
         call_id = params["call_id"]
         cseq = params["cseq"]
 
-        # The same CSeq may arrive with CANCEL
-        if self.last_recved_cseq is not None and cseq < self.last_recved_cseq:
+        # The Cseq for CANCEL and ACK may be lower than the last received one
+        if self.last_recved_cseq is not None and cseq <= self.last_recved_cseq and method not in ("CANCEL", "ACK"):
+            self.logger.debug("Dropping out of order request with Cseq %d" % cseq)
             return None
         else:
             self.last_recved_cseq = cseq

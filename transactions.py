@@ -184,7 +184,7 @@ class PlainClientTransaction(Transaction):
 
     def expired(self):
         if self.state == self.TRANSMITTING:
-            self.report(make_timeout_response(self.outgoing_msg))
+            self.report_response(make_timeout_response(self.outgoing_msg))
 
 
 class PlainServerTransaction(Transaction):
