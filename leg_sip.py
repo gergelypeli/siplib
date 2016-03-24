@@ -20,6 +20,8 @@ class InviteState(object):
         self.rpr_supported_remotely = True  # FIXME
         self.rpr_state = self.RPR_NONE
         self.rpr_rseq = None
+        self.rpr_sdp_responded = False
+        self.rpr_queue = []
 
 
 class SipLeg(Leg):
@@ -216,7 +218,7 @@ class SipLeg(Leg):
             return dict(is_answer=True)  # rejection  FIXME: not necessarily an answer!
         elif status.code >= 200:
             self.invite.final_response = msg
-        elif "100rel" in msg.get("required", []):
+        elif "100rel" in msg.get("require", set()):
             self.invite.rpr_state = self.invite.RPR_SENT
             
             if self.invite.request.get("sdp"):
@@ -287,54 +289,55 @@ class SipLeg(Leg):
         return session
 
 
-    def invite_outgoing_response_session(self, session, rpr):
-        if not self.invite or self.invite.is_outgoing:
-            raise Exception("Invalid outgoing INVITE response session!")
-    
-        if rpr:
-            self.invite.rpr_supported_locally = True
-    
-        if not session:
-            return False
-    
-        if self.invite.responded_sdp:
-            if session:
-                raise Exception("Ignoring outgoing session, because one already sent!")
-                
-            return False
-        elif self.invite.request.get("sdp"):
-            if not session["is_answer"]:
-                raise Exception("Ignoring outgoing session, because answer is expected!")
-            
-            self.invite.responded_sdp = self.process_outgoing_answer(session)
-            return True
-        else:
-            if session["is_answer"]:
-                raise Exception("Ignoring outgoing session, because offer is expected!")
-            
-            self.invite.responded_sdp = self.process_outgoing_offer(session)
-            return True
+    def invite_outgoing_response_session_sendable(self):
+        return self.invite and not self.invite.is_outgoing and not self.invite.responded_sdp
+        
 
-
-    def invite_outgoing_response(self, msg):
+    def invite_outgoing_response(self, msg, session, rpr):
         if not self.invite or self.invite.is_outgoing:
             raise Exception("Invalid outgoing INVITE response!")
-        
+
+        if session:
+            if self.invite.responded_sdp:
+                raise Exception("Ignoring outgoing session, because one already sent!")
+            elif self.invite.request.get("sdp"):
+                if not session["is_answer"]:
+                    raise Exception("Ignoring outgoing session, because answer is expected!")
+            
+                self.invite.responded_sdp = self.process_outgoing_answer(session)
+            else:
+                if session["is_answer"]:
+                    raise Exception("Ignoring outgoing session, because offer is expected!")
+            
+                self.invite.responded_sdp = self.process_outgoing_offer(session)
+            
+        if rpr:
+            self.invite.rpr_supported_locally = True
+
         status = msg["status"]
         
-        if self.invite.responded_sdp and status.code < 300:
+        if self.invite.rpr_state == self.invite.RPR_SENT:
+            self.logger.debug("Oops, can't send this %d response yet, queueing it" % status.code)
+            self.invite.rpr_queue.append(msg)
+            return
+
+        if self.invite.responded_sdp and status.code < 300 and not self.invite.rpr_sdp_responded:
             msg["sdp"] = self.invite.responded_sdp
 
         if status.code >= 200:
+            # Final
             self.invite.final_response = msg  # Note: this is an incomplete message, but OK here
-            
-        if self.invite.rpr_supported_remotely and self.invite.rpr_supported_locally:
-            msg.setdefault("required", set()).add("100rel")
+        elif self.invite.rpr_supported_remotely and self.invite.rpr_supported_locally:
+            # Provisional, reliable
+            msg.setdefault("require", set()).add("100rel")
 
             self.invite.rpr_rseq = self.invite.rpr_rseq + 1 if self.invite.rpr_rseq is not None else 1
             msg["rseq"] = self.invite.rpr_rseq
             
             self.invite.rpr_state = self.invite.RPR_SENT
+
+            if self.invite.responded_sdp:
+                self.invite.rpr_sdp_responded = True
             
         self.send_response(msg, self.invite.request)
         
@@ -377,21 +380,28 @@ class SipLeg(Leg):
     def invite_incoming_prack(self, msg):
         rseq, cseq, method = msg["rack"]
         
-        if method != "INVITE":
-            raise Exception("LOLWAT?")
-        elif cseq != self.invite.request["cseq"]:
-            raise Exception("LOLCSEQ?")
-        elif rseq != self.invite.rpr_rseq:
-            raise Exception("LOLRSEQ?")
-            
+        if method != "INVITE" or cseq != self.invite.request["cseq"] or rseq != self.invite.rpr_rseq:
+            return False
+        
+        # Stop the retransmission of the provisional answer
+        self.send_response(make_virtual_response(), self.invite.request)
+
         self.invite.rpr_state = self.invite.RPR_PRACKED  # TODO: session...
+        return True
 
 
     def invite_outgoing_prack_ok(self, prack):
         self.send_response(dict(status=Status(200)), prack)
         self.invite.rpr_state = self.invite.RPR_NONE
         
-    
+        if self.invite.rpr_queue:
+            msg = self.invite.rpr_queue.pop(0)
+            status = msg["status"]
+            self.logger.debug("Now sending the queued %d response" % status.code)
+            
+            self.invite_outgoing_response(msg)
+
+
     # Others
 
     def finish_media(self, error=None):
@@ -437,27 +447,23 @@ class SipLeg(Leg):
                 return
 
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
+            already_ringing = (self.state == self.DIALING_IN_RINGING)
             rpr = "100rel" in action.get("options", set())
-            session_changed = self.invite_outgoing_response_session(session, rpr)
+
+            if session and not self.invite_outgoing_response_session_sendable():
+                raise Exception("FIXME!")
 
             if type == "session":
-                if not session_changed:
-                    self.logger.debug("Session unchanged, skipping 180/183.")
-                    return
-                    
-                already_ringing = (self.state == self.DIALING_IN_RINGING)
-                status = Status(180, "Ringing") if already_ringing else Status(183, "Session Progress")
-                self.invite_outgoing_response(dict(status=status))
+                status = Status(180) if already_ringing else Status(183)
+                self.invite_outgoing_response(dict(status=status), session, rpr)
                 return
                 
             elif type == "ring":
-                already_ringing = (self.state == self.DIALING_IN_RINGING)
-                
-                if not session_changed and already_ringing:
+                if not session and already_ringing:
                     self.logger.debug("Already ringing and session unchanged, skipping 180.")
                     return
                 
-                self.invite_outgoing_response(dict(status=Status(180, "Ringing")))
+                self.invite_outgoing_response(dict(status=Status(180)), session, rpr)
                 
                 if not already_ringing:
                     self.change_state(self.DIALING_IN_RINGING)
@@ -465,12 +471,12 @@ class SipLeg(Leg):
                 return
                     
             elif type == "accept":
-                self.invite_outgoing_response(dict(status=Status(200, "OK")))
+                self.invite_outgoing_response(dict(status=Status(200)), session, rpr)
                 # Wait for the ACK before changing state
                 return
 
             elif type == "reject":
-                self.invite_outgoing_response(dict(status=action["status"]))
+                self.invite_outgoing_response(dict(status=action["status"]), None, False)
                 # The transactions will catch the ACK
                 self.change_state(self.DOWN)
                 self.finish_media()
@@ -481,13 +487,10 @@ class SipLeg(Leg):
             
             if type == "session":
                 if not self.invite:
-                    rpr = "100rel" in action.get("options", set())
-                    self.invite_outgoing_request(dict(method="INVITE"), session, rpr)
+                    self.invite_outgoing_request(dict(method="INVITE"), session, False)
                 elif not self.invite.final_response:
                     # TODO: handle rejection!
-                    rpr = "100rel" in action.get("options", set())
-                    self.invite_outgoing_response_session(session, rpr)
-                    self.invite_outgoing_response(dict(status=Status(200)))
+                    self.invite_outgoing_response(dict(status=Status(200)), session, False)
                 else:
                     self.invite_outgoing_ack(session)
                         
@@ -542,7 +545,7 @@ class SipLeg(Leg):
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
             if not is_response and method == "CANCEL":
                 self.send_response(dict(status=Status(200, "OK")), msg)
-                self.send_response(dict(status=Status(487, "Request Terminated")), self.invite.request)
+                self.invite_outgoing_response(dict(status=Status(487, "Request Terminated")))
                 
                 self.change_state(self.DOWN)
                 self.report(dict(type="hangup"))
@@ -551,8 +554,13 @@ class SipLeg(Leg):
                 
                 
             elif not is_response and method == "PRACK":
-                self.invite_incoming_prack(msg)
-                self.invite_outgoing_prack_ok(msg)
+                ok = self.invite_incoming_prack(msg)
+                
+                if ok:
+                    self.invite_outgoing_prack_ok(msg)
+                else:
+                    self.send_response(dict(status=Status(481)), msg)
+                    
                 return
                 
             elif not is_response and method == "ACK":

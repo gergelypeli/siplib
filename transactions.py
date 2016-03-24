@@ -314,8 +314,11 @@ class InviteServerTransaction(PlainServerTransaction):
         if self.state == self.WAITING:
             if not self.incoming_via:
                 self.incoming_via = request["via"]
-                self.trying_response = make_simple_response(request, Status(100, "Trying"))
                 self.report_request(request)
+                
+                if self.state == self.WAITING:
+                    # No response yet, say something
+                    self.send(make_simple_response(request, Status(100, "Trying")))
         elif self.state == self.PROVISIONING:
             self.retransmit()
         elif self.state == self.TRANSMITTING:
@@ -326,20 +329,20 @@ class InviteServerTransaction(PlainServerTransaction):
 
     def send(self, response):
         if is_virtual_response(response):
-            # A virtual response means we got ACKed, stop retransmissions
-            self.process_ack()
+            # A virtual response means we got (PR)ACKed, stop retransmissions
+            was_final = self.outgoing_msg["status"].code >= 200
+            
+            if self.state in (self.TRANSMITTING, self.PROVISIONING):
+                self.change_state(self.LINGERING if was_final else self.PROVISIONING)
+
         else:
-            new_state = self.PROVISIONING if response["status"].code < 200 else self.TRANSMITTING
-            self.change_state(new_state)
+            is_rpr = "100rel" in response.get("require", set())
+            is_final = response["status"].code >= 200
+            is_reliable = is_rpr or is_final
+            
+            self.change_state(self.TRANSMITTING if is_reliable else self.PROVISIONING)
             self.transmit(response)
 
-
-    def maintain(self, now):
-        if self.state == self.WAITING:
-            self.send(self.trying_response)
-            
-        return super().maintain(now)
-        
 
     def expired(self):
         if self.state == self.TRANSMITTING:
@@ -351,24 +354,15 @@ class InviteServerTransaction(PlainServerTransaction):
             raise Error("Invite server expired while %s!" % self.state)
 
 
-    def process_ack(self):
-        #print("InviteServer ACKed.")
-        
-        if self.state == self.TRANSMITTING:
-            self.change_state(self.LINGERING)
-        elif self.state == self.LINGERING:
-            pass  # duplicate ACK received
-        else:
-            pass  # stupid client, we haven't even responded yet
-
-
 class AckServerTransaction(PlainServerTransaction):
     # Created only for 2xx responses to drop duplicates for the Dialog.
-    # For the sake of consistentcy, we excpect a virtual response to go lingering.
+    # For the sake of consistentcy, we expect a virtual response to go lingering.
     
-    def retransmit(self):
-        if not is_virtual_response(self.outgoing_msg):
+    def send(self, response):
+        if not is_virtual_response(response):
             raise Error("Nonvirtual response to AckServerTransaction!")
+
+        # Don't send anything
 
 
 class TransactionManager(Loggable):
