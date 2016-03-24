@@ -12,27 +12,15 @@ BYTES_PER_SAMPLE = 2
 
 class Base(Loggable):
     def __init__(self):
-        self.msecs_skew = 0
+        pass
         
         
     def msecs(self, ticks, clock):
-        q, r = divmod(ticks * 1000, clock)
-        
-        if r / clock != self.msecs_skew:
-            self.logger.warning("Ticks skewed by %sms!" % (r / clock))
-            self.msecs_skew = r / clock  # Report once and remember
-            
-        return q
+        return ticks * 1000 // clock
         
         
     def ticks(self, msecs, clock):
-        q, r = divmod(msecs * clock, 1000)
-        
-        if r:
-            # Highly unlikely, since clock is a multiple of 1000
-            self.logger.warning("Msecs rounded: %d / %d!" % (msecs, clock))
-            
-        return q
+        return msecs * clock // 1000
 
 
     def packet_duration(self, packet):
@@ -216,8 +204,7 @@ class RtpRecorder(RtpProcessor):
         
         # Even if internal timestamps are relative, we'll need the start
         # time of the recording, too.
-        self.base_timestamp = None
-        self.base_clock = None
+        self.base_ms = None
         self.ptime_ms = ptime_ms
         
         if format.encoding != "L16":
@@ -229,11 +216,10 @@ class RtpRecorder(RtpProcessor):
         
         
     def record_packet(self, packet):
-        if self.base_timestamp is None:
-            self.base_timestamp = packet.timestamp
-            self.base_clock = packet.format.clock
+        if self.base_ms is None:
+            self.base_ms = self.msecs(packet.timestamp, packet.format.clock)
             
-        rec_time_ms = self.msecs(packet.timestamp, packet.format.clock) - self.msecs(self.base_timestamp, self.base_clock)
+        rec_time_ms = self.msecs(packet.timestamp, packet.format.clock) - self.base_ms
         if rec_time_ms < 0:
             return  # Oops, started recording later!
         
