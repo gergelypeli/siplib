@@ -4,7 +4,7 @@ from __future__ import print_function, unicode_literals, absolute_import
 import uuid
 import datetime
 #import logging
-from async import Weak
+from async_base import Weak
 from util import Loggable
 
 from format import Via, Status, make_simple_response, make_ack, make_virtual_response, make_timeout_nak, make_timeout_response, is_virtual_response

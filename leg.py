@@ -1,4 +1,4 @@
-from async import Weak, WeakMethod, WeakGeneratorMethod
+from async_base import Weak, WeakMethod, WeakGeneratorMethod
 from planner import Planned
 from util import build_oid, Loggable
 from format import SipError, Status

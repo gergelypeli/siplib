@@ -3,7 +3,7 @@ import weakref
 
 from rtp import read_wav, write_wav, RtpPlayer, RtpRecorder, RtpBuilder, RtpParser, DtmfExtractor, DtmfInjector, Format
 from msgp import MsgpServer
-from async import WeakMethod, Weak
+from async_base import WeakMethod, Weak
 from util import Loggable, build_oid
 
 

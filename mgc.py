@@ -1,7 +1,6 @@
 from __future__ import unicode_literals, print_function
 
-from async import WeakMethod, Weak
-#from msgp import JsonMsgp, Sid
+from async_base import WeakMethod, Weak
 from msgp import MsgpClient
 from util import vacuum, build_oid, Loggable
 

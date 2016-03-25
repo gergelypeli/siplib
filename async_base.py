@@ -4,7 +4,7 @@ import datetime
 
 
 __all__ = [
-    'WeakMethod', 'Weak', 'Metapoll'
+    'WeakMethod', 'WeakGeneratorMethod', 'Weak', 'Metapoll'
 ]
 
 

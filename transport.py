@@ -3,7 +3,7 @@ from datetime import timedelta
 #import logging
 
 from format import Hop, Addr, parse_structured_message, print_structured_message
-from async import WeakMethod
+from async_base import WeakMethod
 from util import Loggable, resolve
 
 

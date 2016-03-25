@@ -6,7 +6,7 @@ from weakref import WeakValueDictionary
 
 from format import Uri, Nameaddr
 from sdp import Origin
-from async import WeakMethod
+from async_base import WeakMethod
 from util import resolve, Loggable
 
 MAXFWD = 50

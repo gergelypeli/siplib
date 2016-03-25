@@ -6,7 +6,7 @@ import collections
 #import logging
 
 from format import Nameaddr, Status
-from async import WeakMethod, Weak
+from async_base import WeakMethod, Weak
 from transactions import make_simple_response
 from util import Loggable
 

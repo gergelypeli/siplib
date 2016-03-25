@@ -5,7 +5,7 @@ import logging
 import logging.config
 from copy import deepcopy
 
-from async import Metapoll, WeakMethod, Weak
+from async_base import Metapoll, WeakMethod, Weak
 from format import Addr, Uri, Nameaddr, Status, SipError, Hop
 from transport import UdpTransport
 from transactions import TransactionManager

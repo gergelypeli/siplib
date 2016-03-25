@@ -1,4 +1,4 @@
-from async import Weak, WeakMethod
+from async_base import Weak, WeakMethod
 from mgc import MediaContext
 from util import build_oid, Loggable
 from leg import SlotLeg

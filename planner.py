@@ -1,4 +1,4 @@
-from async import WeakMethod
+from async_base import WeakMethod
 from util import Loggable
 
 

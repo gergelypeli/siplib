@@ -2,7 +2,7 @@ import socket
 import errno
 import logging
 import os
-from async import WeakMethod
+from async_base import WeakMethod
 
 
 __all__ = [

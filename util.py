@@ -2,7 +2,7 @@ import socket
 import struct
 import logging
 from format import Addr
-from async import WeakMethod
+from async_base import WeakMethod
 import sys, traceback
 
 FULL_OIDS = True

@@ -1,4 +1,4 @@
-from async import WeakMethod
+from async_base import WeakMethod
 from format import Status, Rack, make_virtual_response
 from util import build_oid, resolve
 from leg import Leg, SessionState, Error

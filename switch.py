@@ -1,4 +1,4 @@
-from async import WeakMethod, Weak
+from async_base import WeakMethod, Weak
 from format import Status
 from transport import UdpTransport
 from transactions import TransactionManager, make_simple_response
