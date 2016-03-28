@@ -74,7 +74,7 @@ class UdpTransport(Loggable):
             return
         
         sip = print_structured_message(msg)
-        self.logger.debug("Sending to %s:\n%s" % (hop.remote_addr, indented(sip)))
+        self.logger.debug("Sending to %s\n%s" % (hop.remote_addr, indented(sip)))
         
         sip = sip.encode()
         self.socket.sendto(sip, hop.remote_addr)
@@ -85,7 +85,7 @@ class UdpTransport(Loggable):
         sip = sip.decode()
         
         hop = Hop(local_addr=self.local_addr, remote_addr=Addr(*raddr), interface="eth0")
-        self.logger.debug("Receiving from %s:\n%s" % (hop.remote_addr, indented(sip)))
+        self.logger.debug("Receiving from %s\n%s" % (hop.remote_addr, indented(sip)))
         
         msg = parse_structured_message(sip)
         msg["hop"] = hop

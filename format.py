@@ -22,8 +22,12 @@ class SipError(Exception):
         return "%d %s" % self.status
         
 
-Addr = collections.namedtuple("Addr", [ "host", "port" ])
+class Addr(collections.namedtuple("Addr", [ "host", "port" ])):
+    def __str__(self):
+        return "%s:%d" % self if self.port is not None else "%s" % self.host
+        
 Addr.__new__.__defaults__ = (None,)
+
 
 class Status(collections.namedtuple("Status", [ "code", "reason" ])):
     REASONS_BY_CODE = {
