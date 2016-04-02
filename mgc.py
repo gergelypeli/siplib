@@ -33,8 +33,6 @@ class MediaLeg(Loggable):
     def refresh(self, params):
         if not self.is_created:
             self.is_created = True
-            #self.sid = self.mgc.generate_leg_sid(self.affinity)
-            #self.sid = self.mgc.select_gateway_sid(self.affinity)
             params = dict(params, id=self.oid, type=self.type)
             self.mgc.create_leg(self.sid, params, response_handler=lambda x, y: None, request_handler=WeakMethod(self.process_request))  # TODO
             self.report_dirty()
@@ -186,7 +184,7 @@ class Controller(Loggable):
         
         self.request_handlers_by_id = {}
         #self.msgp = MsgpClient(metapoll, WeakMethod(self.process_request), WeakMethod(self.status_changed))
-        self.msgp = MsgpPeer(metapoll, None, WeakMethod(self.process_request))  #, WeakMethod(self.status_changed))
+        self.msgp = MsgpPeer(metapoll, None, WeakMethod(self.process_request), WeakMethod(self.status_changed))
         
         
     def set_oid(self, oid):
@@ -200,17 +198,14 @@ class Controller(Loggable):
     
     def manage_request_handler(self, id, request_handler):
         if request_handler:
-            self.logger.debug("Added request handler %s." % id)
+            self.logger.debug("Added thing request handler: %s." % id)
             self.request_handlers_by_id[id] = request_handler
         else:
             if self.request_handlers_by_id.pop(id):
-                self.logger.debug("Removed request handler %s." % id)
+                self.logger.debug("Removed thing request handler: %s." % id)
 
 
     def send_message(self, msgid, params, response_handler=None, request_handler=None):
-        if not msgid[1].isdigit() and not params.get('id'):
-            raise Exception("A request id is missing here...")
-            
         self.msgp.send(msgid, params, response_handler=response_handler)
         
         
@@ -257,6 +252,11 @@ class Controller(Loggable):
 
 
     def status_changed(self, sid, remote_addr):
+        if remote_addr:
+            self.logger.debug("MGW stream %s is now available at %s" % (sid, remote_addr))
+        else:
+            self.logger.error("MGW stream %s is now gone!" % sid)
+            
         self.mgw_sid = sid if remote_addr else None
 
 

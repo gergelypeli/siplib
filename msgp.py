@@ -9,6 +9,7 @@ import types
 from async_base import WeakMethod
 from async_net import TcpReconnector, TcpListener
 from util import Loggable, build_oid
+from format import Addr
 
 
 def generate_id():
@@ -34,10 +35,6 @@ class MessagePipe(Loggable):
         self.metapoll.register_writer(self.socket, None)
         
         
-    def get_remote_addr(self):
-        return self.socket.getpeername()
-
-
     def writable(self):
         """Called when the socket becomes writable."""
         
@@ -100,7 +97,7 @@ class MessagePipe(Loggable):
                 return
 
             if not recved:
-                self.logger.warning("Socket closed while receiving: %s" % e)
+                self.logger.warning("Socket closed while receiving!")
                 self.metapoll.register_reader(self.socket, None)
                 self.failed()
                 break
@@ -172,8 +169,11 @@ class TimedMessagePipe(MessagePipe):
     
     
     def acked(self, tseq):
+        #self.logger.debug("Got ack %s" % tseq)
+        
         for seq, item in list(self.outgoing_items_by_seq.items()):
             if seq <= tseq:
+                #self.logger.debug("Acked %s" % seq)
                 self.metapoll.unregister_timeout(item.ack_handle)
                 
                 if not item.response_handle:
@@ -181,6 +181,7 @@ class TimedMessagePipe(MessagePipe):
 
 
     def timed_out(self, seq):
+        self.logger.warning("Message %s timed out!" % seq)
         item = self.outgoing_items_by_seq.pop(seq)
         
         if item.response_handle:
@@ -208,22 +209,22 @@ class TimedMessagePipe(MessagePipe):
                     
             item = self.outgoing_items_by_seq.get(tseq)
             
-            if not item:
-                #if sseq:
-                #    logging.warning("Response ignored!")  # FIXME: use logger
-                return
-            
             if sseq:
                 self.pending_ack = sseq
                 
-                self.metapoll.unregister_timeout(item.response_handle)
-                self.outgoing_items_by_seq.pop(tseq)
-                item.response_handler(sseq, body)
+                if item:
+                    self.metapoll.unregister_timeout(item.response_handle)
+                    self.outgoing_items_by_seq.pop(tseq)
+                    #self.logger.debug("Invoking response handler")
+                    item.response_handler(sseq, body)
+                    #self.logger.debug("Response handler completed")
+                else:
+                    self.logger.warning("Response ignored: %s" % body)
                 
                 self.flush()
         else:
             if not sseq:
-                raise Exception("Non numeric source and target???")
+                raise Exception("Non-numeric source and target???")
         
             # Process, and ACK it if necessary
             self.pending_ack = sseq
@@ -264,9 +265,6 @@ class TimedMessagePipe(MessagePipe):
         if seq <= self.last_accepted_seq:
             raise Exception("Duplicate outgoing message seq!")
             
-        if not isinstance(target, str):
-            raise Exception("Pls, use string targets here!")
-            
         self.last_accepted_seq = seq
 
         ack_handle = self.metapoll.register_timeout(self.ack_timeout, WeakMethod(self.timed_out, seq))
@@ -278,7 +276,7 @@ class TimedMessagePipe(MessagePipe):
             response_handle = None
 
         self.outgoing_items_by_seq[seq] = self.Item(
-            target=target,
+            target=str(target),
             body=body,
             ack_handle=ack_handle,
             response_handle=response_handle,
@@ -294,6 +292,7 @@ class TimedMessagePipe(MessagePipe):
 
 
     def failed(self):
+        self.logger.error("Pipe failed!")
         self.error_handler()
 
 
@@ -363,13 +362,19 @@ class MsgpStream:
 
     def connect(self, pipe):
         self.pipe = pipe
+        
+        if pipe.last_accepted_seq > self.last_sent_seq:
+            self.last_sent_seq = pipe.last_accepted_seq
 
 
     def disconnect(self):
-        if self.pipe.last_received_seq > self.last_recved_seq:
-            self.last_recved_seq = self.pipe.last_received_seq
-            
+        pipe = self.pipe
         self.pipe = None
+
+        if pipe.last_received_seq > self.last_recved_seq:
+            self.last_recved_seq = pipe.last_received_seq
+        
+        return pipe
         
         
     def send(self, target, body, response_handler=None, response_timeout=None):
@@ -377,134 +382,120 @@ class MsgpStream:
         seq = self.last_sent_seq
         
         self.pipe.send(seq, target, body, response_handler, response_timeout)
+
+
+
+
+class Handshake(MsgpStream):
+    def __init__(self):
+        MsgpStream.__init__(self)
         
+        self.name = None
+        self.accepted_locally = None
+        self.accepted_remotely = None
+
         
         
         
 class MsgpDispatcher(Loggable):
-    class Handshake:
-        def __init__(self, pipe):
-            self.pipe = pipe
-            self.name = None
-            self.accepted_here = None
-            self.accepted_there = None
-            
-            
-    def __init__(self, metapoll, request_handler):
+    def __init__(self, metapoll, request_handler, status_handler):
         Loggable.__init__(self)
         
         self.metapoll = metapoll
         self.request_handler = request_handler
+        self.status_handler = status_handler
         
         self.streams_by_name = {}
-        self.handshakes_by_addr = {}
         self.local_id = generate_id()
         
         
     def add_unidentified_pipe(self, socket):
-        addr = socket.getpeername()
+        addr = Addr(*socket.getpeername())
         self.logger.debug("Adding handshake with %s" % (addr,))
         
         pipe = MsgpPipe(self.metapoll, socket)
         pipe.set_oid(build_oid(self.oid, "addr", str(addr)))
-        pipe.set_handlers(
-            WeakMethod(self.handshake_recved_challenge, addr),
-            WeakMethod(self.handshake_failed, addr)
-        )
+
+        request_handler = WeakMethod(self.handshake_recved, addr)
+        error_handler = WeakMethod(self.handshake_failed, addr)
+        pipe.set_handlers(request_handler, error_handler)
         
-        self.handshakes_by_addr[addr] = self.Handshake(pipe)
+        handshake = Handshake()
+        handshake.connect(pipe)
+        self.streams_by_name[addr] = handshake
         
-        self.handshake_need_challenge(addr)
+        msgid = (addr, "hello")
+        self.make_handshake(msgid)
         
         
-    def handshake_recved_challenge(self, target, source, body, addr):
+    def handshake_recved(self, target, source, body, addr):
         self.logger.debug("Received handshake request: %r, %r, %r" % (target, source, body))
-        
-        if source == 1 and target == "hello":
-            self.logger.debug("Performing step one: %s" % (body,))
-            self.handshake_need_response(addr, body)
+
+        if target == "hello":
+            msgid = (addr, source)
+            self.take_handshake(msgid, body)
         else:
             self.logger.error("Invalid handshake hello!")
 
 
-    def handshake_recved_response(self, source, body, addr):
-        # Receiving hello response with solution
-        h = self.handshakes_by_addr.get(addr)
-        name = body["name"]
+    def handshake_failed(self, addr):
+        self.logger.error("Handshake failed with: %s" % (addr,))
+        self.streams_by_name.pop(addr)
+        
+        
+    def handshake_check(self, addr):
+        h = self.streams_by_name.get(addr)
+        
+        if h.accepted_locally is None or h.accepted_remotely is None:
+            return
+
+        self.streams_by_name.pop(addr)
+
+        if not h.accepted_locally or not h.accepted_remotely:
+            self.logger.debug("Handshake ended with failure for %s" % (addr,))
+            return
+            
+        name = h.name
+        pipe = h.disconnect()
+        stream = self.streams_by_name.get(name)
+    
+        if not stream:
+            self.logger.debug("Creating new stream for %s" % name)
+            stream = MsgpStream()
+            self.streams_by_name[name] = stream
+
+            if self.status_handler:
+                self.status_handler(name, addr)
+        else:
+            self.logger.debug("Already having a stream for %s" % name)
+
+        request_handler = WeakMethod(self.request_wrapper, self.request_handler, name)
+        error_handler = WeakMethod(self.stream_failed, name)
+        pipe.set_handlers(request_handler, error_handler)
+        
+        pipe.set_oid(build_oid(self.oid, "name", name))  # Hah, pipe renamed here!
+        stream.connect(pipe)
+    
+
+    def handshake_completed_locally(self, msgid, ok, name=None):
+        addr, whatever = msgid
+        h = self.streams_by_name[addr]
+        h.accepted_locally = ok
         h.name = name
-        
-        self.handshake_need_conclusion(addr, body)
-        
-        
-    def handshake_recved_conclusion(self, source, body, addr):
-        # Receiving hello conclusion
-        h = self.handshakes_by_addr.get(addr)
-        ok = body["ok"]
-        h.accepted_there = ok
+
         self.handshake_check(addr)
         # TODO: report it somehow? Or just an error?
 
 
-    def handshake_send_challenge(self, addr, body):
-        # Sending hello request with challenge
-        h = self.handshakes_by_addr.get(addr)
-        w = WeakMethod(self.handshake_recved_response, addr)
-        h.pipe.send(1, "hello", body, w)
+    def handshake_completed_remotely(self, msgid, ok):
+        addr, whatever = msgid
+        h = self.streams_by_name[addr]
+        h.accepted_remotely = ok
 
-
-    def handshake_send_response(self, addr, body):
-        # Sending hello response with solution
-        h = self.handshakes_by_addr.get(addr)
-        w = WeakMethod(self.handshake_recved_conclusion, addr)
-        h.pipe.send(2, "1", body, w)
-
-
-    def handshake_send_conclusion(self, addr, ok):
-        # Sending hello conclusion
-        h = self.handshakes_by_addr.get(addr)
-        body = dict(ok=ok)
-        h.pipe.send(3, "2", body, None)
-        
-        h.accepted_here = ok
         self.handshake_check(addr)
-
-
-    def handshake_check(self, addr):
-        h = self.handshakes_by_addr.get(addr)
         
-        if h.accepted_here is None or h.accepted_there is None:
-            return
-
-        self.handshakes_by_addr.pop(addr)
-
-        if not h.accepted_here or not h.accepted_there:
-            self.logger.debug("Handshake ended with failure for %s" % (addr,))
-            return
-            
-        stream = self.streams_by_name.get(h.name)
     
-        if not stream:
-            self.logger.debug("Creating new stream for %s" % h.name)
-            stream = MsgpStream()
-            self.streams_by_name[h.name] = stream
-
-            #if self.status_handler:
-            #    self.status_handler(h.name, h.pipe.get_remote_addr())
-        else:
-            self.logger.debug("Already having a stream for %s" % h.name)
-
-        wrapped_request_handler = WeakMethod(self.request_wrapper, h.name)
-        wrapped_failure_handler = WeakMethod(self.request_wrapper, None, None, None, h.name)
-        h.pipe.set_handlers(wrapped_request_handler, wrapped_failure_handler)
-        stream.connect(h.pipe)
-    
-    
-    def handshake_failed(self, addr):
-        self.logger.error("Handshake failed???")
-        self.handshakes_by_addr.pop(addr)
-
-
-    def request_wrapper(self, target, source, body, name):
+    def request_wrapper(self, target, source, body, request_handler, name):
         if source is not None:
             self.logger.debug("Received request %s/%s" % (name, source))
         else:
@@ -512,7 +503,7 @@ class MsgpDispatcher(Loggable):
             # TODO: error handling here
         
         msgid = (name, source)
-        self.request_handler(target, msgid, body)
+        request_handler(target, msgid, body)
 
 
     def response_wrapper(self, source, body, response_handler, name):
@@ -535,26 +526,30 @@ class MsgpDispatcher(Loggable):
             wrapped_response_handler = WeakMethod(self.response_wrapper, response_handler, name) if response_handler else None
             stream.send(target, body, wrapped_response_handler, response_timeout)
         else:
-            raise Exception("No such stream!")
+            raise Exception("No such stream: %s" % name)
         
         
-    def handshake_need_challenge(self, addr):
+    def stream_failed(self, name):
+        self.logger.error("Stream failed with: %s" % (name,))
+        self.streams_by_name.pop(name)
+        
+        if self.status_handler:
+            self.status_handler(name, None)
+        
+        
+    def make_handshake(self, msgid):
         raise NotImplementedError()
 
 
-    def handshake_need_response(self, addr, body):
+    def take_handshake(self, target, msgid, body):
         raise NotImplementedError()
 
-
-    def handshake_need_conclusion(self, addr, body):
-        raise NotImplementedError()
-        
         
         
         
 class MsgpPeer(MsgpDispatcher):
-    def __init__(self, metapoll, local_addr, request_handler):
-        MsgpDispatcher.__init__(self, metapoll, request_handler)
+    def __init__(self, metapoll, local_addr, request_handler, status_handler):
+        MsgpDispatcher.__init__(self, metapoll, request_handler, status_handler)
         
         self.name = generate_id()
         
@@ -580,13 +575,11 @@ class MsgpPeer(MsgpDispatcher):
         self.add_unidentified_pipe(socket)
 
 
-    def handshake_need_challenge(self, addr):
-        self.handshake_send_challenge(addr, None)
+    def make_handshake(self, msgid):
+        self.send(msgid, dict(name=self.name))
 
 
-    def handshake_need_response(self, addr, body):
-        self.handshake_send_response(addr, dict(name=self.name))
-
-
-    def handshake_need_conclusion(self, addr, body):
-        self.handshake_send_conclusion(addr, True)
+    def take_handshake(self, msgid, body):
+        name = body["name"]
+        self.handshake_completed_locally(msgid, True, name)
+        self.handshake_completed_remotely(msgid, True)

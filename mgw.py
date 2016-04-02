@@ -371,7 +371,7 @@ class MediaGateway(Loggable):
         self.contexts_by_label = {}
         self.legs_by_label = {}
         #self.msgp = MsgpServer(metapoll, WeakMethod(self.process_request), None, mgw_addr)
-        self.msgp = MsgpPeer(metapoll, mgw_addr, WeakMethod(self.process_request))
+        self.msgp = MsgpPeer(metapoll, mgw_addr, WeakMethod(self.process_request), None)
 
 
     def set_oid(self, oid):
