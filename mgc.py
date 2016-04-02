@@ -1,7 +1,7 @@
 from __future__ import unicode_literals, print_function
 
 from async_base import WeakMethod, Weak
-from msgp import MsgpClient
+from msgp import MsgpPeer  # MsgpClient
 from util import vacuum, build_oid, Loggable
 
         
@@ -185,7 +185,8 @@ class Controller(Loggable):
         self.mgw_sid = None  # FIXME: Msgp can handle multiple connections already!
         
         self.request_handlers_by_id = {}
-        self.msgp = MsgpClient(metapoll, WeakMethod(self.process_request), WeakMethod(self.status_changed))
+        #self.msgp = MsgpClient(metapoll, WeakMethod(self.process_request), WeakMethod(self.status_changed))
+        self.msgp = MsgpPeer(metapoll, None, WeakMethod(self.process_request))  #, WeakMethod(self.status_changed))
         
         
     def set_oid(self, oid):
@@ -194,7 +195,7 @@ class Controller(Loggable):
 
 
     def add_mgw_addr(self, addr):
-        self.msgp.add_mgw_addr(addr)
+        self.msgp.add_remote_addr(addr)
     
     
     def manage_request_handler(self, id, request_handler):

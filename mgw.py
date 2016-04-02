@@ -2,7 +2,7 @@ import socket
 import weakref
 
 from rtp import read_wav, write_wav, RtpPlayer, RtpRecorder, RtpBuilder, RtpParser, DtmfExtractor, DtmfInjector, Format
-from msgp import MsgpServer
+from msgp import MsgpPeer  # MsgpServer
 from async_base import WeakMethod, Weak
 from util import Loggable, build_oid
 
@@ -370,7 +370,8 @@ class MediaGateway(Loggable):
         self.metapoll = metapoll
         self.contexts_by_label = {}
         self.legs_by_label = {}
-        self.msgp = MsgpServer(metapoll, WeakMethod(self.process_request), None, mgw_addr)
+        #self.msgp = MsgpServer(metapoll, WeakMethod(self.process_request), None, mgw_addr)
+        self.msgp = MsgpPeer(metapoll, mgw_addr, WeakMethod(self.process_request))
 
 
     def set_oid(self, oid):
