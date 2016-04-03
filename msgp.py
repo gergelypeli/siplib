@@ -406,6 +406,7 @@ class MsgpDispatcher(Loggable):
         self.status_handler = status_handler
         
         self.streams_by_name = {}
+        self.handshakes_by_addr = {}
         self.local_id = generate_id()
         
         
@@ -422,7 +423,7 @@ class MsgpDispatcher(Loggable):
         
         handshake = Handshake()
         handshake.connect(pipe)
-        self.streams_by_name[addr] = handshake
+        self.handshakes_by_addr[addr] = handshake
         
         msgid = (addr, "hello")
         self.make_handshake(msgid)
@@ -440,16 +441,16 @@ class MsgpDispatcher(Loggable):
 
     def handshake_failed(self, addr):
         self.logger.error("Handshake failed with: %s" % (addr,))
-        self.streams_by_name.pop(addr)
+        self.handshakes_by_addr.pop(addr)
         
         
     def handshake_check(self, addr):
-        h = self.streams_by_name.get(addr)
+        h = self.handshakes_by_addr.get(addr)
         
         if h.accepted_locally is None or h.accepted_remotely is None:
             return
 
-        self.streams_by_name.pop(addr)
+        self.handshakes_by_addr.pop(addr)
 
         if not h.accepted_locally or not h.accepted_remotely:
             self.logger.debug("Handshake ended with failure for %s" % (addr,))
@@ -477,22 +478,42 @@ class MsgpDispatcher(Loggable):
         stream.connect(pipe)
     
 
-    def handshake_completed_locally(self, msgid, ok, name=None):
-        addr, whatever = msgid
-        h = self.streams_by_name[addr]
+    def done_handshake(self, msgid, ok, name=None):
+        addr, target = msgid
+        h = self.handshakes_by_addr[addr]
         h.accepted_locally = ok
         h.name = name
+
+        body = dict(ok=ok)
+        h.send(target, body)
 
         self.handshake_check(addr)
         # TODO: report it somehow? Or just an error?
 
 
-    def handshake_completed_remotely(self, msgid, ok):
-        addr, whatever = msgid
-        h = self.streams_by_name[addr]
+    def conclude_handshake(self, source, body, addr):
+        h = self.handshakes_by_addr[addr]
+        ok = body["ok"]
         h.accepted_remotely = ok
 
         self.handshake_check(addr)
+
+
+    def send_handshake(self, msgid, body, response_handler=None, response_timeout=None):
+        self.logger.debug("Sending handshake message %s/%s" % msgid)
+        addr, target = msgid
+        
+        h = self.handshakes_by_addr.get(addr)
+        
+        if h:
+            if response_handler:
+                r = WeakMethod(self.response_wrapper, response_handler, addr)
+            else:
+                r = WeakMethod(self.conclude_handshake, addr)
+                
+            h.send(target, body, r, response_timeout)
+        else:
+            raise Exception("No such handshake: %s" % (addr,))
         
     
     def request_wrapper(self, target, source, body, request_handler, name):
@@ -523,10 +544,10 @@ class MsgpDispatcher(Loggable):
         stream = self.streams_by_name.get(name)
         
         if stream:
-            wrapped_response_handler = WeakMethod(self.response_wrapper, response_handler, name) if response_handler else None
-            stream.send(target, body, wrapped_response_handler, response_timeout)
+            r = WeakMethod(self.response_wrapper, response_handler, name) if response_handler else None
+            stream.send(target, body, r, response_timeout)
         else:
-            raise Exception("No such stream: %s" % name)
+            raise Exception("No such stream: %s" % (name,))
         
         
     def stream_failed(self, name):
@@ -576,10 +597,9 @@ class MsgpPeer(MsgpDispatcher):
 
 
     def make_handshake(self, msgid):
-        self.send(msgid, dict(name=self.name))
+        self.send_handshake(msgid, dict(name=self.name))
 
 
     def take_handshake(self, msgid, body):
         name = body["name"]
-        self.handshake_completed_locally(msgid, True, name)
-        self.handshake_completed_remotely(msgid, True)
+        self.done_handshake(msgid, True, name)
