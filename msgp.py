@@ -180,16 +180,17 @@ class TimedMessagePipe(MessagePipe):
                     self.outgoing_items_by_seq.pop(seq)
 
 
-    def timed_out(self, seq):
-        self.logger.warning("Message %s timed out!" % seq)
+    def timed_out(self, seq, is_unacked):
+        self.logger.warning("Message %s %s timed out!" % ("ACK" if is_unacked else "response", seq))
         item = self.outgoing_items_by_seq.pop(seq)
         
         if item.response_handle:
-            self.metapoll.unregister_timeout(item.ack_handle)
-            self.metapoll.unregister_timeout(item.response_handle)
+            other_handle = item.response_handle if is_unacked else item.ack_handle
+            self.metapoll.unregister_timeout(other_handle)
             item.response_handler(None, None)
             
-        self.error_handler()
+        if is_unacked:
+            self.error_handler()
 
 
     def recved(self, message):
@@ -267,11 +268,11 @@ class TimedMessagePipe(MessagePipe):
             
         self.last_accepted_seq = seq
 
-        ack_handle = self.metapoll.register_timeout(self.ack_timeout, WeakMethod(self.timed_out, seq))
+        ack_handle = self.metapoll.register_timeout(self.ack_timeout, WeakMethod(self.timed_out, seq, True))
 
         if response_handler:
             rt = response_timeout or self.response_timeout
-            response_handle = self.metapoll.register_timeout(rt, WeakMethod(self.timed_out, seq))
+            response_handle = self.metapoll.register_timeout(rt, WeakMethod(self.timed_out, seq, False))
         else:
             response_handle = None
 
