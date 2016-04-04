@@ -80,6 +80,8 @@ class MessagePipe(Loggable):
 
     def readable(self):
         """Called when the socket becomes readable."""
+        # Failure should only be reported after processing all available messages
+        has_failed = False
         
         # Must read all available data
         while True:
@@ -92,14 +94,14 @@ class MessagePipe(Loggable):
                     break
 
                 self.logger.error("Socket error while receiving: %s" % e)
-                self.metapoll.register_reader(self.socket, None)
-                self.failed()
+                has_failed = True
                 return
 
             if not recved:
-                self.logger.warning("Socket closed while receiving!")
                 self.metapoll.register_reader(self.socket, None)
-                self.failed()
+                
+                self.logger.warning("Socket closed while receiving!")
+                has_failed = True
                 break
 
             self.incoming_buffer += recved
@@ -120,6 +122,10 @@ class MessagePipe(Loggable):
                     continue
                     
             break
+
+        if has_failed:
+            self.metapoll.register_reader(self.socket, None)
+            self.failed()
             
 
     def try_sending(self, message):
