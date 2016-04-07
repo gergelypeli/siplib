@@ -162,6 +162,10 @@ class TimedMessagePipe(MessagePipe):
         
         self.ack_timeout = datetime.timedelta(seconds=1)  # TODO
         self.response_timeout = datetime.timedelta(seconds=2)
+        self.keepalive_interval = datetime.timedelta(seconds=10)  # TODO
+        
+        self.keepalive_probing = False
+        self.keepalive_handle = None
 
 
     def __del__(self):
@@ -172,6 +176,8 @@ class TimedMessagePipe(MessagePipe):
     def set_handlers(self, request_handler, error_handler):
         self.request_handler = request_handler
         self.error_handler = error_handler
+        
+        self.reset_keepalive(False)
     
     
     def acked(self, tseq):
@@ -199,10 +205,44 @@ class TimedMessagePipe(MessagePipe):
             self.error_handler()
 
 
+    def emit_keepalive(self):
+        message = ("keep", "alive", None)
+        self.try_sending(message)
+
+
+    def reset_keepalive(self, is_probing):
+        self.metapoll.unregister_timeout(self.keepalive_handle)
+        
+        interval = self.ack_timeout if is_probing else self.keepalive_interval
+        self.keepalive_handle = self.metapoll.register_timeout(interval, WeakMethod(self.keepalive))
+        self.keepalive_probing = is_probing
+
+
+    def keepalive(self):
+        if self.keepalive_probing:
+            # Timed out
+            self.logger.warning("Keepalive timed out!")
+            self.failed()
+        else:
+            self.keepalive_probing = True
+            self.emit_keepalive()
+            self.reset_keepalive(True)
+
+
     def recved(self, message):
         source, target, body = message
         sseq = int(source) if source.isdigit() else None  # Can't be 0
         tseq = int(target) if target.isdigit() else None  # Can't be 0
+        
+        is_keepalive = (source == "keep" and target == "alive")
+        
+        if is_keepalive and not self.keepalive_probing:
+            self.emit_keepalive()
+
+        self.reset_keepalive(False)
+
+        if is_keepalive:
+            return
         
         if sseq:
             if sseq <= self.last_received_seq:
@@ -243,22 +283,30 @@ class TimedMessagePipe(MessagePipe):
         
     def flush(self):
         for seq, item in self.outgoing_items_by_seq.items():
-            if item.is_piped:
+            if item.ack_handle:
                 continue
 
-            message = (seq, item.target, item.body)
-            item.is_piped = self.try_sending(message)
             tseq = int(item.target) if item.target.isdigit() else None  # Can't be 0
-            
-            if tseq and self.pending_ack and self.pending_ack <= tseq:
+
+            if self.pending_ack:
+                if not tseq or tseq < self.pending_ack:
+                    break  # Must send the pending ACK first
+                    
                 # implicit ACK, clear even if the response is not yet piped
                 self.pending_ack = None
+                
+            message = (seq, item.target, item.body)
+            is_piped = self.try_sending(message)
+            
+            if is_piped:
+                item.ack_handle = self.metapoll.register_timeout(self.ack_timeout, WeakMethod(self.timed_out, seq, True))
             
             return
             
         if self.pending_ack:
             # explicit ACK
             # Note: maybe ACK-s should have precedence over outgoing requests
+            # TODO: this may be delayed for a long time if a message is big!
             
             message = ("ack", self.pending_ack, None)
             is_piped = self.try_sending(message)
@@ -267,14 +315,14 @@ class TimedMessagePipe(MessagePipe):
                 # clear only if piped
                 self.pending_ack = None
                 
+            return
+                
         
     def send(self, seq, target, body, response_handler=None, response_timeout=None):
         if seq <= self.last_accepted_seq:
             raise Exception("Duplicate outgoing message seq!")
             
         self.last_accepted_seq = seq
-
-        ack_handle = self.metapoll.register_timeout(self.ack_timeout, WeakMethod(self.timed_out, seq, True))
 
         if response_handler:
             rt = response_timeout or self.response_timeout
@@ -285,10 +333,9 @@ class TimedMessagePipe(MessagePipe):
         self.outgoing_items_by_seq[seq] = self.Item(
             target=str(target),
             body=body,
-            ack_handle=ack_handle,
+            ack_handle=None,
             response_handle=response_handle,
-            response_handler=response_handler,
-            is_piped=False
+            response_handler=response_handler
         )
 
         self.flush()
