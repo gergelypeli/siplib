@@ -118,6 +118,7 @@ class MessagePipe(Loggable):
                 
                 if message:
                     self.incoming_header = None
+                    #self.logger.debug("Recved: %s" % (message,))
                     self.recved(message)
                     continue
                     
@@ -134,6 +135,7 @@ class MessagePipe(Loggable):
         if self.outgoing_buffer:
             return False
             
+        #self.logger.debug("Sent: %s" % (message,))
         self.outgoing_buffer = self.print_message(message)
         if not isinstance(self.outgoing_buffer, (bytes, bytearray)):
             raise Exception("Printed message is not bytes!")
@@ -146,35 +148,33 @@ class MessagePipe(Loggable):
 
 
 class TimedMessagePipe(MessagePipe):
-    class Item(types.SimpleNamespace): pass
-    #Item = collections.namedtuple('Item', "target body ack_handle response_handle response_handler")):
-    
     def __init__(self, metapoll, socket):
         MessagePipe.__init__(self, metapoll, socket)
         
         self.request_handler = None
+        self.response_handler = None
+        self.ack_handler = None
+        self.flush_handler = None
         self.error_handler = None
         
-        self.outgoing_items_by_seq = collections.OrderedDict()
         self.pending_ack = None
+        self.ack_handles_by_seq = {}
+        
         self.last_accepted_seq = 0  # For validation
         self.last_received_seq = 0  # For the owner
         
         self.ack_timeout = datetime.timedelta(seconds=1)  # TODO
-        self.response_timeout = datetime.timedelta(seconds=2)
         self.keepalive_interval = datetime.timedelta(seconds=10)  # TODO
         
         self.keepalive_probing = False
         self.keepalive_handle = None
 
 
-    def __del__(self):
-        for seq in list(self.outgoing_items_by_seq.keys()):
-            self.timed_out(seq)
-    
-    
-    def set_handlers(self, request_handler, error_handler):
+    def set_handlers(self, request_handler, response_handler, ack_handler, flush_handler, error_handler):
         self.request_handler = request_handler
+        self.response_handler = response_handler
+        self.ack_handler = ack_handler
+        self.flush_handler = flush_handler
         self.error_handler = error_handler
         
         self.reset_keepalive(False)
@@ -183,26 +183,19 @@ class TimedMessagePipe(MessagePipe):
     def acked(self, tseq):
         #self.logger.debug("Got ack %s" % tseq)
         
-        for seq, item in list(self.outgoing_items_by_seq.items()):
+        for seq, handle in list(self.ack_handles_by_seq.items()):
             if seq <= tseq:
                 #self.logger.debug("Acked %s" % seq)
-                self.metapoll.unregister_timeout(item.ack_handle)
+                self.metapoll.unregister_timeout(handle)
+                self.ack_handles_by_seq.pop(seq)
                 
-                if not item.response_handle:
-                    self.outgoing_items_by_seq.pop(seq)
+                self.ack_handler(seq)
 
 
-    def timed_out(self, seq, is_unacked):
-        self.logger.warning("Message %s %s timed out!" % ("ACK" if is_unacked else "response", seq))
-        item = self.outgoing_items_by_seq.pop(seq)
-        
-        if item.response_handle:
-            other_handle = item.response_handle if is_unacked else item.ack_handle
-            self.metapoll.unregister_timeout(other_handle)
-            item.response_handler(None, None)
-            
-        if is_unacked:
-            self.error_handler()
+    def ack_timed_out(self, seq):
+        self.logger.warning("Message ACK %s timed out!" % seq)
+        self.ack_handles_by_seq.pop(seq)
+        self.error_handler()
 
 
     def emit_keepalive(self):
@@ -254,95 +247,64 @@ class TimedMessagePipe(MessagePipe):
         if tseq:
             self.acked(tseq)
                     
-            item = self.outgoing_items_by_seq.get(tseq)
+            #item = self.outgoing_items_by_seq.get(tseq)
             
             if sseq:
                 self.pending_ack = sseq
-                
-                if item:
-                    self.metapoll.unregister_timeout(item.response_handle)
-                    self.outgoing_items_by_seq.pop(tseq)
-                    #self.logger.debug("Invoking response handler")
-                    item.response_handler(sseq, body)
-                    #self.logger.debug("Response handler completed")
-                else:
-                    self.logger.warning("Response ignored: %s" % body)
-                
-                self.flush()
+                self.response_handler(tseq, sseq, body)
+                self.try_acking(None)
         else:
             if not sseq:
                 raise Exception("Non-numeric source and target???")
         
             # Process, and ACK it if necessary
             self.pending_ack = sseq
-            
             self.request_handler(target, sseq, body)
-            
-            self.flush()
-            
-        
-    def flush(self):
-        for seq, item in self.outgoing_items_by_seq.items():
-            if item.ack_handle:
-                continue
+            self.try_acking(None)
 
-            tseq = int(item.target) if item.target.isdigit() else None  # Can't be 0
 
-            if self.pending_ack:
-                if not tseq or tseq < self.pending_ack:
-                    break  # Must send the pending ACK first
-                    
-                # implicit ACK, clear even if the response is not yet piped
-                self.pending_ack = None
-                
-            message = (seq, item.target, item.body)
-            is_piped = self.try_sending(message)
-            
-            if is_piped:
-                item.ack_handle = self.metapoll.register_timeout(self.ack_timeout, WeakMethod(self.timed_out, seq, True))
-            
-            return
-            
+    def try_acking(self, tseq):
         if self.pending_ack:
-            # explicit ACK
-            # Note: maybe ACK-s should have precedence over outgoing requests
-            # TODO: this may be delayed for a long time if a message is big!
+            if not tseq or tseq < self.pending_ack:
+                # Must send the pending ACK first
+                message = ("ack", self.pending_ack, None)
+                is_piped = MessagePipe.try_sending(self, message)
             
-            message = ("ack", self.pending_ack, None)
-            is_piped = self.try_sending(message)
+                if is_piped:
+                    # clear only if piped
+                    self.pending_ack = None
+                    
+                return True
+                
+            # implicit ACK, clear even if the response is not yet piped
+            self.pending_ack = None
             
-            if is_piped:
-                # clear only if piped
-                self.pending_ack = None
-                
-            return
-                
+        return False
+            
         
-    def send(self, seq, target, body, response_handler=None, response_timeout=None):
-        if seq <= self.last_accepted_seq:
-            raise Exception("Duplicate outgoing message seq!")
-            
-        self.last_accepted_seq = seq
+    def try_sending(self, message):
+        source, target, body = message
+        
+        sseq = int(source) if source.isdigit() else None  # Can't be 0
+        tseq = int(target) if target.isdigit() else None  # Can't be 0
 
-        if response_handler:
-            rt = response_timeout or self.response_timeout
-            response_handle = self.metapoll.register_timeout(rt, WeakMethod(self.timed_out, seq, False))
-        else:
-            response_handle = None
+        is_piped_or_pending = self.try_acking(tseq)
+        if is_piped_or_pending:
+            return False
+        
+        is_piped = MessagePipe.try_sending(self, message)
+        if sseq and is_piped:
+            self.ack_handles_by_seq[sseq] = self.metapoll.register_timeout(self.ack_timeout, WeakMethod(self.ack_timed_out, sseq))
 
-        self.outgoing_items_by_seq[seq] = self.Item(
-            target=str(target),
-            body=body,
-            ack_handle=None,
-            response_handle=response_handle,
-            response_handler=response_handler
-        )
-
-        self.flush()
-
-
+        return is_piped
+        
+        
     def flushed(self):
-        self.flush()
+        is_piped_or_pending = self.try_acking(None)
+        if is_piped_or_pending:
+            return
+            
+        self.flush_handler()
 
 
     def failed(self):
@@ -407,47 +369,175 @@ class MsgpPipe(SimpleJsonPipe, TimedMessagePipe):
 
 # TODO: now that we no longer check for duplicate incoming messages, the peers
 # must agree not to send them again by exchanging the seq-s during the handshake!
-class MsgpStream:
-    def __init__(self):
+class MsgpStream(Loggable):
+    #Item = collections.namedtuple("Item", [ "target", "body", "response_handle", "response_handler" ])
+    class Item(types.SimpleNamespace): pass
+    
+    def __init__(self, metapoll, request_handler, error_handler):
+        self.metapoll = metapoll
+        self.request_handler = request_handler
+        self.error_handler = error_handler
+        
         self.pipe = None
         self.last_sent_seq = 0
         self.last_recved_seq = 0
+        self.outgoing_items_by_seq = collections.OrderedDict()
+
+        self.response_timeout = datetime.timedelta(seconds=5)
+
+
+    def __del__(self):
+        for item in self.outgoing_items_by_seq.values():
+            if item.response_handle:
+                self.metapoll.unregister_timeout(item.response_handle)
+                item.response_handler(None, None)
 
 
     def connect(self, pipe):
+        if self.pipe:
+            if self.pipe.last_received_seq > self.last_recved_seq:
+                self.last_recved_seq = self.pipe.last_received_seq
+
         self.pipe = pipe
         
-        if pipe.last_accepted_seq > self.last_sent_seq:
-            self.last_sent_seq = pipe.last_accepted_seq
+        if self.pipe.last_accepted_seq > self.last_sent_seq:
+            self.last_sent_seq = self.pipe.last_accepted_seq
 
+        pipe.set_handlers(
+            WeakMethod(self.pipe_requested),
+            WeakMethod(self.pipe_responded),
+            WeakMethod(self.pipe_acked),
+            WeakMethod(self.pipe_flushed),
+            WeakMethod(self.pipe_failed)
+        )
 
-    def disconnect(self):
-        pipe = self.pipe
-        self.pipe = None
-
-        if pipe.last_received_seq > self.last_recved_seq:
-            self.last_recved_seq = pipe.last_received_seq
-        
-        return pipe
-        
         
     def send(self, target, body, response_handler=None, response_timeout=None):
         self.last_sent_seq += 1
         seq = self.last_sent_seq
-        
-        self.pipe.send(seq, target, body, response_handler, response_timeout)
 
+        if response_handler:
+            rt = response_timeout or self.response_timeout
+            response_handle = self.metapoll.register_timeout(rt, WeakMethod(self.response_timed_out, seq))
+        else:
+            response_handle = None
+
+        #self.logger.debug("Queueing message %s" % seq)
+        self.outgoing_items_by_seq[seq] = self.Item(
+            target=target,
+            body=body,
+            response_handle=response_handle,
+            response_handler=response_handler,
+            is_acked=False,
+            is_piped=False
+        )
+        
+        self.flush()
+
+
+    def flush(self):
+        for seq, item in self.outgoing_items_by_seq.items():
+            if item.is_piped:
+                continue
+
+            message = (str(seq), str(item.target), item.body)
+            item.is_piped = self.pipe.try_sending(message)
+            
+            return
+
+
+    def pop(self, seq):
+        #self.logger.debug("Popping message %s" % seq)
+        self.outgoing_items_by_seq.pop(seq, None)
+        
+        if not self.outgoing_items_by_seq:
+            self.flushed()
+            
+
+    def response_timed_out(self, seq):
+        self.logger.warning("Response timed out: %s" % seq)
+        item = self.outgoing_items_by_seq.get(seq)
+        item.response_handler(None, None)
+        self.pop(seq)
+    
+    
+    def pipe_requested(self, target, seq, body):
+        self.request_handler(target, seq, body)
+        
+            
+    def pipe_responded(self, tseq, seq, body):
+        item = self.outgoing_items_by_seq.get(tseq)
+        
+        if item:
+            self.metapoll.unregister_timeout(item.response_handle)
+            item.response_handler(seq, body)
+            self.pop(tseq)
+        else:
+            self.logger.debug("Response ignored!")
+    
+    
+    def pipe_acked(self, tseq):
+        item = self.outgoing_items_by_seq.get(tseq)
+        
+        if item:
+            if item.response_handler:
+                item.is_acked = True
+            else:
+                self.pop(tseq)
+        else:
+            self.logger.debug("Unknown message ACK-ed: %s" % tseq)
+    
+            
+    def pipe_flushed(self):
+        self.flush()
+            
+            
+    def pipe_failed(self):
+        self.error_handler()
+
+
+    def flushed(self):
+        pass
 
 
 
 class Handshake(MsgpStream):
-    def __init__(self):
-        MsgpStream.__init__(self)
+    def __init__(self, m, r, e, c):
+        MsgpStream.__init__(self, m, r, e)
+        
+        self.complete_handler = c
         
         self.name = None
         self.accepted_locally = None
         self.accepted_remotely = None
 
+
+    def disconnect(self):
+        if self.outgoing_items_by_seq:
+            raise Exception("Not now!")
+            
+        return self.pipe
+
+
+    def check_complete(self):
+        if not self.outgoing_items_by_seq and self.accepted_locally is not None and self.accepted_remotely is not None:
+            self.complete_handler()
+        
+        
+    def accept_locally(self, ok, name):
+        self.accepted_locally = ok
+        self.name = name
+        self.check_complete()
+        
+        
+    def accept_remotely(self, ok):
+        self.accepted_remotely = ok
+        self.check_complete()
+        
+        
+    def flushed(self):
+        self.check_complete()
+        
         
         
         
@@ -469,13 +559,15 @@ class MsgpDispatcher(Loggable):
         self.logger.debug("Adding handshake with %s" % (addr,))
         
         pipe = MsgpPipe(self.metapoll, socket)
-        pipe.set_oid(build_oid(self.oid, "addr", str(addr)))
+        pipe.set_oid(build_oid(self.oid, "pipe", str(addr)))
 
         request_handler = WeakMethod(self.handshake_recved, addr)
         error_handler = WeakMethod(self.handshake_failed, addr)
-        pipe.set_handlers(request_handler, error_handler)
+        complete_handler = WeakMethod(self.handshake_completed, addr)
+        #pipe.set_handlers(request_handler, error_handler)
         
-        handshake = Handshake()
+        handshake = Handshake(self.metapoll, request_handler, error_handler, complete_handler)
+        handshake.set_oid(build_oid(self.oid, "handshake", str(addr)))
         handshake.connect(pipe)
         self.handshakes_by_addr[addr] = handshake
         
@@ -498,17 +590,12 @@ class MsgpDispatcher(Loggable):
         self.handshakes_by_addr.pop(addr)
         
         
-    def handshake_check(self, addr):
-        h = self.handshakes_by_addr.get(addr)
-        
-        if h.accepted_locally is None or h.accepted_remotely is None:
-            return
-
-        self.handshakes_by_addr.pop(addr)
+    def handshake_completed(self, addr):
+        h = self.handshakes_by_addr.pop(addr)
 
         if not h.accepted_locally or not h.accepted_remotely:
             self.logger.debug("Handshake ended with failure for %s" % (addr,))
-            return
+            return  # TODO: report?
             
         name = h.name
         pipe = h.disconnect()
@@ -516,7 +603,10 @@ class MsgpDispatcher(Loggable):
     
         if not stream:
             self.logger.debug("Creating new stream for %s" % name)
-            stream = MsgpStream()
+            request_handler = WeakMethod(self.request_wrapper, self.request_handler, name)
+            error_handler = WeakMethod(self.stream_failed, name)
+            stream = MsgpStream(self.metapoll, request_handler, error_handler)
+            stream.set_oid(build_oid(self.oid, "stream", name))
             self.streams_by_name[name] = stream
 
             if self.status_handler:
@@ -524,33 +614,29 @@ class MsgpDispatcher(Loggable):
         else:
             self.logger.debug("Already having a stream for %s" % name)
 
-        request_handler = WeakMethod(self.request_wrapper, self.request_handler, name)
-        error_handler = WeakMethod(self.stream_failed, name)
-        pipe.set_handlers(request_handler, error_handler)
-        
-        pipe.set_oid(build_oid(self.oid, "name", name))  # Hah, pipe renamed here!
+        #pipe.set_handlers(request_handler, error_handler)
+        pipe.set_oid(build_oid(self.oid, "pipe", name))  # Hah, pipe renamed here!
         stream.connect(pipe)
     
 
     def done_handshake(self, msgid, ok, name=None):
         addr, target = msgid
         h = self.handshakes_by_addr[addr]
-        h.accepted_locally = ok
-        h.name = name
 
         body = dict(ok=ok)
         h.send(target, body)
 
-        self.handshake_check(addr)
+        #self.logger.debug("XXX accept locally: %s" % ok)
+        h.accept_locally(ok, name)
         # TODO: report it somehow? Or just an error?
 
 
     def conclude_handshake(self, source, body, addr):
         h = self.handshakes_by_addr[addr]
         ok = body["ok"]
-        h.accepted_remotely = ok
-
-        self.handshake_check(addr)
+        
+        #self.logger.debug("XXX accept remotely: %s" % ok)
+        h.accept_remotely(ok)
 
 
     def send_handshake(self, msgid, body, response_handler=None, response_timeout=None):
