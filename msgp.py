@@ -726,7 +726,8 @@ class MsgpPeer(MsgpDispatcher):
     def __init__(self, metapoll, local_addr, request_handler, status_handler):
         MsgpDispatcher.__init__(self, metapoll, request_handler, status_handler)
         
-        self.name = generate_id()
+        self.name = "noname"
+        self.session_id = generate_id()
         
         if local_addr:
             self.listener = TcpListener(metapoll, local_addr, WeakMethod(self.accepted))
@@ -755,7 +756,8 @@ class MsgpPeer(MsgpDispatcher):
 
 
     def make_handshake(self, msgid):
-        self.send_handshake(msgid, dict(name=self.name))
+        name = "%s-%s" % (self.name, self.session_id)
+        self.send_handshake(msgid, dict(name=name))
 
 
     def take_handshake(self, msgid, body):
