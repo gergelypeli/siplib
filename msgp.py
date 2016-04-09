@@ -35,23 +35,27 @@ class MessagePipe(Loggable):
         self.metapoll.register_writer(self.socket, None)
         
         
+    def write(self, data):
+        try:
+            sent = self.socket.send(data)
+        except IOError as e:
+            self.logger.error("Socket error while sending: %s" % e)
+            self.failed()
+            return None
+        else:
+            return data[sent:]
+    
+        
     def writable(self):
         """Called when the socket becomes writable."""
         
-        try:
-            sent = self.socket.send(self.outgoing_buffer)
-        except IOError as e:
-            self.logger.error("Socket error while sending: %s" % e)
-            self.metapoll.register_writer(self.socket, None)
-            
-            self.failed()
-            return
-
-        self.outgoing_buffer = self.outgoing_buffer[sent:]
-
+        self.outgoing_buffer = self.write(self.outgoing_buffer)
+        
         if not self.outgoing_buffer:
             self.metapoll.register_writer(self.socket, None)
-            self.flushed()
+            
+            if self.outgoing_buffer is not None:
+                self.flushed()
             
             
     def parse_header(self, buffer):
@@ -133,16 +137,20 @@ class MessagePipe(Loggable):
         """Send a Message tuple to the peer."""
         
         if self.outgoing_buffer:
-            return False
+            return False  # we will report flushed eventually
             
         #self.logger.debug("Sent: %s" % (message,))
-        self.outgoing_buffer = self.print_message(message)
-        if not isinstance(self.outgoing_buffer, (bytes, bytearray)):
+        data = self.print_message(message)
+        if not isinstance(data, (bytes, bytearray)):
             raise Exception("Printed message is not bytes!")
+            
+        rest = self.write(data)
         
-        self.metapoll.register_writer(self.socket, WeakMethod(self.writable))
+        if rest:
+            self.outgoing_buffer = rest
+            self.metapoll.register_writer(self.socket, WeakMethod(self.writable))
         
-        return True
+        return True  # message sending is in progress
 
 
 
@@ -200,7 +208,7 @@ class TimedMessagePipe(MessagePipe):
 
     def emit_keepalive(self):
         message = ("keep", "alive", None)
-        self.try_sending(message)
+        self.try_sending(message)  # it's ok if not piped, then we have traffic
 
 
     def reset_keepalive(self, is_probing):
@@ -264,6 +272,8 @@ class TimedMessagePipe(MessagePipe):
 
 
     def try_acking(self, tseq):
+        # Returns True if no ACK needed, or it went out successfully, False if stuck
+        
         if self.pending_ack:
             if not tseq or tseq < self.pending_ack:
                 # Must send the pending ACK first
@@ -274,12 +284,12 @@ class TimedMessagePipe(MessagePipe):
                     # clear only if piped
                     self.pending_ack = None
                     
-                return True
+                return is_piped
                 
             # implicit ACK, clear even if the response is not yet piped
             self.pending_ack = None
             
-        return False
+        return True  # nothing to pipe, consider it done
             
         
     def try_sending(self, message):
@@ -288,9 +298,11 @@ class TimedMessagePipe(MessagePipe):
         sseq = int(source) if source.isdigit() else None  # Can't be 0
         tseq = int(target) if target.isdigit() else None  # Can't be 0
 
-        is_piped_or_pending = self.try_acking(tseq)
-        if is_piped_or_pending:
-            return False
+        # This makes sure if a response handler sends a message, the pending
+        # ack goes out first
+        is_piped = self.try_acking(tseq)
+        if not is_piped:
+            return False  # even our ack is stuck, can't send message, too
         
         is_piped = MessagePipe.try_sending(self, message)
         if sseq and is_piped:
@@ -300,9 +312,11 @@ class TimedMessagePipe(MessagePipe):
         
         
     def flushed(self):
-        is_piped_or_pending = self.try_acking(None)
-        if is_piped_or_pending:
-            return
+        # This makes sure if a pending ack could not be piped because of
+        # a full outgoing buffer, then it goes out as soon as possible.
+        is_piped = self.try_acking(None)
+        if not is_piped:
+            raise Exception("How can an ACK be not piped after a flush?")
             
         self.flush_handler()
 
