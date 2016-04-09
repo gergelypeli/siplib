@@ -378,6 +378,10 @@ class MediaGateway(Loggable):
         Loggable.set_oid(self, oid)
         self.msgp.set_oid(build_oid(oid, "msgp"))
         
+
+    def set_name(self, name):
+        self.msgp.set_name(name)
+        
     
     def get_leg(self, label):
         return self.legs_by_label[label]

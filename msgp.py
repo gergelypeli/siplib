@@ -736,6 +736,10 @@ class MsgpPeer(MsgpDispatcher):
         self.reconnectors_by_addr = {}
 
 
+    def set_name(self, name):
+        self.name = name
+
+
     def add_remote_addr(self, remote_addr):
         reconnector = TcpReconnector(self.metapoll, remote_addr, datetime.timedelta(seconds=1), WeakMethod(self.connected))
         reconnector.start()

@@ -71,6 +71,10 @@ class Switch(Loggable):
         self.ground.set_oid(build_oid(oid, "ground"))
 
 
+    def set_name(self, name):
+        self.mgc.set_name(name)
+        
+
     def authing(self, response, request):
         creds = self.account_manager.get_our_credentials()
         return self.authority.provide_auth(response, request, creds)

@@ -190,6 +190,10 @@ class Controller(Loggable):
     def set_oid(self, oid):
         Loggable.set_oid(self, oid)
         self.msgp.set_oid(build_oid(oid, "msgp"))
+        
+        
+    def set_name(self, name):
+        self.msgp.set_name(name)
 
 
     def add_mgw_addr(self, addr):
