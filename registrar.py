@@ -47,6 +47,11 @@ class Record(object):
         self.contacts_by_uri = {}
 
 
+    def add_contact(self, uri, expiration, hop):
+        self.contacts_by_uri[uri] = RecordContact(expiration, hop)
+        self.record_manager.logger.debug("Registered %s to %s via %s until %s." % (uri, self.record_uri, hop, expiration))
+        
+
     def get_contact_uris(self):
         return list(self.contacts_by_uri.keys())
         
@@ -57,7 +62,7 @@ class Record(object):
 
     def get_contacts(self):
         return [ (k, v.hop) for k, v in self.contacts_by_uri.items() ]
-                
+
 
     def process_updates(self, params):
         # TODO: check authname!
@@ -68,12 +73,11 @@ class Record(object):
             expires = contact_nameaddr.params.get("expires", params.get("expires"))
                 
             uri = contact_nameaddr.uri
-            seconds_left = int(expires) if expires is not None else 3600
+            seconds_left = int(expires) if expires is not None else 3600  # FIXME: proper default!
             expiration = now + datetime.timedelta(seconds=seconds_left)
             hop = params["hop"]
             
-            self.contacts_by_uri[uri] = RecordContact(expiration, hop)
-            self.record_manager.logger.debug("Registered %s to %s via %s until %s." % (uri, self.record_uri, hop, expiration))
+            self.add_contact(uri, expiration, hop)
         
         contact = []
         for uri, c in self.contacts_by_uri.items():
@@ -144,6 +148,19 @@ class RecordManager(Loggable):
         return WeakMethod(self.reject_request, Status(code, reason))
         
         
+    def add_record(self, record_uri):
+        record = self.records_by_uri.get(record_uri)
+        
+        if record:
+            self.logger.debug("Found record: '%s'" % (record_uri,))
+        else:
+            self.logger.debug("Created record: %s" % (record_uri,))
+            record = Record(Weak(self), record_uri)
+            self.records_by_uri[record_uri] = record
+            
+        return record
+        
+        
     def match_incoming_request(self, params):
         if params["method"] != "REGISTER":
             raise Error("RecordManager has nothing to do with this request!")
@@ -159,13 +176,7 @@ class RecordManager(Loggable):
         if record_uri.scheme != "sip":
             return self.reject(404, "Not Found")
             
-        record = self.records_by_uri.get(record_uri)
-        if record:
-            self.logger.debug("Found record: '%s'" % (record_uri,))
-        else:
-            self.logger.debug("Created record: %s" % (record_uri,))
-            record = Record(Weak(self), record_uri)
-            self.records_by_uri[record_uri] = record
+        record = self.add_record(record_uri)
         
         return WeakMethod(record.recv_request)
         
@@ -173,6 +184,11 @@ class RecordManager(Loggable):
     def transmit(self, params, related_params=None, report_response=None):
         self.transmission(params, related_params, report_response)
 
+
+    def emulate_registration(self, record_uri, contact_uri, seconds, hop):
+        expiration = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
+        self.add_record(record_uri).add_contact(contact_uri, expiration, hop)
+        
 
     def lookup_contact_uris(self, record_uri):
         record = self.records_by_uri.get(record_uri)

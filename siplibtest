@@ -17,7 +17,7 @@ from sdp import Sdp
 from authority import Authority
 from registrar import RecordManager
 from account import Account
-from util import resolve, setup_exchandler, setup_logging, build_oid
+from util import setup_exchandler, setup_logging, build_oid
 from mgw import MediaGateway
 from mgc import Controller  #, PlayerMediaLeg, EchoMediaLeg
 from switch import Switch
@@ -100,7 +100,43 @@ class RingingLeg(PlannedLeg):
         self.logger.debug("And now the caller hung up.")
 
 
-class CalleeLeg(PlannedLeg):
+class TestLeg(PlannedLeg):
+    def update_session(self, offer):
+        if not self.media_legs:
+            media_leg = self.make_media_leg(0, "player")
+            media_leg.play("playback.wav", ("PCMA", 8000, 1, None), volume=0.2, fade=3)
+
+        answer = deepcopy(offer)
+        answer["is_answer"] = True
+        
+        for c in answer["channels"]:
+            c["send"], c["recv"] = c["recv"], c["send"]
+            
+        return answer
+        
+        
+    def idle(self):
+        while True:
+            action = yield from self.wait_action()
+            
+            if action["type"] == "session":
+                answer = self.update_session(action["session"])
+                self.report(dict(type="session", session=answer))
+            elif action["type"] == "tone":
+                self.logger.debug("Okay, got a tone %s, fading out..." % action["name"])
+                break
+            else:
+                self.logger.debug("Don't know what to do with %s, continuing..." % action["type"])
+        
+        if self.media_legs:
+            self.media_legs[0].play(volume=0, fade=3)
+            yield from self.sleep(3)
+            
+        self.report(dict(type="hangup"))
+        
+
+
+class CalleeLeg(TestLeg):
     def plan(self):
         self.logger.debug("Callee created.")
         
@@ -114,25 +150,28 @@ class CalleeLeg(PlannedLeg):
         
         yield from self.sleep(1)
         
-        media_leg = self.make_media_leg(0, "player")
-        media_leg.play("playback.wav", ("PCMA", 8000, 1, None), volume=0.2, fade=3)
+        #media_leg = self.make_media_leg(0, "player")
+        #media_leg.play("playback.wav", ("PCMA", 8000, 1, None), volume=0.2, fade=3)
         
-        answer = self.make_answer(self.offer)
+        #answer = self.make_answer(self.offer)
+        answer = self.update_session(offer)
         self.report(dict(type="accept", session=answer))
 
-        while True:
-            action = yield from self.wait_action()
+        yield from self.idle()
+        
+        #while True:
+        #    action = yield from self.wait_action()
             
-            if action["type"] == "session":
-                answer = self.make_answer(action["session"])
-                self.report(dict(type="session", session=answer))
-            elif action["type"] == "tone":
-                self.logger.debug("Okay, got a tone %s, fading out..." % action["name"])
-                break
+        #    if action["type"] == "session":
+        #        answer = self.make_answer(action["session"])
+        #        self.report(dict(type="session", session=answer))
+        #    elif action["type"] == "tone":
+        #        self.logger.debug("Okay, got a tone %s, fading out..." % action["name"])
+        #        break
                 
-        media_leg.play(volume=0, fade=3)
-        yield from self.sleep(3)
-        self.report(dict(type="hangup"))
+        #media_leg.play(volume=0, fade=3)
+        #yield from self.sleep(3)
+        #self.report(dict(type="hangup"))
 
         self.logger.debug("Callee done.")
         
@@ -147,7 +186,7 @@ class CalleeLeg(PlannedLeg):
         return answer
 
 
-class CallerLeg(PlannedLeg):
+class CallerLeg(TestLeg):
     # TODO: call the phone without SDP!
     def plan(self):
         self.logger.debug("Caller created")
@@ -175,16 +214,21 @@ class CallerLeg(PlannedLeg):
                 self.logger.error("Hm, we got: %s!" % action["type"])
             
         offer = action.get("session")
-        self.logger.debug("Accepted with SDP:\n%s" % repr(offer))
+        answer = self.update_session(offer)
+        
+        #self.logger.debug("Accepted with SDP:\n%s" % repr(offer))
 
-        media_leg = self.make_media_leg(0, "player")
-        media_leg.play("playback.wav", ("PCMA", 8000, 1, None), volume=0.2, fade=3)
+        #media_leg = self.make_media_leg(0, "player")
+        #media_leg.play("playback.wav", ("PCMA", 8000, 1, None), volume=0.2, fade=3)
 
-        answer = self.make_answer(offer)
+        #answer = self.make_answer(offer)
         self.report(dict(type="session", session=answer))
 
-        action = yield from self.wait_action()
-        assert action["type"] == "hangup"
+        # Be more flexible here!
+        yield from self.idle()
+
+        #action = yield from self.wait_action()
+        #assert action["type"] == "hangup"
         
         self.logger.debug("Caller done.")
         #yield from self.sleep(3)
@@ -217,7 +261,7 @@ class TestController(Controller):
         
         # Must use IP4 addresses or FQDN in SDP, so let's go with IP4
         # Media host may be different from the signaling host
-        self.media_addresses = set(resolve(Addr(MEDIA_HOST, port)) for port in ports)
+        self.media_addresses = set(Addr(MEDIA_HOST, port).resolve() for port in ports)
         
     
     def allocate_media_address(self, sid):
@@ -310,12 +354,14 @@ class SwitchA(TestSwitch):
         
         # This is to accept calls from it TODO: compute hop nicely!
         b_uri = Uri(Addr(B_DOMAIN, None), None)
-        hop = Hop(local_addr=resolve(A_ADDR), remote_addr=resolve(B_ADDR), interface='eth0')
+        #hop = Hop(local_addr=resolve(A_ADDR), remote_addr=resolve(B_ADDR), interface='eth0')
+        hop = Hop(A_ADDR, B_ADDR, 'eth0')
         self.account_manager.add_account(b_uri, "B", Account.AUTH_BY_HOP, None, None, hops=[ hop ])
         
         self.account_manager.set_our_credentials(*A_CRED)
         
         #metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_dialing))
+        metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_snoming))
         
         
     def test_dialing(self):
@@ -325,6 +371,17 @@ class SwitchA(TestSwitch):
         #self.start_call(incoming_leg)
         
         #incoming_leg.dial()
+        
+        
+    def test_snoming(self):
+        snom_uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
+        snom_addr = Addr("192.168.1.8", 1024)  # Quite fake
+        snom_contact = Uri(snom_addr, SNOM_NUMBER)
+        snom_hop = Hop(A_ADDR, snom_addr, 'eth0')
+        
+        self.record_manager.emulate_registration(snom_uri, snom_contact, 60, snom_hop)
+        
+        
 
 
 class SwitchB(TestSwitch):
@@ -382,8 +439,8 @@ class SwitchB(TestSwitch):
         
         self.account_manager.set_our_credentials(*B_CRED)
 
-        metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
-        #metapoll.register_timeout(timedelta(seconds=10), WeakMethod(self.test_dialing))
+        #metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
+        metapoll.register_timeout(timedelta(seconds=10), WeakMethod(self.test_dialing))
 
 
     def make_thing(self, type):
@@ -426,16 +483,13 @@ def main():
     mgw.set_oid("mgw")
     mgw.set_name("the-mgw")
 
-    switch_a = SwitchA(Weak(metapoll), resolve(A_ADDR), MGW_ADDR, range(30000, 30020, 2))
+    switch_a = SwitchA(Weak(metapoll), A_ADDR.resolve(), MGW_ADDR, range(30000, 30020, 2))
     switch_a.set_oid(build_oid(None, "switch", "a"))
     switch_a.set_name("switch-a")
     
-    switch_b = SwitchB(Weak(metapoll), resolve(B_ADDR), MGW_ADDR, range(40000, 40020, 2))
+    switch_b = SwitchB(Weak(metapoll), B_ADDR.resolve(), MGW_ADDR, range(40000, 40020, 2))
     switch_b.set_oid(build_oid(None, "switch", "b"))
     switch_b.set_name("switch-b")
-
-    #switch_a.transport.set_peer(switch_b.transport)
-    #switch_b.transport.set_peer(switch_a.transport)
 
     while True:
         try:

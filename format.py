@@ -2,6 +2,7 @@ from __future__ import print_function, unicode_literals, absolute_import
 
 import re
 import collections
+import socket
 from sdp import Sdp
 
 # TODO: use attributes instead for these
@@ -25,6 +26,11 @@ class SipError(Exception):
 class Addr(collections.namedtuple("Addr", [ "host", "port" ])):
     def __str__(self):
         return "%s:%d" % self if self.port is not None else "%s" % self.host
+
+
+    def resolve(self):
+        return Addr(socket.gethostbyname(self.host), self.port)
+
         
 Addr.__new__.__defaults__ = (None,)
 
@@ -89,6 +95,10 @@ class Via(collections.namedtuple("Via", [ "addr", "branch" ])):
 
 
 class Hop(collections.namedtuple("Hop", [ "local_addr", "remote_addr", "interface" ])):
+    def __new__(cls, local_addr, remote_addr, interface):
+        return super().__new__(cls, local_addr.resolve(), remote_addr.resolve(), interface)
+        
+        
     def __str__(self):
         return "%s:%d >-(%s)-> %s:%d" % (self.local_addr + (self.interface,) + self.remote_addr)
 

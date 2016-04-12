@@ -7,7 +7,7 @@ from weakref import WeakValueDictionary
 from format import Uri, Nameaddr
 from sdp import Origin
 from async_base import WeakMethod
-from util import resolve, Loggable
+from util import Loggable
 
 MAXFWD = 50
 
@@ -78,7 +78,7 @@ class Dialog(Loggable):
 
         self.local_sdp_session_id = Origin.generate_session_id()
         self.local_sdp_session_version = 0
-        self.local_sdp_session_host = resolve(self.dialog_manager.get_local_addr())[0]
+        self.local_sdp_session_host = self.dialog_manager.get_local_addr().resolve()[0]
         self.remote_sdp_session_version = None
 
 

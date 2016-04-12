@@ -4,7 +4,7 @@ from datetime import timedelta
 
 from format import Hop, Addr, parse_structured_message, print_structured_message
 from async_base import WeakMethod
-from util import Loggable, resolve
+from util import Loggable
 
 
 def indented(text, indent="  "):
@@ -51,7 +51,7 @@ class TestTransport(Loggable):
 class UdpTransport(Loggable):
     def __init__(self, metapoll, local_addr, reception):
         self.metapoll = metapoll
-        self.local_addr = resolve(local_addr)
+        self.local_addr = local_addr.resolve()
         self.reception = reception
         
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -62,7 +62,7 @@ class UdpTransport(Loggable):
         
     def get_hop(self, uri):
         raddr = Addr(uri.addr.host, uri.addr.port or 5060)
-        return Hop(local_addr=resolve(self.local_addr), remote_addr=resolve(raddr), interface="eth0")
+        return Hop(self.local_addr, raddr, "eth0")  # TODO: eth0?
         
         
     def send(self, msg):

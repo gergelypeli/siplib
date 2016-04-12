@@ -1,15 +1,10 @@
 import socket
 import struct
 import logging
-from format import Addr
 from async_base import WeakMethod
 import sys, traceback
 
 FULL_OIDS = True
-
-
-def resolve(addr):  # TODO: make this an Addr method?
-    return Addr(socket.gethostbyname(addr.host), addr.port)
 
 
 def vacuum(d):

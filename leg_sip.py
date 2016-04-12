@@ -1,6 +1,6 @@
 from async_base import WeakMethod
 from format import Status, Rack, make_virtual_response
-from util import build_oid, resolve
+from util import build_oid
 from leg import Leg, SessionState, Error
 from sdp import SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES
 
@@ -41,7 +41,7 @@ class SipLeg(Leg):
         self.state = self.DOWN
         self.invite = None
         self.session = SessionState()
-        host = resolve(dialog.dialog_manager.get_local_addr())[0]  # TODO: not nice
+        host = dialog.dialog_manager.get_local_addr().resolve()[0]  # TODO: not nice
         self.sdp_builder = SdpBuilder(host)
         self.sdp_parser = SdpParser()
         
@@ -221,7 +221,7 @@ class SipLeg(Leg):
         elif "100rel" in msg.get("require", set()):
             self.invite.rpr_state = self.invite.RPR_SENT
             
-            if self.invite.request.get("sdp"):
+            if self.invite.request.get("sdp") or not sdp:
                 self.invite_outgoing_prack(msg)
             else:
                 raise Exception("Can't PRACK with session yet!")  # TODO
