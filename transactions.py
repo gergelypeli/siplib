@@ -330,10 +330,12 @@ class InviteServerTransaction(PlainServerTransaction):
     def send(self, response):
         if is_virtual_response(response):
             # A virtual response means we got (PR)ACKed, stop retransmissions
+            # A PRACKed response shouldn't be retransmitted again, it must be
+            # updated by the upper layers properly.
             was_final = self.outgoing_msg["status"].code >= 200
             
             if self.state in (self.TRANSMITTING, self.PROVISIONING):
-                self.change_state(self.LINGERING if was_final else self.PROVISIONING)
+                self.change_state(self.LINGERING if was_final else self.WAITING)
 
         else:
             is_rpr = "100rel" in response.get("require", set())
@@ -348,7 +350,7 @@ class InviteServerTransaction(PlainServerTransaction):
         if self.state == self.TRANSMITTING:
             # Got no ACK, complain
             self.report_request(make_timeout_nak(self.outgoing_msg))
-        elif self.state == self.LINGERING:
+        elif self.state == self.LINGERING or self.state == self.WAITING:
             pass
         else:
             raise Error("Invite server expired while %s!" % self.state)
