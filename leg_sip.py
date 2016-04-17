@@ -21,6 +21,7 @@ class InviteState(object):
         self.rpr_state = self.RPR_NONE
         self.rpr_rseq = None
         self.rpr_sdp_responded = False
+        self.rpr_offer_message = None  # rpr or prack request
         self.rpr_queue = []
 
 
@@ -41,6 +42,8 @@ class SipLeg(Leg):
         self.state = self.DOWN
         self.invite = None
         self.session = SessionState()
+        self.pending_actions = []
+        
         host = dialog.dialog_manager.get_local_addr().resolve()[0]  # TODO: not nice
         self.sdp_builder = SdpBuilder(host)
         self.sdp_parser = SdpParser()
@@ -52,6 +55,9 @@ class SipLeg(Leg):
         Leg.set_oid(self, oid)
         self.dialog.set_oid(build_oid(oid, "dialog"))
 
+
+    def can_send_session(self):
+        
 
     def change_state(self, new_state):
         self.logger.debug("Changing state %s => %s" % (self.state, new_state))
@@ -253,12 +259,25 @@ class SipLeg(Leg):
         self.invite = None
 
 
-    def invite_outgoing_prack(self, rpr):
+    def invite_outgoing_prack(self, rpr, session):
         rseq = rpr.get("rseq")
         cseq = rpr["cseq"]
         method = rpr["method"]
+        sdp = None
+
+        if session:
+            if self.invite.request.get("sdp"):
+                if session["is_answer"]:
+                    raise Exception("Ignoring outgoing session, because offer is expected!")
         
-        self.send_request(dict(method="PRACK", rack=Rack(rseq, cseq, method)))
+                sdp = self.process_outgoing_offer(session)
+            else:
+                if not session["is_answer"]:
+                    raise Exception("Ignoring outgoing session, because answer is expected!")
+        
+                sdp = self.process_outgoing_answer(session)
+        
+        self.send_request(dict(method="PRACK", rack=Rack(rseq, cseq, method), sdp=sdp))
         self.invite.rpr_state = self.invite.RPR_PRACKED
 
 
@@ -410,6 +429,9 @@ class SipLeg(Leg):
         
 
     def do(self, action):
+        # TODO: we probably need an inner do method, to retry pending actions,
+        # because we should update self.session once, not on retries.
+        # Or we should update it in each case, below. Hm. In the helper methods?
         self.logger.debug("Doing %s" % action)
         
         type = action["type"]
@@ -442,8 +464,44 @@ class SipLeg(Leg):
                 return
                 
             elif type == "session":
-                self.invite_outgoing_ack(session)
-                self.change_state(self.UP)
+                if self.invite.request.get("sdp"):
+                    # We sent the offer, but got no final response yet.
+                
+                    if self.invite.rpr_sdp_responded:
+                        # Got answer in rpr, PRACK-ed automatically, send UPDATE with a new offer
+                        pass
+                    else:
+                        # Session exchange is not officially over
+                        self.pending_actions.append(action)
+                else:
+                    # We requested an offer
+                
+                    if self.invite.final_response:
+                        # Got offer in final response, send answer in ACK
+                        self.invite_outgoing_ack(session)
+                        self.change_state(self.UP)
+                    elif self.invite.rpr_sdp_responded:
+                        # Got offer in rpr, have we sent an answer in a PRACK?
+                        
+                        # rpr_state is a wrong idea, the caller may get multiple
+                        # rpr-s at once! That is only used for session-rpr-s, so
+                        # should be called as such!
+                        
+                        if self.invite.rpr_state == InviteState.RPR_SENT:
+                        #if self.invite.rpr_offer_message:
+                            # No, we still have the rpr here
+                            self.invite_outgoing_prack(self.invite.rpr_offer_message, session)
+                            self.invite.rpr_offer_message = None
+                        elif self.invite.rpr_state == InviteState.RPR_PRACKED:
+                            # Already answered, but still waiting for the PRACK response
+                            self.pending_actions.append(action)
+                        else:
+                            # Answered, and accepted, now we can send an UPDATE
+                            pass  
+                    else:
+                        # Session exchange not complete yet
+                        self.pending_actions.append(action)
+                            
                 return
 
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):

@@ -506,4 +506,7 @@ def main():
     logging.debug("Bye!")
 
 
-main()
+try:
+    main()
+finally:
+    logging.shutdown()
