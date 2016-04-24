@@ -6,24 +6,48 @@ from sdp import SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES
 
 
 class InviteState(object):
-    RPR_NONE = "RPR_NONE"
-    RPR_SENT = "RPR_SENT"
-    RPR_PRACKED = "RPR_PRACKED"
+    REQUEST_OFFER = "REQUEST_OFFER"
+    PROVISIONAL_ANSWER = "PROVISIONAL_ANSWER"
+    RELIABLE_ANSWER = "RELIABLE_ANSWER"
+    PRACK_OFFER = "PRACK_OFFER"
+    FINAL_ANSWER = "FINAL_ANSWER"
+    
+    REQUEST_EMPTY = "REQUEST_EMPTY"
+    PROVISIONAL_OFFER = "PROVISIONAL_OFFER"
+    RELIABLE_OFFER = "RELIABLE_OFFER"
+    PRACK_ANSWER = "PRACK_ANSWER"
+    FINAL_OFFER = "FINAL_OFFER"
+    
+    SESSION_ESTABLISHED = "SESSION_ESTABLISHED"
+    FINISHED = "FINISHED"
     
     def __init__(self, request, is_outgoing):
+        has_sdp = request.get("sdp")
+        self.state = self.REQUEST_OFFER if has_sdp else self.REQUEST_EMPTY
+
         self.request = request
-        self.is_outgoing = is_outgoing
+        
+        #self.is_outgoing = is_outgoing  # Do we need this?
         self.responded_sdp = None
-        self.final_response = None
+        #self.final_response = None
         
         self.rpr_supported_locally = True  # FIXME
         self.rpr_supported_remotely = True  # FIXME
-        self.rpr_state = self.RPR_NONE
+        #self.rpr_state = self.RPR_NONE
+        self.rpr_unpracked = False
         self.rpr_rseq = None
-        self.rpr_sdp_responded = False
-        self.rpr_offer_message = None  # rpr or prack request
-        self.rpr_queue = []
+        #self.rpr_sdp_responded = False
+        self.rpr_last_message = None  # rpr or prack request
+        #self.rpr_queue = []
 
+
+    def change_state(self, new_state):
+        self.state = new_state
+        
+        
+    def is_finished(self):
+        return self.state == self.FINISHED
+        
 
 class SipLeg(Leg):
     DOWN = "DOWN"
@@ -55,9 +79,6 @@ class SipLeg(Leg):
         Leg.set_oid(self, oid)
         self.dialog.set_oid(build_oid(oid, "dialog"))
 
-
-    def can_send_session(self):
-        
 
     def change_state(self, new_state):
         self.logger.debug("Changing state %s => %s" % (self.state, new_state))
@@ -163,6 +184,9 @@ class SipLeg(Leg):
 
     
     def process_outgoing_offer(self, session):
+        if session["is_answer"]:
+            raise Exception("Offer expected!")
+            
         self.allocate_local_media(self.session.local_session, session)
         self.session.set_local_offer(session)
         sdp = self.sdp_builder.build(session)
@@ -170,6 +194,9 @@ class SipLeg(Leg):
 
     
     def process_outgoing_answer(self, session):
+        if not session["is_answer"]:
+            raise Exception("Answer expected!")
+            
         self.allocate_local_media(self.session.local_session, session)
         self.session.set_local_answer(session)  # don't care about rejected remote offers
         self.realize_local_media()
@@ -183,11 +210,7 @@ class SipLeg(Leg):
         if self.invite:
             raise Exception("Invalid outgoing INVITE request!")
         
-        if not session:
-            msg["sdp"] = None  #raise Exception("No session for INVITE request!")
-        elif session["is_answer"]:
-            raise Exception("Session answer for INVITE request!")
-        else:
+        if session:
             msg["sdp"] = self.process_outgoing_offer(session)
             
         self.invite = InviteState(msg, True)
@@ -201,88 +224,175 @@ class SipLeg(Leg):
 
     def invite_incoming_response(self, msg):
         # TODO: error handling!
-        if not self.invite or not self.invite.is_outgoing:
+        if not self.invite or not self.invite.state in (InviteState.REQUEST_OFFER, InviteState.REQUEST_EMPTY):
             raise Exception("Unexpected incoming INVITE response!")
         
         status = msg.get("status")
         sdp = msg.get("sdp")
+        is_rpr = "100rel" in msg.get("require", set())
         session = None
-        
-        if sdp and not self.invite.responded_sdp:
-            # No session yet in INVITE responses, take this one
-            
-            if self.invite.request.get("sdp"):
-                session = self.process_incoming_answer(sdp)
-            else:
-                session = self.process_incoming_offer(sdp)
 
-            self.invite.responded_sdp = sdp  # just to ignore any further
-
-        if status.code >= 300:
-            # Transactions already sent the ACK
-            self.invite = None
-            return dict(is_answer=True)  # rejection  FIXME: not necessarily an answer!
-        elif status.code >= 200:
-            self.invite.final_response = msg
-        elif "100rel" in msg.get("require", set()):
-            self.invite.rpr_state = self.invite.RPR_SENT
-            
-            if self.invite.request.get("sdp") or not sdp:
+        if self.invite.state == InviteState.REQUEST_OFFER:
+            if status.code >= 300:
+                self.invite = None
+            elif status.code >= 200:
+                if sdp:
+                    session = self.process_incoming_answer(sdp)
+                    self.invite.change_state(InviteState.FINAL_ANSWER)
+            elif is_rpr:
+                if sdp:
+                    session = self.process_incoming_answer(sdp)
+                    self.invite.change_state(InviteState.RELIABLE_ANSWER)
+                    
                 self.invite_outgoing_prack(msg)
             else:
-                raise Exception("Can't PRACK with session yet!")  # TODO
+                if sdp:
+                    session = self.process_incoming_answer(sdp)
+                    self.invite.change_state(InviteState.PROVISIONAL_ANSWER)
+                    
+        elif self.invite.state == InviteState.REQUEST_EMPTY:
+            if status.code >= 300:
+                self.invite = None
+            elif status.code >= 200:
+                if sdp:
+                    session = self.process_incoming_offer(sdp)
+                    self.invite.change_state(InviteState.FINAL_OFFER)
+            elif is_rpr:
+                if sdp:
+                    session = self.process_incoming_offer(sdp)
+                    self.invite.change_state(InviteState.RELIABLE_OFFER)
+                else:
+                    self.invite_outgoing_prack(msg)
+            else:
+                if sdp:
+                    session = self.process_incoming_offer(sdp)
+                    self.invite.change_state(InviteState.PROVISIONAL_OFFER)
+        
+        elif self.invite.state == InviteState.PROVISIONAL_ANSWER:
+            if status.code >= 300:
+                self.invite = None
+            elif status.code >= 200:  # Must get answer!
+                if sdp:
+                    self.invite.state = InviteState.FINAL_ANSWER  # Just FINAL?
+                else:
+                    pass  # Complain
+            elif is_rpr:
+                if sdp:
+                    self.invite.change_state(InviteState.RELIABLE_ANSWER)
+                    
+                self.invite_outgoing_prack(msg)  # PRACK always
+            else:
+                pass
+
+        elif self.invite.state == InviteState.PROVISIONAL_OFFER:
+            if status.code >= 300:
+                self.invite = None
+            elif status.code >= 200:
+                self.invite.change_state(InviteState.FINAL_OFFER)
+            elif is_rpr:
+                if sdp:
+                    self.invite.state = InviteState.RELIABLE_OFFER  # Delay PRACK
+                else:
+                    self.invite_outgoing_prack(msg)
+            else:
+                pass
+
+        elif self.invite.state == InviteState.RELIABLE_ANSWER:
+            if status.code >= 300:
+                self.invite = None
+            elif status.code >= 200:
+                pass  # Is it illegal?
+            elif is_rpr:
+                if sdp:
+                    pass  # Illegal
+                    
+                self.invite_outgoing_prack(msg)  # PRACK always
+            else:
+                pass
+
+        elif self.invite.state == InviteState.RELIABLE_OFFER:
+            if status.code >= 300:
+                self.invite = None
+            elif status.code >= 200:
+                pass  # Is it illegal?
+            elif is_rpr:
+                if sdp:
+                    pass  # Illegal
+                else:
+                    self.invite_outgoing_prack(msg)
+            else:
+                pass
+
+        elif self.invite.state == InviteState.SESSION_ESTABLISHED:
+            if status.code >= 300:
+                self.invite = None
+            elif status.code >= 200:
+                if sdp:
+                    pass  # Complain
+                
+                self.invite.change_state(InviteState.FINAL_EMPTY)
+            elif is_rpr:
+                if sdp:
+                    pass  # Illegal
+                    
+                self.invite_outgoing_prack(msg)
+            else:
+                pass
+            
+        else:
+            raise Exception("Unexpected invite response in state %s!" % self.invite.state)
                 
         return session
 
 
     def invite_outgoing_ack(self, session):
-        if not self.invite or not self.invite.is_outgoing or not self.invite.final_response:
+        if not self.invite:
             raise Exception("Invalid outgoing ACK request!")
+
+        sdp = None
             
-        if self.invite.request.get("sdp"):
+        if self.invite.state in (InviteState.FINAL_EMPTY, InviteState.FINAL_ANSWER):
             if session:
-                raise Error("Unnecessary session for ACK!")
-            else:
-                sdp = None
-        else:
-            # send ACK with SDP
+                raise Error("Unexpected session for outgoing ACK!")
+        elif self.invite.state == InviteState.FINAL_OFFER:
             if not session:
-                # This function is only called for the no-SDP-in-request case
-                raise Error("Missing session for ACK!")
-            elif not session["is_answer"]:
-                raise Error("Answer expected for ACK!")
-            else:
-                #self.logger.debug("invite_outgoing_ack with answer")
-                sdp = self.process_outgoing_answer(session)
-        
-        self.send_request(dict(method="ACK", sdp=sdp), self.invite.final_response)
+                raise Error("Missing session for outgoing ACK!")
+                
+            sdp = self.process_outgoing_answer(session)
+        else:
+            raise Error("Invalid outgoing ACK in state %s!" % self.invite.state)
+            
+        self.send_request(dict(method="ACK", sdp=sdp), self.invite.request)  # Hope it works
         self.invite = None
 
 
     def invite_outgoing_prack(self, rpr, session):
+        if not self.invite:
+            raise Exception("Invalid outgoing PACK request!")
+        
         rseq = rpr.get("rseq")
         cseq = rpr["cseq"]
         method = rpr["method"]
         sdp = None
 
-        if session:
-            if self.invite.request.get("sdp"):
-                if session["is_answer"]:
-                    raise Exception("Ignoring outgoing session, because offer is expected!")
-        
-                sdp = self.process_outgoing_offer(session)
-            else:
-                if not session["is_answer"]:
-                    raise Exception("Ignoring outgoing session, because answer is expected!")
-        
-                sdp = self.process_outgoing_answer(session)
-        
+        if self.invite.state == InviteState.RELIABLE_OFFER:
+            if not session:
+                raise Error("Missing session for outgoing PRACK!")
+
+            sdp = self.process_outgoing_answer(session)
+            self.invite.change_state(InviteState.PRACK_ANSWER)
+        else:
+            if session:
+                raise Error("Unexpected session for outgoing PRACK!")
+                
+            # A plain PRACK is legal in many states
+
         self.send_request(dict(method="PRACK", rack=Rack(rseq, cseq, method), sdp=sdp))
-        self.invite.rpr_state = self.invite.RPR_PRACKED
 
 
     def invite_incoming_prack_ok(self, msg):
-        self.invite.state = self.invite.RPR_NONE
+        if self.invite.state == InviteState.PRACK_ANSWER:
+            self.invite.change_state(InviteState.SESSION_ESTABLISHED)
 
 
     # Invite server
@@ -296,8 +406,6 @@ class SipLeg(Leg):
         
         if sdp:
             session = self.process_incoming_offer(sdp)
-        else:
-            session = None
             
         self.invite = InviteState(msg, False)
         
@@ -309,72 +417,163 @@ class SipLeg(Leg):
 
 
     def invite_outgoing_response_session_sendable(self):
-        return self.invite and not self.invite.is_outgoing and not self.invite.responded_sdp
+        return self.invite and self.invite.state in (
+            InviteState.REQUEST_OFFER, InviteState.REQUEST_EMPTY,
+            InviteState.SESSION_ESTABLISHED
+        )
+
+
+    def invite_outgoing_response_sendable(self):
+        return self.invite and self.invite.state in (
+            InviteState.REQUEST_OFFER, InviteState.REQUEST_EMPTY,
+            InviteState.PROVISIONAL_ANSWER, InviteState.PROVISIONAL_OFFER,
+            InviteState.SESSION_ESTABLISHED
+        )
         
 
-    def invite_outgoing_response(self, msg, session, rpr):
-        if not self.invite or self.invite.is_outgoing:
+    def invite_outgoing_response(self, msg, session, is_rpr):
+        if not self.invite:
             raise Exception("Invalid outgoing INVITE response!")
 
-        if session:
-            if self.invite.responded_sdp:
-                raise Exception("Ignoring outgoing session, because one already sent!")
-            elif self.invite.request.get("sdp"):
-                if not session["is_answer"]:
-                    raise Exception("Ignoring outgoing session, because answer is expected!")
-            
-                self.invite.responded_sdp = self.process_outgoing_answer(session)
-            else:
-                if session["is_answer"]:
-                    raise Exception("Ignoring outgoing session, because offer is expected!")
-            
-                self.invite.responded_sdp = self.process_outgoing_offer(session)
-            
-        if rpr:
+        if is_rpr:
             self.invite.rpr_supported_locally = True
 
+        is_rpr = self.invite.rpr_supported_locally and self.invite.rpr_supported_remotely
+
+        # FIXME: responded_sdp should be provisional_sdp, and be cleared after
+        # a reliable one is sent
         status = msg["status"]
+        sdp = None
+
+        if self.invite.state == InviteState.REQUEST_OFFER:
+            if status.code >= 300:
+                self.invite = None
+            elif status.code >= 200:
+                if session:
+                    sdp = self.process_outgoing_answer(session)
+                    self.invite.change_state(InviteState.FINAL_ANSWER)
+                else:
+                    raise Error("Missing session in final response!")
+            elif is_rpr:
+                if session:
+                    sdp = self.process_outgoing_answer(session)
+                    self.invite.change_state(InviteState.RELIABLE_ANSWER)
+            else:
+                if session:
+                    sdp = self.process_outgoing_answer(session)
+                    self.invite.provisional_sdp = sdp
+                    self.invite.change_state(InviteState.PROVISIONAL_ANSWER)
+                
+        elif self.invite.state == InviteState.REQUEST_EMPTY:
+            if status.code >= 300:
+                self.invite = None
+            elif status.code >= 200:
+                if session:
+                    sdp = self.process_outgoing_offer(session)
+                    self.invite.change_state(InviteState.FINAL_OFFER)
+                else:
+                    raise Error("Missing session in final response!")
+            elif is_rpr:
+                if session:
+                    sdp = self.process_outgoing_offer(session)
+                    self.invite.change_state(InviteState.RELIABLE_OFFER)
+                else:
+                    raise Error("Missing offer in first reliable response!")
+            else:
+                if session:
+                    sdp = self.process_outgoing_offer(session)
+                    self.invite.provisional_sdp = sdp
+                    self.invite.change_state(InviteState.PROVISIONAL_OFFER)
+
+        elif self.invite.state == InviteState.PROVISIONAL_ANSWER:
+            if status.code >= 300:
+                self.invite = None
+            elif status.code >= 200:
+                if session:
+                    raise Error("Unexpected session in final response after provisional!")
+                else:
+                    sdp = self.invite.provisional_sdp
+                    self.invite.change_state(InviteState.FINAL_ANSWER)
+            elif is_rpr:
+                if session:
+                    raise Error("Unexpected session in reliable response after provisional!")
+                else:
+                    sdp = self.invite.provisional_sdp
+                    self.invite.change_state(InviteState.RELIABLE_ANSWER)
+            else:
+                if session:
+                    raise Error("Unexpected session in provisional response after provisional!")
+                else:
+                    sdp = self.invite.provisional_sdp
+                
+        elif self.invite.state == InviteState.PROVISIONAL_OFFER:
+            if status.code >= 300:
+                self.invite = None
+            elif status.code >= 200:
+                if session:
+                    raise Error("Unexpected session in final response after provisional!")
+                else:
+                    sdp = self.invite.provisional_sdp
+                    self.invite.change_state(InviteState.FINAL_OFFER)
+            elif is_rpr:
+                if session:
+                    raise Error("Unexpected session in reliable response after provisional!")
+                else:
+                    sdp = self.invite.provisional_sdp
+                    self.invite.change_state(InviteState.RELIABLE_OFFER)
+            else:
+                if session:
+                    raise Error("Unexpected session in provisional response after provisional!")
+                else:
+                    sdp = self.invite.provisional_sdp
+
+        elif self.invite.state == InviteState.RELIABLE_ANSWER:
+            raise Error("Can't send response while a reliable is unacknowledged!")
+                
+        elif self.invite.state == InviteState.RELIABLE_OFFER:
+            raise Error("Can't send response while a reliable is unacknowledged!")
+
+        elif self.invite.state == InviteState.SESSION_ESTABLISHED:
+            if status.code >= 300:
+                self.invite = None
+            elif status.code >= 200:
+                if session:
+                    raise Error("Unexpected session in final response after established!")
+                else:
+                    self.invite.change_state(InviteState.FINAL_EMPTY)
+            elif is_rpr:
+                if session:
+                    raise Error("Unexpected session in reliable response after established!")
+            else:
+                if session:
+                    raise Error("Unexpected session in provisional response after established!")
+                
+        else:
+            raise Error("Invalid outgoing response in state %s!" % self.invite.state)
         
-        if self.invite.rpr_state == self.invite.RPR_SENT:
-            self.logger.debug("Oops, can't send this %d response yet, queueing it" % status.code)
-            self.invite.rpr_queue.append(msg)
-            return
+        msg["sdp"] = sdp
 
-        if self.invite.responded_sdp and status.code < 300 and not self.invite.rpr_sdp_responded:
-            msg["sdp"] = self.invite.responded_sdp
-
-        if status.code >= 200:
-            # Final
-            self.invite.final_response = msg  # Note: this is an incomplete message, but OK here
-        elif self.invite.rpr_supported_remotely and self.invite.rpr_supported_locally:
+        if is_rpr:
             # Provisional, reliable
             msg.setdefault("require", set()).add("100rel")
 
             self.invite.rpr_rseq = self.invite.rpr_rseq + 1 if self.invite.rpr_rseq is not None else 1
             msg["rseq"] = self.invite.rpr_rseq
             
-            self.invite.rpr_state = self.invite.RPR_SENT
-
-            if self.invite.responded_sdp:
-                self.invite.rpr_sdp_responded = True
-            
         self.send_response(msg, self.invite.request)
-        
-        if status.code >= 300:
-            self.invite = None
     
     
     def invite_incoming_ack(self, msg):
-        if not self.invite or self.invite.is_outgoing or not self.invite.final_response:
+        if not self.invite:
             raise Exception("Unexpected incoming ACK request!")
 
         sdp = msg.get("sdp")
         session = None
         
-        if self.invite.request.get("sdp"):
+        if self.invite.state in (InviteState.FINAL_ANSWER, InviteState.FINAL_EMPTY):
             if sdp:
                 self.logger.debug("Unexpected session in ACK!")
-        else:
+        elif self.invite.state == InviteState.FINAL_OFFER:
             if not sdp:
                 self.logger.debug("Unexpected sessionless ACK!")
             else:
@@ -390,36 +589,72 @@ class SipLeg(Leg):
 
 
     def invite_incoming_nak(self):
-        if not self.invite or self.invite.is_outgoing or not self.invite.final_response:
+        if not self.invite:
             raise Exception("Unexpected incoming NAK request!")
+            
+        if self.invite.state not in (InviteState.FINAL_ANSWER, InviteState.FINAL_EMPTY, InviteState.FINAL_OFFER):
+            self.logger.debug("Unexpected NAK in state %s!" % self.invite.state)
                 
         self.invite = None
 
 
     def invite_incoming_prack(self, msg):
+        if not self.invite:
+            raise Exception("Unexpected incoming PRACK request!")
+        
+        sdp = msg.get("sdp")
+        session = None
         rseq, cseq, method = msg["rack"]
         
-        if method != "INVITE" or cseq != self.invite.request["cseq"] or rseq != self.invite.rpr_rseq:
+        if method != "INVITE" or cseq != self.invite.request["cseq"] or rseq != self.invite.rpr_rseq or not self.invite.rpr_unpracked:
             return False
+        
+        self.invite.rpr_unpracked = False
         
         # Stop the retransmission of the provisional answer
         self.send_response(make_virtual_response(), self.invite.request)
 
-        self.invite.rpr_state = self.invite.RPR_PRACKED  # TODO: session...
-        return True
-
-
-    def invite_outgoing_prack_ok(self, prack):
-        self.send_response(dict(status=Status(200)), prack)
-        self.invite.rpr_state = self.invite.RPR_NONE
+        if self.invite.state == InviteState.RELIABLE_OFFER:
+            if not sdp:
+                self.logger.error("Missing answer in PRACK request!")
+            else:
+                session = self.process_incoming_answer(sdp)
+                self.invite.change_state(InviteState.SESSION_ESTABLISHED)
+                self.invite_outgoing_prack_ok(msg)
+                
+        elif self.invite.state == InviteState.RELIABLE_ANSWER:
+            if not sdp:
+                # Yay, no PRACK abuse!
+                self.invite.change_state(InviteState.SESSION_ESTABLISHED)
+                self.invite_outgoing_prack_ok(msg)
+            else:
+                session = self.process_incoming_offer(sdp)
+                self.invite.change_state(InviteState.PRACK_OFFER)
+                # Don't respond yet
+        else:
+            if sdp:
+                self.logger.error("Unexpected SDP in PRACK request!")
+                
         
-        if self.invite.rpr_queue:
-            msg = self.invite.rpr_queue.pop(0)
-            status = msg["status"]
-            self.logger.debug("Now sending the queued %d response" % status.code)
-            
-            self.invite_outgoing_response(msg)
+        return session
 
+
+    def invite_outgoing_prack_ok(self, prack, session):
+        sdp = None
+        
+        if self.invite.state == InviteState.PRACK_OFFER:
+            if not session:
+                raise Error("Missing answer for PRACK response!")
+            else:
+                sdp = self.process_outgoing_answer(session)
+                self.invite.change_state(InviteState.SESSION_ESTABLISHED)
+        else:
+            if session:
+                raise Error("Unexpected session for PRACK response!")
+        
+        self.send_response(dict(status=Status(200), sdp=sdp), prack)
+        # TODO: prod here!
+        
 
     # Others
 
