@@ -4,6 +4,7 @@ from datetime import timedelta
 import logging
 import logging.config
 from copy import deepcopy
+import sys
 
 from async_base import Metapoll, WeakMethod, Weak
 from format import Addr, Uri, Nameaddr, Status, SipError, Hop
@@ -17,7 +18,7 @@ from sdp import Sdp
 from authority import Authority
 from registrar import RecordManager
 from account import Account
-from util import setup_exchandler, setup_logging, build_oid
+from util import setup_exchandler, setup_logging, build_oid, my_exchandler
 from mgw import MediaGateway
 from mgc import Controller  #, PlayerMediaLeg, EchoMediaLeg
 from switch import Switch
@@ -141,8 +142,8 @@ class CalleeLeg(TestLeg):
         self.logger.debug("Callee created.")
         
         action = yield from self.wait_action("dial")
-        self.offer = action.get("session")
-        self.logger.debug("Got offer:\n%s" % repr(self.offer))
+        offer = action.get("session")
+        self.logger.debug("Got offer:\n%s" % repr(offer))
         #self.anchor()
         
         yield from self.sleep(1)
@@ -439,8 +440,8 @@ class SwitchB(TestSwitch):
         
         self.account_manager.set_our_credentials(*B_CRED)
 
-        #metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
-        metapoll.register_timeout(timedelta(seconds=10), WeakMethod(self.test_dialing))
+        metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
+        #metapoll.register_timeout(timedelta(seconds=10), WeakMethod(self.test_dialing))
 
 
     def make_thing(self, type):
@@ -472,7 +473,7 @@ def main():
     # so various __del__ methods will run before interpreter shutdown, when even
     # logging is disfunctional.
     
-    setup_exchandler()
+    #setup_exchandler()
     setup_logging()
     
     logging.debug("Hello!")
@@ -491,19 +492,23 @@ def main():
     switch_b.set_oid(build_oid(None, "switch", "b"))
     switch_b.set_name("switch-b")
 
-    while True:
-        try:
+    try:
+        while True:
             metapoll.do_poll()
-        except KeyboardInterrupt:
-            #raise
-            break
-
-    del switch_b
-    del switch_a
-    del mgw
-    del metapoll
+    except KeyboardInterrupt:
+        pass
+    except Exception:
+        logging.critical("Crashed!")
+        my_exchandler(*sys.exc_info())
+    finally:
+        # The exception object is already gone here
+        
+        del switch_b
+        del switch_a
+        del mgw
+        del metapoll
     
-    logging.debug("Bye!")
+        logging.debug("Bye!")
 
 
 try:

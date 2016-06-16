@@ -66,6 +66,7 @@ class Switch(Loggable):
         self.record_manager.set_oid(build_oid(oid, "recman"))
         self.registration_manager.set_oid(build_oid(oid, "regman"))
         self.transport.set_oid(build_oid(oid, "transport"))
+        self.transaction_manager.set_oid(build_oid(oid, "transman"))
         self.dialog_manager.set_oid(build_oid(oid, "diaman"))
         self.mgc.set_oid(build_oid(oid, "mgc"))
         self.ground.set_oid(build_oid(oid, "ground"))
