@@ -129,7 +129,7 @@ class InviteClientState(InviteState):
         return dict(method="PRACK", rack=rack, sdp=sdp)
 
 
-    def outgoing(self, message, sdp):
+    def outgoing(self, message, sdp=None):
         InviteState.outgoing(self, message, sdp)
         
         s = self.state
@@ -320,7 +320,7 @@ class InviteServerState(InviteState):
         msg["rseq"] = self.rpr_last_rseq
         
 
-    def outgoing(self, message, sdp):
+    def outgoing(self, message, sdp=None):
         InviteState.outgoing(self, message, sdp)
 
         s = self.state

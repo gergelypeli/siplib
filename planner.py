@@ -6,13 +6,11 @@ from util import Loggable
 #PlannedEvent.__new__.__defaults__ = (None,)
 
 
-class Planned(Loggable):
-    def __init__(self, metapoll, generator_method, finish_handler=None):
+class Plan(Loggable):
+    def __init__(self, metapoll):
         Loggable.__init__(self)
 
         self.metapoll = metapoll
-        self.generator_method = generator_method
-        self.finish_handler = finish_handler
 
         self.generator = None
         self.is_executing = False
@@ -20,18 +18,23 @@ class Planned(Loggable):
         self.event_queue = []
 
 
-    def __del__(self):
-        self.abort()
+    #def __del__(self):
+    #    self.abort()
+        
+        
+    def finished(self, error):
+        pass
         
 
-    def start_plan(self, *args, **kwargs):  # Hm, must have renamed it, collided with Leg.start
+    def start(self, *args, **kwargs):
         if self.generator:
             raise Exception("Plan already started!")
         
         self.logger.debug("Starting plan.")
-        self.generator = self.generator_method(*args, **kwargs)
+        self.generator = self.plan(*args, **kwargs)
         if not self.generator:
             raise Exception("Couldn't create plan generator!")
+            
         self.resume(None, None)
 
 
@@ -41,12 +44,10 @@ class Planned(Loggable):
                 self.generator.close()
             except Exception as e:
                 self.logger.warning("Force aborted plan.")
-                if self.finish_handler:
-                    self.finish_handler(e)
+                self.finished(e)
             else:
                 self.logger.warning("Force terminated plan.")
-                if self.finish_handler:
-                    self.finish_handler(None)
+                self.finished(None)
         
         if self.timeout_handle:
             self.metapoll.unregister_timeout(self.timeout_handle)
@@ -130,14 +131,14 @@ class Planned(Loggable):
             if e.value:
                 self.logger.debug("Plan return value ignored!")
             
-            if self.finish_handler:
-                #self.logger.debug("Plan finish handler start")
-                self.finish_handler(None)
-                #self.logger.debug("Plan finish handler end")
+            self.finished(None)
         except Exception as e:
             self.logger.warning("Aborted plan with exception!", exc_info=True)
             self.generator = None
             self.is_executing = False
             
-            if self.finish_handler:
-                self.finish_handler(e)
+            self.finished(e)
+
+
+    def plan(self):
+        raise NotImplementedError()

@@ -1,5 +1,5 @@
-from async_base import Weak, WeakMethod, WeakGeneratorMethod
-from planner import Planned
+from async_base import Weak, WeakMethod
+from planner import Plan
 from util import build_oid, Loggable
 from format import SipError, Status
 
@@ -103,6 +103,8 @@ class Leg(BareLeg):
     def get_media_leg(self, ci):
         return self.media_legs[ci] if ci < len(self.media_legs) else None
             
+            
+            
 
 class SlotLeg(Leg):
     def __init__(self, owner, number):
@@ -116,14 +118,17 @@ class SlotLeg(Leg):
         self.owner.do_slot(self.number, action)
 
 
-class PlannedLeg(Planned, Leg):
+
+
+class LegPlan(Plan):
     def __init__(self, metapoll):
-        Planned.__init__(self,
-            metapoll,
-            WeakGeneratorMethod(self.plan),
-            finish_handler=WeakMethod(self.plan_finished)
-        )
-        Leg.__init__(self)
+        Plan.__init__(self, metapoll)
+        
+        self.leg = None
+        
+
+    def set_leg(self, leg):
+        self.leg = leg
         
         
     def wait_action(self, action_type=None, timeout=None):
@@ -136,8 +141,37 @@ class PlannedLeg(Planned, Leg):
         return action
             
         
+    def finished(self, error):
+        if self.leg:
+            self.leg.plan_finished(error)
+            
+            
+
+
+class PlannedLeg(Leg):
+    def __init__(self, plan):
+        Leg.__init__(self)
+        
+        self.plan = plan
+        self.plan.set_leg(Weak(self))
+
+
+    def __del__(self):
+        self.plan.abort()
+
+
+    def set_oid(self, oid):
+        Leg.set_oid(self, oid)
+        
+        self.plan.set_oid(build_oid(self.oid, "plan"))
+        
+        
     def start(self):
-        self.start_plan()
+        self.plan.start()
+
+
+    def do(self, action):
+        self.plan.resume("action", action)
 
 
     def plan_finished(self, error):
@@ -148,12 +182,6 @@ class PlannedLeg(Planned, Leg):
         self.finish_media(error=error)
         
 
-    def do(self, action):
-        self.resume("action", action)
-
-
-    def plan(self):
-        raise NotImplementedError()
 
 
 # TODO: create session.py!
@@ -414,14 +442,22 @@ class SimpleRouting(Routing):
             Routing.do_slot(self, li, action)
 
 
-class PlannedRouting(Planned, Routing):
+
+
+class RoutingPlan(Plan):
     def __init__(self, metapoll):
-        Planned.__init__(self,
-                metapoll,
-                WeakGeneratorMethod(self.plan),
-                finish_handler=WeakMethod(self.plan_finished)
-        )
-        Routing.__init__(self)
+        Plan.__init__(self, metapoll)
+        
+        self.routing = None
+        
+        
+    def set_routing(self, routing):
+        self.routing = routing
+        
+        
+    def finished(self, error):
+        if self.routing:
+            self.routing.plan_finished(error)
         
         
     def wait_action(self, leg_index=None, action_type=None, timeout=None):
@@ -437,18 +473,41 @@ class PlannedRouting(Planned, Routing):
         return li, action
 
 
+
+
+class PlannedRouting(Routing):
+    def __init__(self, plan):
+        Routing.__init__(self)
+
+        self.plan = plan
+        self.plan.set_routing(Weak(self))
+
+
+    def __del__(self):
+        if self.plan:
+            self.plan.abort()
+            
+
+    def set_oid(self, oid):
+        Routing.set_oid(self, oid)
+        
+        self.plan.set_oid(build_oid(self.oid, "plan"))
+        
+        
     def may_finish(self):
-        if not self.generator:
-            Routing.may_finish(self)
+        if self.plan:
+            return
+            
+        Routing.may_finish(self)
             
 
     def plan_finished(self, exception):
-        for tag, event in self.event_queue:
+        for tag, event in self.plan.event_queue:
             if tag == "action":
                 li, action = event
                 Routing.do_slot(self, li, action)
                 
-        self.event_queue = None
+        self.plan = None
         status = None
         
         try:
@@ -477,15 +536,13 @@ class PlannedRouting(Planned, Routing):
         self.logger.debug("Planned routing processing a %s" % action["type"])
         
         if action["type"] == "dial":
-            self.start_plan(action)
-        elif self.generator:
-            self.resume("action", (li, action))
+            self.plan.start(action)
+        elif self.plan:
+            self.plan.resume("action", (li, action))
         else:
             Routing.do_slot(self, li, action)
         
 
-    def plan(self, action):
-        raise NotImplementedError()
 
 
 class Bridge(CallComponent):
