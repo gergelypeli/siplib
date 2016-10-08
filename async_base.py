@@ -36,12 +36,8 @@ class WeakMethod(object):
         self.wself = weakref.ref(myself)
         
 
-    def load_self(self):
-        return self.wself()
-        
-
     def __call__(self, *args, **kwargs):
-        selfarg = self.load_self()
+        selfarg = self.wself()
 
         if not selfarg:
             return None
@@ -57,25 +53,14 @@ class WeakMethod(object):
 
 
     def __repr__(self):
-        return "WeakMethod<%s, %s>" % (self.load_self(), self.func)
+        return "WeakMethod<%s, %s>" % (self.wself(), self.func)
         
         
     def rebind(self, *args, **kwargs):
-        sself = self.load_self()
-        bound_method = self.func.__get__(sself)
-        return self.__class__(bound_method, *args, **kwargs)
-
-
-class WeakGeneratorMethod(WeakMethod):
-    def load_self(self):
-        # Pass a weak self to the generator method
         sself = self.wself()
-        return weakref.proxy(sself) if sself else None
+        bound_method = self.func.__get__(sself)
+        return WeakMethod(bound_method, *args, **kwargs)
 
-        
-    def __repr__(self):
-        return "WeakGeneratorMethod<%s, %s>" % (self.wself(), self.func)
-    
 
 class Metapoll(object):
     """

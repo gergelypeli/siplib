@@ -30,6 +30,8 @@ class Plan(Loggable):
         if self.generator:
             raise Exception("Plan already started!")
         
+        # Storing the generator while it also has a strong reference to us is
+        # a reference loop, but it can be broken by our owner.
         self.logger.debug("Starting plan.")
         self.generator = self.plan(*args, **kwargs)
         if not self.generator:
@@ -43,10 +45,10 @@ class Plan(Loggable):
             try:
                 self.generator.close()
             except Exception as e:
-                self.logger.warning("Force aborted plan.")
+                self.logger.warning("Plan aborted with %s." % e)
                 self.finished(e)
             else:
-                self.logger.warning("Force terminated plan.")
+                self.logger.warning("Plan aborted.")
                 self.finished(None)
         
         if self.timeout_handle:
@@ -65,9 +67,6 @@ class Plan(Loggable):
                 raise Exception("Expected event '%s', got '%s'!" % (expect, tag))
             
         while True:
-            # self is actually a weak self, because this function is called from within the plan
-            # But getting a bound method of a proxy binds to the strong object!
-            # So self.resume can be passed to WeakMethod to weaken it again!
             if timeout is not None:
                 handler = WeakMethod(self.resume, "timeout", None)
                 self.timeout_handle = self.metapoll.register_timeout(timeout, handler)
