@@ -3,8 +3,8 @@ import wave
 import collections
 
 import g711
-from async_base import WeakMethod
 from util import Loggable
+import zap
 
 
 BYTES_PER_SAMPLE = 2
@@ -144,14 +144,13 @@ class RtpProcessor(Base):
     
 
 class RtpPlayer(RtpProcessor):
-    def __init__(self, metapoll, format, data, handler, volume=1, fade=0, ptime_ms=20):
+    def __init__(self, format, data, volume=1, fade=0, ptime_ms=20):
         RtpProcessor.__init__(self)
 
+        self.packet_slot = zap.EventSlot()
         self.timestamp = 0
         
-        self.metapoll = metapoll
         self.data = data  # mono 16 bit LSB LPCM
-        self.handler = handler
         self.ptime_ms = ptime_ms
         self.format = format
         
@@ -159,12 +158,12 @@ class RtpPlayer(RtpProcessor):
         self.set_volume(volume, fade)
         
         if data:
-            self.handle = self.metapoll.register_timeout(self.ptime_ms / 1000, WeakMethod(self.play), repeat=True)
+            self.play_plug = zap.time_slot(self.ptime_ms / 1000, repeat=True).plug(self.play)
         
         
     def __del__(self):
-        if self.handle:
-            self.metapoll.unregister_timeout(self.handle)
+        if self.play_plug:
+            self.play_plug.unplug()
 
 
     def set_volume(self, volume, fade):
@@ -191,11 +190,10 @@ class RtpPlayer(RtpProcessor):
             
         packet = Packet(self.format, timestamp, True, payload)
         #packet = build_rtp(self.ssrc, self.base_seq + seq, self.base_timestamp + timestamp, 127, payload)
-        self.handler(packet)
+        self.packet_slot.zap(packet)
         
         if new_offset >= len(self.data):
-            self.metapoll.unregister_timeout(self.handle)
-            self.handle = None
+            self.play_plug.unplug()
 
 
 class RtpRecorder(RtpProcessor):
@@ -260,10 +258,10 @@ class DtmfBase(Base):
     
 
 class DtmfExtractor(DtmfBase):
-    def __init__(self, report):
+    def __init__(self):
         DtmfBase.__init__(self)
         
-        self.report = report
+        self.dtmf_detected_slot = zap.EventSlot()
         self.next_time_ms = None
         
         
@@ -288,7 +286,7 @@ class DtmfExtractor(DtmfBase):
 
         key = self.keys_by_event.get(event)
         if key:
-            self.report(key)
+            self.dtmf_detected_slot.zap(key)
             
         return True
 

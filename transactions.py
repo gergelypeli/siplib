@@ -1,13 +1,10 @@
-from __future__ import print_function, unicode_literals, absolute_import
-
-#from pprint import pprint, pformat
 import uuid
 import datetime
-#import logging
-from async_base import Weak
+from weakref import proxy
 from util import Loggable
 
 from format import Via, Status, make_simple_response, make_ack, make_virtual_response, make_timeout_nak, make_timeout_response, is_virtual_response
+import zap
 
 # tr id: (branch, method)
 
@@ -153,12 +150,6 @@ class Transaction(object):
 
 
 class PlainClientTransaction(Transaction):
-    def __init__(self, manager, branch, report_response):
-        super().__init__(manager, branch)
-        
-        self.report_response = report_response
-        
-        
     def transmit(self, msg):
         if msg.get("via"):
             raise Error("Don't mess with the request Via headers!")
@@ -174,7 +165,7 @@ class PlainClientTransaction(Transaction):
 
     def process(self, response):
         if self.state == self.TRANSMITTING:
-            self.report_response(response, self.outgoing_msg)
+            self.manager.report_response(response, self.outgoing_msg)
             self.change_state(self.LINGERING)
         elif self.state == self.LINGERING:
             pass
@@ -184,14 +175,13 @@ class PlainClientTransaction(Transaction):
 
     def expired(self):
         if self.state == self.TRANSMITTING:
-            self.report_response(make_timeout_response(self.outgoing_msg))
+            self.manager.report_response(make_timeout_response(self.outgoing_msg), None)
 
 
 class PlainServerTransaction(Transaction):
-    def __init__(self, manager, branch, report_request):
+    def __init__(self, manager, branch):
         super().__init__(manager, branch)
         
-        self.report_request = report_request
         self.incoming_via = None
         
         
@@ -207,7 +197,7 @@ class PlainServerTransaction(Transaction):
         if self.state == self.WAITING:
             if not self.incoming_via:
                 self.incoming_via = request["via"]
-                self.report_request(request)
+                self.manager.report_request(request)
         elif self.state == self.LINGERING:
             self.retransmit()
         else:
@@ -231,8 +221,6 @@ class AckClientTransaction(PlainClientTransaction):
 
 class Bastard(object):
     def __init__(self):
-        #self.report_response = report_response
-        #self.statuses = set()
         self.ack = None
         
 
@@ -252,7 +240,7 @@ class InviteClientTransaction(PlainClientTransaction):
         if self.state != self.LINGERING:
             self.change_state(self.LINGERING)  # now we can expire
         
-        ack = AckClientTransaction(self.manager, ack_branch, None)
+        ack = AckClientTransaction(self.manager, ack_branch)
 
         # These won't be public
         self.bastards[self.rt(msg)].ack = ack
@@ -283,11 +271,18 @@ class InviteClientTransaction(PlainClientTransaction):
                     ack_params = make_ack(self.outgoing_msg, remote_tag)
                     self.create_and_send_ack(self.branch, ack_params)
             
+                # LOL, 17.1.1.2 originally required the INVITE client transaction to
+                # be destroyed upon 2xx responses, and mindlessly report further 2xx
+                # responses to nonexistent requests the core. Aside from being braindead,
+                # it was later corrected by RFC 6026. Quote of the day:
+                #   It also forbids forwarding stray responses to INVITE
+                #   requests (not just 2xx responses), which RFC 3261 requires.
+            
                 # FIXME: this check is too strict, the same status code may arrive
                 # with different content, either check it fully, or drop this check!
                 if True:  # code not in him.statuses:
                     #him.statuses.add(code)
-                    self.report_response(response, self.outgoing_msg)
+                    self.manager.report_response(response, self.outgoing_msg)
 
             if self.state != self.WAITING:
                 if code < 200:
@@ -298,13 +293,13 @@ class InviteClientTransaction(PlainClientTransaction):
 
     def expired(self):
         if self.state == self.TRANSMITTING:  # TODO: do we still need explicit timeout response?
-            self.report_response(make_timeout_response(self.outgoing_msg), self.outgoing_msg)  # nothing at all
+            self.manager.report_response(make_timeout_response(self.outgoing_msg), self.outgoing_msg)  # nothing at all
         elif self.state == self.LINGERING:
             # FIXME: don't reuse the LINGERING state after sending an ACK!
             sent_ack = any(him.ack for him in self.bastards.values())
 
             if not sent_ack:
-                self.report_response(make_timeout_response(self.outgoing_msg), self.outgoing_msg)
+                self.manager.report_response(make_timeout_response(self.outgoing_msg), self.outgoing_msg)
         else:
             raise Error("Invite client expired while %s!" % self.state)
 
@@ -314,7 +309,7 @@ class InviteServerTransaction(PlainServerTransaction):
         if self.state == self.WAITING:
             if not self.incoming_via:
                 self.incoming_via = request["via"]
-                self.report_request(request)
+                self.manager.report_request(request)
                 
                 if self.state == self.WAITING:
                     # No response yet, say something
@@ -349,7 +344,7 @@ class InviteServerTransaction(PlainServerTransaction):
     def expired(self):
         if self.state == self.TRANSMITTING:
             # Got no ACK, complain
-            self.report_request(make_timeout_nak(self.outgoing_msg))
+            self.manager.report_request(make_timeout_nak(self.outgoing_msg))
         elif self.state == self.LINGERING or self.state == self.WAITING:
             pass
         else:
@@ -368,17 +363,23 @@ class AckServerTransaction(PlainServerTransaction):
 
 
 class TransactionManager(Loggable):
-    def __init__(self, local_addr, transmission):
+    def __init__(self, local_addr, transport):
         Loggable.__init__(self)
 
         self.local_addr = local_addr
-        self.transmission = transmission
+        self.transport = transport
         self.client_transactions = {}  # by (branch, method)
         self.server_transactions = {}  # by (branch, method)
+        
+        self.request_slot = zap.EventSlot()
+        self.response_slot = zap.EventSlot()
+        
+        # TODO: add this slot
+        self.transport_plug = self.transport.process_slot.plug(self.process_message)
 
         
     def transmit(self, msg):
-        self.transmission(msg)
+        self.transport.send(msg)
         
         
     def get_local_addr(self):
@@ -411,7 +412,7 @@ class TransactionManager(Loggable):
             raise Error("WAT?")
 
 
-    def match_incoming_message(self, msg):
+    def process_message(self, msg):
         #print("Match incoming:")
         #pprint(msg)
         branch, method = identify(msg)
@@ -424,32 +425,18 @@ class TransactionManager(Loggable):
             else:
                 self.logger.debug("Incoming response to unknown request, ignoring!")
                 
-            return True
+            return
 
         tr = self.server_transactions.get((branch, method))
         if tr:
             tr.process(msg)
-            return True
+            return
             
         if method == "CANCEL":
-            # CANCEL-s may happen outside of any dialogs, so process them here
-            tr = PlainServerTransaction(Weak(self), branch, lambda msg: None)
+            tr = PlainServerTransaction(proxy(self), branch)
             self.add_transaction(tr, "CANCEL")
             tr.process(msg)
-            
-            # FIXME: not necessarily INVITE
-            invite_str = self.server_transactions.get((branch, "INVITE"))
-            if invite_str:
-                # The responses to INVITE and CANCEL must have a To tag, so they must
-                # be generated by the Dialog.
-                # And it has to accept that the CANCEL request may have no to tag!
-                invite_str.report_request(msg)
-            else:
-                status = Status(481, "Transaction Does Not Exist")
-                cancel_response = make_simple_response(msg, status)
-                tr.send(cancel_response)
-                
-            return True
+            return
             
         if method == "ACK":
             invite_tr = self.server_transactions.get((branch, "INVITE"))
@@ -458,28 +445,23 @@ class TransactionManager(Loggable):
                 # Send a virtual ACK response to notify the transaction.
                 # But don't create an AckServerTransaction here, we have no one to notify.
                 invite_tr.send(make_virtual_response())
-                return True
+                return
                 
-        return False
-
-
-    def create_incoming_request(self, msg, report_request):
-        branch, method = identify(msg)
-
+        # Create new
         if method == "INVITE":
-            tr = InviteServerTransaction(Weak(self), branch, report_request)
+            tr = InviteServerTransaction(proxy(self), branch)
         elif method == "ACK":
             # Must create a server transaction to swallow duplicates,
             # we don't want to bother the dialogs unnecessarily.
-            tr = AckServerTransaction(Weak(self), branch, report_request)
+            tr = AckServerTransaction(proxy(self), branch)
         else:
-            tr = PlainServerTransaction(Weak(self), branch, report_request)
+            tr = PlainServerTransaction(proxy(self), branch)
 
         self.add_transaction(tr, method)
         tr.process(msg)
         
 
-    def send_message(self, msg, related_msg=None, report_response=None):
+    def send_message(self, msg, related_msg=None):
         if msg["is_response"]:
             if not related_msg:
                 raise Error("Related request is not given for response!")
@@ -493,8 +475,8 @@ class TransactionManager(Loggable):
                 
             return
 
-        if not report_response:
-            raise Error("No report_response handler for a request!")
+        #if not report_response:
+        #    raise Error("No report_response handler for a request!")
 
         method = msg["method"]
 
@@ -519,7 +501,7 @@ class TransactionManager(Loggable):
             request_params = related_msg
             branch, method = identify(request_params)
 
-            tr = PlainClientTransaction(Weak(self), branch, report_response)
+            tr = PlainClientTransaction(proxy(self), branch)
             self.add_transaction(tr, "CANCEL")
 
             # TODO: more sophisticated CANCEL generation
@@ -532,10 +514,35 @@ class TransactionManager(Loggable):
         
             tr.send(cancel_params)
         elif method == "INVITE":
-            tr = InviteClientTransaction(Weak(self), generate_branch(), report_response)
+            tr = InviteClientTransaction(proxy(self), generate_branch())
             self.add_transaction(tr, method)
             tr.send(msg)
         else:
-            tr = PlainClientTransaction(Weak(self), generate_branch(), report_response)
+            tr = PlainClientTransaction(proxy(self), generate_branch())
             self.add_transaction(tr, method)
             tr.send(msg)
+
+
+    def report_response(self, params, related_request):
+        self.response_slot.zap(params, related_request)
+
+
+    def report_request(self, params):
+        if params["method"] == "CANCEL":
+            # CANCEL-s may happen outside of any dialogs, so process them here
+            # FIXME: not necessarily INVITE
+            branch, method = identify(params)
+            invite_str = self.server_transactions.get((branch, "INVITE"))
+            
+            if not invite_str:
+                status = Status(481, "Transaction Does Not Exist")
+                cancel_response = make_simple_response(params, status)
+                cancel_str = self.server_transactions.get((branch, "CANCEL"))
+                cancel_str.send(cancel_response)
+                return
+
+            # The responses to INVITE and CANCEL must have a To tag, so they must
+            # be generated by the Dialog.
+            # And it has to accept that the CANCEL request may have no to tag!
+    
+        self.request_slot.zap(params)

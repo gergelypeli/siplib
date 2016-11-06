@@ -3,10 +3,9 @@ from __future__ import print_function, unicode_literals, absolute_import
 import uuid
 import datetime
 import collections
-#import logging
+from weakref import proxy
 
 from format import Nameaddr, Status
-from async_base import WeakMethod, Weak
 from transactions import make_simple_response
 from util import Loggable
 
@@ -131,23 +130,19 @@ class Record(object):
 
 
 class RecordManager(Loggable):
-    def __init__(self, transmission):
+    def __init__(self, switch):
         Loggable.__init__(self)
 
-        self.transmission = transmission
+        self.switch = switch
         self.records_by_uri = {}
         
         
     def reject_request(self, msg, status):
         if msg:
             response = make_simple_response(msg, status)
-            self.transmission(response, msg)
+            self.transmit(response, msg)
 
 
-    def reject(self, code, reason):
-        return WeakMethod(self.reject_request, Status(code, reason))
-        
-        
     def add_record(self, record_uri):
         record = self.records_by_uri.get(record_uri)
         
@@ -155,13 +150,13 @@ class RecordManager(Loggable):
             self.logger.debug("Found record: '%s'" % (record_uri,))
         else:
             self.logger.debug("Created record: %s" % (record_uri,))
-            record = Record(Weak(self), record_uri)
+            record = Record(proxy(self), record_uri)
             self.records_by_uri[record_uri] = record
             
         return record
         
         
-    def match_incoming_request(self, params):
+    def process_request(self, params):
         if params["method"] != "REGISTER":
             raise Error("RecordManager has nothing to do with this request!")
         
@@ -171,18 +166,19 @@ class RecordManager(Loggable):
         if registering_uri != record_uri:
             # Third party registrations not supported yet
             # We'd need to know which account is allowed to register which
-            return self.reject(403, "Forbidden")
+            self.reject_request(params, Status(403, "Forbidden"))
+            return
         
         if record_uri.scheme != "sip":
-            return self.reject(404, "Not Found")
+            self.reject_request(params, Status(404, "Not Found"))
+            return
             
         record = self.add_record(record_uri)
+        record.recv_request(params)
         
-        return WeakMethod(record.recv_request)
         
-        
-    def transmit(self, params, related_params=None, report_response=None):
-        self.transmission(params, related_params, report_response)
+    def transmit(self, params, related_params=None):
+        self.switch.send_message(params, related_params)
 
 
     def emulate_registration(self, record_uri, contact_uri, seconds, hop):
@@ -231,7 +227,7 @@ class Registration(object):
         self.record_uri = record_uri
         self.contact_uri = contact_uri
         
-        self.hop = hop or self.registration_manager.get_hop(registrar_uri)
+        self.hop = hop or self.registration_manager.select_hop(registrar_uri)
         self.local_tag = generate_tag()  # make it persistent just for the sake of safety
         self.call_id = generate_call_id()
         self.cseq = 0
@@ -249,7 +245,7 @@ class Registration(object):
         self.send_request(user_params)
         
         
-    def process(self, params):
+    def process_response(self, params):
         total = []
 
         for contact_nameaddr in params["contact"]:
@@ -269,10 +265,6 @@ class Registration(object):
 
         dialog_params = {
             "is_response": False,
-            #"uri": self.registrar_uri,
-            #"from": user_params["from"],
-            #"to": user_params["to"],
-            #"contact": user_params["contact"],
             "call_id": self.call_id,
             "cseq": self.cseq,
             "maxfwd": MAXFWD,
@@ -308,39 +300,49 @@ class Registration(object):
 
     def send_request(self, user_params):
         params = self.make_request(user_params)
-        self.registration_manager.transmit(params, None, WeakMethod(self.recv_response))
+        self.registration_manager.transmit(params, None)
 
 
     def recv_response(self, msg, related_request):
         params = self.take_response(msg, related_request)
         if params:  # may have been retried
-            self.process(params)
+            self.process_response(params)
 
 
 class RegistrationManager(Loggable):
-    def __init__(self, transmission, hopping, authing):
+    def __init__(self, switch):
         Loggable.__init__(self)
 
-        self.transmission = transmission
-        self.hopping = hopping
-        self.authing = authing
+        self.switch = switch
         self.registrations_by_id = {}
         
         
-    def get_hop(self, uri):
-        return self.hopping(uri)
+    def select_hop(self, uri):
+        return self.switch.select_hop(uri)
 
 
     def provide_auth(self, params, related_request):
-        return self.authing(params, related_request)
+        return self.switch.provide_auth(params, related_request)
         
 
-    def transmit(self, params, related_params=None, report_response=None):
-        self.transmission(params, related_params, report_response)
+    def transmit(self, params, related_params=None):
+        self.switch.send_message(params, related_params)
 
 
     def start_registration(self, registrar_uri, record_uri, contact_uri, hop=None):
         id = (registrar_uri.print(), record_uri.print())
-        registration = Registration(Weak(self), registrar_uri, record_uri, contact_uri, hop)
+        registration = Registration(proxy(self), registrar_uri, record_uri, contact_uri, hop)
         self.registrations_by_id[id] = registration
         registration.update()
+
+
+    def process_response(self, params, related_request):
+        registrar_uri = related_request['uri']
+        record_uri = related_request['to'].uri
+        id = (registrar_uri.print(), record_uri.print())
+        registration = self.registrations_by_id.get(id)
+        
+        if registration:
+            registration.recv_response(params, related_request)
+        else:
+            self.logger.warning("Ignoring response to unknown registration!")

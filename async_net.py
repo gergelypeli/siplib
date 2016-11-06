@@ -1,8 +1,10 @@
 import socket
 import errno
-import logging
+#import logging
 import os
-from async_base import WeakMethod
+
+import zap
+from util import Loggable
 
 
 __all__ = [
@@ -27,28 +29,30 @@ def lookup_host_alias(host):
     return None
 
 
-class Listener(object):
+class Listener(Loggable):
     """
     Bind to a port and accept incoming connections, invoking a handler for each
     created socket.
     """
 
-    def __init__(self, type, metapoll, addr, handler):
+    def __init__(self, type, addr):
+        Loggable.__init__(self)
+        
         self.type = type
-        self.metapoll = metapoll
-        self.handler = handler
+        self.accepted_slot = zap.EventSlot()
 
         self.socket = self.create_socket()
-        self.socket.setblocking(0)
+        self.socket.setblocking(False)
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.socket.bind(addr)
-        self.socket.listen(10)
+        self.socket.listen()
 
-        self.metapoll.register_reader(self.socket, WeakMethod(self.incoming))
+        self.incoming_plug = zap.read_slot(self.socket).plug(self.incoming)
 
         # This is the actual address (allocated by the kernel if necessary)
         self.addr = self.socket.getsockname()
-        logging.info("Listening for %s on %s" % (type, self.addr))
+        # FIXME: can't log from constructor without oid!
+        #self.logger.info("Listening for %s on %s" % (type, self.addr))
 
 
     def get_socket(self):
@@ -57,13 +61,14 @@ class Listener(object):
 
     def incoming(self):
         """Handles new connections to the listening socket"""
+        self.logger.debug("Accepting")
         s, addr = self.socket.accept()
-        s.setblocking(0)
+        s.setblocking(False)
 
         id = self.identify(s, addr)
-        logging.debug("Accepted %s connection from %s" % (self.type, id))
+        self.logger.debug("Accepted %s connection from %s" % (self.type, id))
 
-        self.handler(s, id)
+        self.accepted_slot.zap(s, addr)
 
 
     def create_socket(self):
@@ -129,20 +134,22 @@ class UnixListener(Listener):
         return "UNIX-%d" % n
 
 
-class Reconnector(object):
+class Reconnector(Loggable):
     """
     Creates a stream connection. If fails, it retries in intervals until succeeds, then
     call the given callback with the created socket, and stops. Must be restarted manually
     after the user thinks the connection is broken.
     """
-    def __init__(self, type, metapoll, addr, timeout, connected_handler):
+    def __init__(self, type, addr, timeout):
+        Loggable.__init__(self)
+        
         self.type = type
-        self.metapoll = metapoll
         self.addr = addr
         self.timeout = timeout
-        self.connected_handler = connected_handler
+        self.connected_slot = zap.EventSlot()
         self.socket = None
-        self.reconnecting_handle = None
+        self.reconnecting_plug = None  # MethodPlug(self.reconnect)
+        self.completing_plug = None  # MethodPlug(self.complete)
         self.local_addr = (os.environ.get('VFTESTHOST', ''), 0)
 
 
@@ -155,14 +162,13 @@ class Reconnector(object):
             return
 
         # If currently scheduled, then cancel that and try immediately
-        if self.reconnecting_handle:
-            self.metapoll.unregister_timeout(self.reconnecting_handle)
+        if self.reconnecting_plug:
+            self.reconnecting_plug.unplug()
         else:
-            logging.info("Started %s reconnection to %s" % (self.type, self.addr))
+            self.logger.info("Started %s reconnection to %s" % (self.type, self.addr))
 
         if self.timeout:
-            self.reconnecting_handle = self.metapoll.register_timeout(
-                    self.timeout, WeakMethod(self.reconnect), repeat=True)
+            self.reconnecting_plug = zap.time_slot(self.timeout, repeat=True).plug(self.reconnect)
 
         self.reconnect()
 
@@ -176,44 +182,47 @@ class Reconnector(object):
         #else:
         #    logging.debug("Attempting %s reconnection to %s" % (self.type, self.addr))
 
+        self.logger.debug("Reconnecting")
         self.socket = self.create_socket()
-        self.socket.setblocking(0)
+        self.socket.setblocking(False)
         self.socket.bind(self.local_addr)
 
         try:
             self.socket.connect(self.addr)
         except socket.error as e:
             if e.errno != errno.EINPROGRESS:
-                logging.debug("%s connection attempt to %s failed immediately, %s retry" %
+                self.logger.debug("%s connection attempt to %s failed immediately, %s retry" %
                         (self.type, self.addr, "will" if self.timeout else "won't"))
                 self.socket = None
                 return
         else:
-            logging.debug("%s connect unexpectedly succeeded" % self.type)
+            self.logger.debug("%s connect unexpectedly succeeded" % self.type)
 
-        self.metapoll.register_writer(self.socket, WeakMethod(self.connected))
+        self.completing_plug = zap.write_slot(self.socket).plug(self.complete)
+        #self.completing_plug = MethodPlug(self.connected).attach(zap.write_slot(self.socket))
+        #zap.write_slot(self.socket).plug(self.connected)
 
 
-    def connected(self):
+    def complete(self):
         """Handle the results of a connection attempt."""
-        self.metapoll.register_writer(self.socket, None)
+        self.logger.debug("Completing")
+        self.completing_plug.unplug()
 
         if self.socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) != 0:
-            logging.debug("%s connection attempt to %s failed, %s retry" %
+            self.logger.debug("%s connection attempt to %s failed, %s retry" %
                     (self.type, self.addr, "will" if self.timeout else "won't"))
             self.socket = None
             return
 
-        logging.debug("Successful %s reconnection to %s" % (self.type, self.addr))
+        self.logger.debug("Successful %s reconnection to %s" % (self.type, self.addr))
 
-        if self.timeout:
-            self.metapoll.unregister_timeout(self.reconnecting_handle)
+        if self.reconnecting_plug:
+            self.reconnecting_plug.unplug()
 
         s = self.socket
         self.socket = None
 
-        if self.connected_handler:
-            self.connected_handler(s)
+        self.connected_slot.zap(s)
 
 
     def create_socket(self):
@@ -281,45 +290,31 @@ class Connection(object):
         flushed - called when the output buffer gets empty
     """
 
-    def __init__(self, metapoll, socket, keepalive_interval=None):
-        self.metapoll = metapoll
+    def __init__(self, socket, keepalive_interval=None):
         self.socket = socket
 
         self.outgoing_buffer = b""
         self.outgoing_queue = []
         self.incoming_buffer = b""
         self.incoming_message = None
+        
+        self.process_slot = zap.EventSlot()
+        self.disconnect_slot = zap.Slot()
+        self.exhausted_slot = zap.Slot()
+        self.flushed_slot = zap.Slot()
 
-        self.process_handler = None
-        self.disconnect_handler = None
-        self.exhausted_handler = None
-        self.flushed_handler = None
-
-        self.metapoll.register_reader(self.socket, WeakMethod(self.readable))
-        self.metapoll.register_writer(self.socket, WeakMethod(self.writable))
-
+        self.read_plug = zap.read_slot(self.socket).plug(self.readable)
+        self.write_plug = zap.write_slot(self.socket).plug(self.writable)
+        
         if keepalive_interval:
-            self.metapoll.register_timeout(keepalive_interval, WeakMethod(self.keepalive), repeat=True)
-
-
-    def __del__(self):
-        self.metapoll.register_reader(self.socket, None)
-        self.metapoll.register_writer(self.socket, None)
+            self.time_plug = zap.time_slot(keepalive_interval, repeat=True).plug(self.keepalive)
 
 
     def keepalive(self):
         if not self.outgoing_buffer:
             # Send empty lines now and then
             self.outgoing_buffer = b"\n"
-            self.metapoll.register_writer(self.socket, WeakMethod(self.writable))
-
-
-    def register(self, process_handler, disconnect_handler, exhausted_handler, flushed_handler):
-        """Set the event handling callbacks"""
-        self.process_handler = process_handler
-        self.disconnect_handler = disconnect_handler
-        self.exhausted_handler = exhausted_handler
-        self.flushed_handler = flushed_handler
+            self.write_plug = zap.write_slot(self.socket).plug(self.writable)
 
 
     def writable(self):
@@ -329,12 +324,9 @@ class Connection(object):
                 sent = self.socket.send(self.outgoing_buffer)
             except IOError as e:
                 # Note: SCTP sockets doesn't raise the specialized socket.error!
-                logging.error("Socket error while sending: %s" % e)
-                self.metapoll.register_writer(self.socket, None)
-
-                if self.disconnect_handler:
-                    self.disconnect_handler()
-
+                self.logger.error("Socket error while sending: %s" % e)
+                self.write_plug.unplug()
+                self.disconnect_slot.zap()
                 return
 
             self.outgoing_buffer = self.outgoing_buffer[sent:]
@@ -343,13 +335,11 @@ class Connection(object):
             if self.outgoing_queue:
                 self.outgoing_buffer = self.outgoing_queue.pop(0)
             else:
-                self.metapoll.register_writer(self.socket, None)
-
-                if self.flushed_handler:
-                    self.flushed_handler()
+                self.write_plug.unplug()
+                self.flushed_slot.zap()
 
 
-    def get_incoming_message(self):
+    def check_incoming_message(self):
         """Check and parse messages from the incoming buffer."""
         if self.incoming_message is None:
             # No header processed yet, look for the next one
@@ -363,7 +353,7 @@ class Connection(object):
             if separator:
                 # Found a header, create the Message with no body yet
                 self.incoming_buffer = rest
-                #logging.info("Incoming message with header %r" % header)
+                #self.logger.info("Incoming message with header %r" % header)
                 lines = header.split(b"\n")
 
                 msg = Message(lines[0])
@@ -407,13 +397,13 @@ class Connection(object):
                 if e.errno == errno.EAGAIN:
                     break
 
-                logging.error("Socket error while receiving: %s" % e)
-                self.metapoll.register_reader(self.socket, None)
+                self.logger.error("Socket error while receiving: %s" % e)
+                self.read_plug.unplug()
                 disconnected = True
                 break
 
             if not recved:
-                self.metapoll.register_reader(self.socket, None)
+                self.read_plug.unplug()
                 exhausted = True
                 break
 
@@ -422,27 +412,19 @@ class Connection(object):
         # Since the user will get no further notifications if some incoming messages remain
         # buffered, all available messages must be got. To help the user not to forget this,
         # we'll return all available messages in a list.
-        msgs = []
-
         while True:
-            msg = self.get_incoming_message()
+            msg = self.check_incoming_message()
 
             if msg:
-                msgs.append(msg)
+                self.process_slot.zap(msg)
             else:
                 break
 
-        if msgs:
-            if self.process_handler:
-                self.process_handler(msgs)
-            else:
-                logging.warning("Ignoring %d messages due to the lack of handler!" % len(msgs))
+        if exhausted:
+            self.exhausted_slot.zap()
 
-        if exhausted and self.exhausted_handler:
-            self.exhausted_handler()
-
-        if disconnected and self.disconnect_handler:
-            self.disconnect_handler()
+        if disconnected:
+            self.disconnect_slot.zap()
 
 
     def put_message(self, message):
@@ -458,5 +440,4 @@ class Connection(object):
             self.outgoing_queue.append(buffer)
         else:
             self.outgoing_buffer = buffer
-            self.metapoll.register_writer(self.socket, WeakMethod(self.writable))
-
+            self.write_plug = zap.write_slot(self.socket).plug(self.writable)

@@ -1,5 +1,6 @@
 from format import Status, Rack, make_virtual_response
 from util import Loggable
+import zap
 
 
 START = "START"
@@ -30,8 +31,8 @@ class Error(Exception):
 
 
 class InviteState(Loggable):
-    def __init__(self, send_message):
-        self.send_message = send_message
+    def __init__(self):
+        self.message_slot = zap.EventSlot()
         
         self.state = START
         self.request = None
@@ -42,6 +43,10 @@ class InviteState(Loggable):
         self.pending_sdp = None
         self.pending_messages = []
 
+
+    def send_message(self, msg, related_msg=None):
+        self.message_slot.zap(msg, related_msg)
+        
 
     def outgoing(self, message, sdp):
         if message:
@@ -118,8 +123,8 @@ class InviteState(Loggable):
 
 
 class InviteClientState(InviteState):
-    def __init__(self, send_message):
-        InviteState.__init__(self, send_message)
+    def __init__(self):
+        InviteState.__init__(self)
         
         self.unanswered_rpr = None
 
@@ -307,8 +312,8 @@ class InviteClientState(InviteState):
 # Invite server
 
 class InviteServerState(InviteState):
-    def __init__(self, send_message):
-        InviteState.__init__(self, send_message)
+    def __init__(self):
+        InviteState.__init__(self)
 
         self.unanswered_prack = None
 

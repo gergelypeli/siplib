@@ -1,11 +1,11 @@
-from async_base import WeakMethod, Weak
+from weakref import proxy
+
 from format import Status
 from transport import UdpTransport
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
 from leg import Routing, Bridge, RecordingBridge
 from leg_sip import SipLeg
-#from call import Call, Bridge, RecordingBridge
 from ground import Ground, Call
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
@@ -15,7 +15,7 @@ from mgc import Controller
 
 
 class Switch(Loggable):
-    def __init__(self, local_addr, metapoll,
+    def __init__(self, local_addr,
         transport=None, transaction_manager=None,
         record_manager=None, authority=None, registration_manager=None,
         dialog_manager=None, mgc=None, account_manager=None
@@ -26,36 +26,33 @@ class Switch(Loggable):
         self.call_count = 0
 
         self.local_addr = local_addr
-        self.metapoll = metapoll
         
         self.transport = transport or UdpTransport(
-            metapoll, local_addr, WeakMethod(self.reception)
+            local_addr,
         )
         self.transaction_manager = transaction_manager or TransactionManager(
-            local_addr, WeakMethod(self.transport.send)
+            local_addr, proxy(self.transport)
         )
         self.record_manager = record_manager or RecordManager(
-            WeakMethod(self.transaction_manager.send_message)
+            proxy(self)
         )
         self.authority = authority or Authority(
         )
         self.registration_manager = registration_manager or RegistrationManager(
-            WeakMethod(self.transaction_manager.send_message),
-            WeakMethod(self.transport.get_hop),
-            WeakMethod(self.authing)
+            proxy(self)
         )
         self.dialog_manager = dialog_manager or DialogManager(
             local_addr,
-            WeakMethod(self.transaction_manager.send_message),
-            WeakMethod(self.transport.get_hop),
-            WeakMethod(self.authing)
+            proxy(self)
         )
         self.mgc = mgc or Controller(
-            metapoll
         )
         self.account_manager = account_manager or AccountManager(
         )
-        self.ground = Ground(Weak(self.mgc))
+        self.ground = Ground(proxy(self.mgc))
+        
+        self.transaction_manager.request_slot.plug(self.process_request)
+        self.transaction_manager.response_slot.plug(self.process_response)
 
 
     def set_oid(self, oid):
@@ -75,10 +72,18 @@ class Switch(Loggable):
     def set_name(self, name):
         self.mgc.set_name(name)
         
+        
+    def select_hop(self, uri):
+        return self.transport.select_hop(uri)
+        
 
-    def authing(self, response, request):
+    def provide_auth(self, response, request):
         creds = self.account_manager.get_our_credentials()
         return self.authority.provide_auth(response, request, creds)
+        
+        
+    def send_message(self, msg, related_msg=None):
+        return self.transaction_manager.send_message(msg, related_msg)
         
     
     def reject_request(self, msg, status):
@@ -97,7 +102,7 @@ class Switch(Loggable):
         if type == "routing":
             return Routing()
         elif type == "sip":
-            return SipLeg(Dialog(Weak(self.dialog_manager)))
+            return SipLeg(Dialog(proxy(self.dialog_manager)))
         elif type == "bridge":
             return Bridge()
         elif type == "record":
@@ -107,7 +112,7 @@ class Switch(Loggable):
 
 
     def make_call(self):
-        return Call(Weak(self), Weak(self.ground))
+        return Call(proxy(self), proxy(self.ground))
         
         
     def start_call(self, incoming_leg):
@@ -122,13 +127,13 @@ class Switch(Loggable):
         call.start(incoming_leg)
 
 
-    def start_sip_call(self, params):  # TODO: params unused
-        incoming_dialog = Dialog(Weak(self.dialog_manager))
+    def start_sip_call(self, params):
+        incoming_dialog = Dialog(proxy(self.dialog_manager))
         incoming_leg = SipLeg(incoming_dialog)
         
         self.start_call(incoming_leg)
         
-        return WeakMethod(incoming_dialog.recv_request)
+        incoming_dialog.recv_request(params)
         
 
     def call_finished(self, call):
@@ -145,17 +150,18 @@ class Switch(Loggable):
         
         if method in ("CANCEL", "ACK"):
             self.logger.debug("Accepting request because it can't be authenticated anyway")
-            return None
+            return False
         elif method == "PRACK":
             # TODO: this is only for debugging
             self.logger.debug("Accepting request because we're lazy to authenticate a PRACK")
-            return None
+            return False
         elif not auth_policy:
             self.logger.debug("Rejecting request because account is unknown")
-            return WeakMethod(self.reject_request, Status(403, "Forbidden"))
+            self.reject_request(Status(403, "Forbidden"))
+            return True
         elif auth_policy == Account.AUTH_NEVER:
             self.logger.debug("Accepting request because authentication is never needed")
-            return None
+            return False
         elif auth_policy == Account.AUTH_ALWAYS:
             self.logger.debug("Authenticating request because account always needs it")
         elif auth_policy == Account.AUTH_IF_UNREGISTERED:
@@ -165,17 +171,18 @@ class Switch(Loggable):
                 self.logger.debug("Authenticating request because account is not registered")
             else:
                 self.logger.debug("Accepting request because account is registered")
-                return None
+                return False
         elif auth_policy == Account.AUTH_BY_HOP:
             self.logger.debug("Hop: %r, hops: %r" % (hop, self.account_manager.get_account_hops(from_uri)))
             hop_unknown = hop not in self.account_manager.get_account_hops(from_uri)
             
             if hop_unknown:
                 self.logger.debug("Rejecting request because hop address is not allowed")
-                return WeakMethod(self.reject_request, Status(403, "Forbidden"))
+                self.reject_request(Status(403, "Forbidden"))
+                return True
             else:
                 self.logger.debug("Accepting request because hop address is allowed")
-                return None
+                return False
         else:
             raise Exception("WTF?")
 
@@ -183,11 +190,12 @@ class Switch(Loggable):
         challenge = self.authority.require_auth(params, creds)
         
         if challenge:
-            self.logger.debug("Rejecting request without proper authentication")
-            return WeakMethod(self.challenge_request, challenge)
+            self.logger.debug("Challenging request without proper authentication")
+            self.challenge_request(params, challenge)
+            return True
         else:
             self.logger.debug("Accepting request with proper authentication")
-            return None
+            return False
     
 
     def process_request(self, params):
@@ -195,34 +203,39 @@ class Switch(Loggable):
         request_uri = params["uri"]
         
         if request_uri.scheme != "sip":  # TODO: add some addr checks, too
-            return WeakMethod(self.reject_request, Status(404, "Not found"))
+            self.reject_request(Status(404, "Not found"))
+            return
 
-        report = self.auth_request(params)
-        if report:
-            return report
+        processed = self.auth_request(params)
+        if processed:
+            return
 
         if method == "REGISTER":
             # If the From URI was OK, then the To URI is as well, because
             # we don't support third party registrations now.
-            return self.record_manager.match_incoming_request(params)
-
-        report = self.dialog_manager.match_incoming_request(params)
-        if report:
-            return report
-    
-        if method == "INVITE" and "tag" not in params["to"].params:
-            return self.start_sip_call(params)
-    
-        return WeakMethod(self.reject_request, Status(400, "Bad request"))
-        
-
-    def reception(self, params):
-        #print("Got message from transport.")
-        #print("Req params: %s" % req_params)
-    
-        if self.transaction_manager.match_incoming_message(params):
+            self.record_manager.process_request(params)
             return
 
-        report = self.process_request(params)
+        processed = self.dialog_manager.process_request(params)
+        if processed:
+            return
+    
+        if method == "INVITE" and "tag" not in params["to"].params:
+            self.start_sip_call(params)
+            return
+    
+        self.reject_request(Status(400, "Bad request"))
+
+
+    def process_response(self, params, related_request):
+        method = params["method"]
         
-        self.transaction_manager.create_incoming_request(params, report)
+        if method == "REGISTER":
+            self.registration_manager.process_response(params, related_request)
+            return
+
+        processed = self.dialog_manager.process_response(params, related_request)
+        if processed:
+            return
+
+        self.logger.warning("Ignoring unknown response!")

@@ -1,19 +1,15 @@
 #! /usr/bin/python3
 
-from datetime import timedelta
 import logging
 import logging.config
 from copy import deepcopy
 import sys
+from weakref import proxy
 
-from async_base import Metapoll, WeakMethod, Weak
 from format import Addr, Uri, Nameaddr, Status, SipError, Hop
 from transport import UdpTransport
 from transactions import TransactionManager
-#from dialog import Dialog, DialogManager
 from leg import PlannedLeg, LegPlan, SimpleRouting, PlannedRouting, RoutingPlan
-#from call import Call, SimpleRouting, PlannedRouting
-#from ground import Call
 from sdp import Sdp
 from authority import Authority
 from registrar import RecordManager
@@ -22,6 +18,7 @@ from util import setup_logging, build_oid, my_exchandler
 from mgw import MediaGateway
 from mgc import Controller  #, PlayerMediaLeg, EchoMediaLeg
 from switch import Switch
+import zap
 
 HOST = "otthon"
 A_ADDR = Addr(HOST, 5060)
@@ -206,8 +203,8 @@ class TestAuthority(Authority):
 
 
 class TestController(Controller):
-    def __init__(self, metapoll, ports):
-        super().__init__(metapoll)
+    def __init__(self, ports):
+        super().__init__()
         
         #self.mgw_addr = resolve(mgw_addr)
         
@@ -249,10 +246,10 @@ class TestRouting(SimpleRouting):
 
 
 class TestSwitch(Switch):
-    def __init__(self, metapoll, local_addr, mgw_addr, media_ports):
-        transport = UdpTransport(metapoll, local_addr, WeakMethod(self.reception))
-        transaction_manager = TransactionManager(local_addr, WeakMethod(transport.send))
-        record_manager = TestRecordManager(WeakMethod(transaction_manager.send_message))
+    def __init__(self, local_addr, mgw_addr, media_ports):
+        transport = UdpTransport(local_addr)
+        transaction_manager = TransactionManager(local_addr, proxy(transport))
+        record_manager = TestRecordManager(proxy(self))
         authority = TestAuthority()
         #self.registration_manager = RegistrationManager(
         #    WeakMethod(self.transaction_manager.send_message),
@@ -265,36 +262,37 @@ class TestSwitch(Switch):
         #    WeakMethod(self.transport.get_hop),
         #    WeakMethod(self.authing)
         #)
-        mgc = TestController(metapoll, media_ports)
+        mgc = TestController(media_ports)
         mgc.add_mgw_addr(mgw_addr)
         #self.account_manager = AccountManager()
 
         Switch.__init__(
-            self, local_addr, metapoll,
+            self, local_addr,
             transport=transport, transaction_manager=transaction_manager,
             record_manager=record_manager, authority=authority, registration_manager=None,
             dialog_manager=None, mgc=mgc, account_manager=None
         )
 
-        metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
+        #metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
+        zap.time_slot(0.2, repeat=True).plug(self.transaction_manager.maintenance)
 
 
     def make_thing(self, type):
         if type == "routing":
             return TestRouting()
         elif type == "callee":
-            return PlannedLeg(CalleeLegPlan(self.metapoll))
+            return PlannedLeg(CalleeLegPlan())
         elif type == "unreachable":
-            return PlannedLeg(UnreachableLegPlan(self.metapoll))
+            return PlannedLeg(UnreachableLegPlan())
         elif type == "ringing":
-            return PlannedLeg(RingingLegPlan(self.metapoll))
+            return PlannedLeg(RingingLegPlan())
         else:
             return Switch.make_thing(self, type)
 
 
 class SwitchA(TestSwitch):
-    def __init__(self, metapoll, *args):
-        super().__init__(metapoll, *args)
+    def __init__(self, *args):
+        super().__init__(*args)
         
         # This can register to accept calls
         callee_uri = Uri(Addr(A_DOMAIN, None), CALLEE_NUMBER)
@@ -313,7 +311,8 @@ class SwitchA(TestSwitch):
         self.account_manager.set_our_credentials(*A_CRED)
         
         #metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_dialing))
-        metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_snoming))
+        #metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_snoming))
+        zap.time_slot(2).plug(self.test_snoming)
         
         
     def test_dialing(self):
@@ -382,8 +381,8 @@ class SwitchB(TestSwitch):
                 TestRouting.route(self, action)
 
 
-    def __init__(self, metapoll, *args):
-        super().__init__(metapoll, *args)
+    def __init__(self, *args):
+        super().__init__(*args)
         
         phone_uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
         
@@ -391,13 +390,14 @@ class SwitchB(TestSwitch):
         
         self.account_manager.set_our_credentials(*B_CRED)
 
-        metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
         #metapoll.register_timeout(timedelta(seconds=10), WeakMethod(self.test_dialing))
+        #metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
+        zap.time_slot(1).plug(self.test_registering)
 
 
     def make_thing(self, type):
         if type == "routing":
-            return PlannedRouting(self.RoutingPlan(self.metapoll))
+            return PlannedRouting(self.RoutingPlan())
         else:
             return TestSwitch.make_thing(self, type)
 
@@ -415,7 +415,7 @@ class SwitchB(TestSwitch):
     def test_dialing(self):
         self.logger.debug("Dialing begins.")
 
-        incoming_leg = PlannedLeg(CallerLegPlan(self.metapoll))
+        incoming_leg = PlannedLeg(CallerLegPlan())
         self.start_call(incoming_leg)
 
 
@@ -429,23 +429,22 @@ def main():
     
     logging.debug("Hello!")
 
-    metapoll = Metapoll()
+    #metapoll = Metapoll()
 
-    mgw = MediaGateway(metapoll, MGW_ADDR)
+    mgw = MediaGateway(MGW_ADDR)
     mgw.set_oid("mgw")
     mgw.set_name("the-mgw")
 
-    switch_a = SwitchA(Weak(metapoll), A_ADDR.resolve(), MGW_ADDR, range(30000, 30020, 2))
+    switch_a = SwitchA(A_ADDR.resolve(), MGW_ADDR, range(30000, 30020, 2))
     switch_a.set_oid(build_oid(None, "switch", "a"))
     switch_a.set_name("switch-a")
     
-    switch_b = SwitchB(Weak(metapoll), B_ADDR.resolve(), MGW_ADDR, range(40000, 40020, 2))
+    switch_b = SwitchB(B_ADDR.resolve(), MGW_ADDR, range(40000, 40020, 2))
     switch_b.set_oid(build_oid(None, "switch", "b"))
     switch_b.set_name("switch-b")
 
     try:
-        while True:
-            metapoll.do_poll()
+        zap.loop()
     except KeyboardInterrupt:
         pass
     except Exception:
@@ -457,7 +456,7 @@ def main():
         del switch_b
         del switch_a
         del mgw
-        del metapoll
+        #del metapoll
     
         logging.debug("Bye!")
 

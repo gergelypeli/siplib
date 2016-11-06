@@ -1,11 +1,10 @@
 import socket
-import weakref
+from weakref import proxy, WeakValueDictionary
 
 from rtp import read_wav, write_wav, RtpPlayer, RtpRecorder, RtpBuilder, RtpParser, DtmfExtractor, DtmfInjector, Format
 from msgp import MsgpPeer  # MsgpServer
-from async_base import WeakMethod, Weak
 from util import Loggable, build_oid
-
+import zap
 
 class Error(Exception): pass
 
@@ -22,11 +21,11 @@ class Thing(Loggable):
         
     def set_mgw(self, mgw):
         self.mgw = mgw
-        
-    
-    def report(self, tag, params, response_handler=None):
-        msgid = (self.owner_sid, tag)
-        self.mgw.report(msgid, dict(params, id=self.label), response_handler=response_handler)
+
+
+    def report(self, target, params, response_tag=None):
+        msgid = (self.owner_sid, target)
+        self.mgw.report(msgid, dict(params, id=self.label), response_tag=response_tag)
         
         
     def modify(self, params):
@@ -42,7 +41,7 @@ class Leg(Thing):
         super().__init__(oid, label, owner_sid)
         
         self.type = type
-        self.forward_handler = None
+        self.forward_slot = zap.EventSlot()
         self.logger.debug("Created %s leg" % self.type)
         
         
@@ -50,13 +49,9 @@ class Leg(Thing):
         self.logger.debug("Deleted %s leg" % self.type)
 
 
-    def set_forward_handler(self, fh):
-        self.forward_handler = fh
-    
-        
     def recv_packet(self, packet):
-        if self.forward_handler:
-            self.forward_handler(packet)
+        if self.forward_slot.plugs:  # FIXME: there should be a better way
+            self.forward_slot.zap(packet)
         else:
             self.logger.warning("No context to forward media to!")
 
@@ -66,7 +61,7 @@ class Leg(Thing):
 
 
 class PassLeg(Leg):
-    pass_legs_by_label = weakref.WeakValueDictionary()
+    pass_legs_by_label = WeakValueDictionary()
     
     
     def __init__(self, oid, label, owner_sid):
@@ -145,29 +140,21 @@ class PassLeg(Leg):
         
 
 class NetLeg(Leg):
-    def __init__(self, oid, label, owner_sid, metapoll):
+    def __init__(self, oid, label, owner_sid):
         super().__init__(oid, label, owner_sid, "net")
         
         self.local_addr = None
         self.remote_addr = None
         self.socket = None
-        self.metapoll = metapoll
-        #self.send_pts_by_format = None
-        #self.recv_formats_by_pt = None
         self.rtp_parser = RtpParser()
         self.rtp_builder = RtpBuilder()
-        self.dtmf_extractor = DtmfExtractor(WeakMethod(self.dtmf_detected))
+        self.dtmf_extractor = DtmfExtractor()
+        self.dtmf_detected_plug = self.dtmf_extractor.dtmf_detected_slot.plug(self.dtmf_detected)
         self.dtmf_extractor.set_oid(build_oid(self.oid, "dtmf-ex"))
         self.dtmf_injector = DtmfInjector()
         self.dtmf_injector.set_oid(build_oid(self.oid, "dtmf-in"))
+        self.recved_plug = None
         
-        
-    def __del__(self):
-        if self.socket:
-            self.metapoll.register_reader(self.socket, None)
-            
-        super().__del__()
-            
         
     def modify(self, params):
         super().modify(params)
@@ -191,12 +178,13 @@ class NetLeg(Leg):
         if "local_addr" in params:
             try:
                 if self.socket:
-                    self.metapoll.register_reader(self.socket, None)
+                    self.recved_plug.unplug()
                     
                 self.local_addr = tuple(params["local_addr"])
                 self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                self.socket.setblocking(False)
                 self.socket.bind(self.local_addr)
-                self.metapoll.register_reader(self.socket, WeakMethod(self.recved))
+                self.recved_plug = zap.read_slot(self.socket).plug(self.recved)
             except Exception as e:
                 raise Error("Couldn't set up net leg: %s" % e)
             
@@ -231,11 +219,11 @@ class NetLeg(Leg):
     
     
     def dtmf_detected(self, name):
-        self.report("tone", dict(name=name), response_handler=WeakMethod(self.dtmf_detected_response))
+        self.report("tone", dict(name=name))
         
         
-    def dtmf_detected_response(self, msgid, params):
-        self.logger.debug("Seems like he MGC %sacknowledged our DTMF!" % ("" if msgid[1] else "NOT "))
+    #def dtmf_detected_response(self, msgid, params):
+    #    self.logger.debug("Seems like he MGC %sacknowledged our DTMF!" % ("" if msgid[1] else "NOT "))
         
         
     def send_checked(self, packet):
@@ -287,10 +275,9 @@ class EchoLeg(Leg):
 
 
 class PlayerLeg(Leg):
-    def __init__(self, oid, label, owner_sid, metapoll):
+    def __init__(self, oid, label, owner_sid):
         super().__init__(oid, label, owner_sid, "player")
         
-        self.metapoll = metapoll
         self.rtp_player = None
         self.format = None
         self.volume = 1
@@ -318,7 +305,8 @@ class PlayerLeg(Leg):
         if "filename" in params:
             samples = read_wav(params["filename"])
             
-            self.rtp_player = RtpPlayer(self.metapoll, self.format, samples, WeakMethod(self.recv_packet), self.volume, fade)
+            self.rtp_player = RtpPlayer(self.format, samples, self.volume, fade)
+            self.rtp_player.packet_slot.plug(self.recv_packet)
 
 
     def send_packet(self, packet):
@@ -342,13 +330,18 @@ class Context(Thing):
         leg_labels = params["legs"]
 
         for i, leg in enumerate(self.legs):
-            leg.set_forward_handler(None)
+            leg.forward_slot.unplug_all()  # FIXME: ugly!
 
         self.legs = [ self.manager.get_leg(label) for label in leg_labels ]
 
         for i, leg in enumerate(self.legs):
-            leg.set_forward_handler(WeakMethod(self.forward, i).bind_front())
+            leg.forward_slot.plug(self.fixme, li=i)
+            #set_forward_handler(WeakMethod(self.forward, i).bind_front())
 
+
+    def fixme(self, packet, li):
+        return self.forward(li, packet)
+        
 
     def forward(self, li, packet):
         lj = (1 if li == 0 else 0)
@@ -364,14 +357,14 @@ class Context(Thing):
 
 
 class MediaGateway(Loggable):
-    def __init__(self, metapoll, mgw_addr):
+    def __init__(self, mgw_addr):
         Loggable.__init__(self)
 
-        self.metapoll = metapoll
         self.contexts_by_label = {}
         self.legs_by_label = {}
-        #self.msgp = MsgpServer(metapoll, WeakMethod(self.process_request), None, mgw_addr)
-        self.msgp = MsgpPeer(metapoll, mgw_addr, WeakMethod(self.process_request), None)
+        self.msgp = MsgpPeer(mgw_addr)
+        self.msgp.request_slot.plug(self.process_request)
+        self.msgp.response_slot.plug(self.process_response)
 
 
     def set_oid(self, oid):
@@ -387,8 +380,8 @@ class MediaGateway(Loggable):
         return self.legs_by_label[label]
 
 
-    def report(self, msgid, params, response_handler=None):
-        self.msgp.send(msgid, params, response_handler=response_handler)
+    def report(self, msgid, params, response_tag=None):
+        self.msgp.send(msgid, params, response_tag=response_tag)
         
 
     # Things
@@ -398,7 +391,7 @@ class MediaGateway(Loggable):
             raise Error("Duplicate %s!" % thing.__class__)
         
         things[thing.label] = thing
-        thing.set_mgw(Weak(self))
+        thing.set_mgw(proxy(self))
         
         return thing
         
@@ -427,7 +420,7 @@ class MediaGateway(Loggable):
     def create_context(self, label, owner_sid, type):
         if type == "proxy":
             oid = build_oid(build_oid(self.oid, "context"), label)
-            context = Context(oid, label, owner_sid, weakref.proxy(self))
+            context = Context(oid, label, owner_sid, proxy(self))
         else:
             raise Error("Invalid context type %s!" % type)
             
@@ -454,11 +447,11 @@ class MediaGateway(Loggable):
         if type == "pass":
             leg = PassLeg(oid, label, owner_sid)
         elif type == "net":
-            leg = NetLeg(oid, label, owner_sid, self.metapoll)
+            leg = NetLeg(oid, label, owner_sid)
         elif type == "echo":
             leg = EchoLeg(oid, label, owner_sid)
         elif type == "player":
-            leg = PlayerLeg(oid, label, owner_sid, self.metapoll)
+            leg = PlayerLeg(oid, label, owner_sid)
         else:
             raise Error("Invalid leg type '%s'!" % type)
 
@@ -514,3 +507,7 @@ class MediaGateway(Loggable):
             self.msgp.send(msgid, "error")
         else:
             self.msgp.send(msgid, "ok")
+
+
+    def process_response(self, response_tag, msgid, params):
+        self.logger.debug("Got response for %s: %s" % (response_tag, params))

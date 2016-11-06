@@ -1,7 +1,9 @@
-from async_base import Weak, WeakMethod
-from planner import Plan
+from weakref import proxy
+
 from util import build_oid, Loggable
 from format import SipError, Status
+import zap
+
 
 class Error(Exception): pass
 
@@ -27,7 +29,7 @@ class CallComponent(Loggable):
         raise NotImplementedError()
         
         
-class BareLeg(CallComponent):
+class BareLeg(CallComponent):  # FIXME: merge with Leg now
     def __init__(self):
         CallComponent.__init__(self)
         
@@ -95,7 +97,8 @@ class Leg(BareLeg):
         # Initiated
         for i, ml in enumerate(self.media_legs):
             self.logger.debug("Deleting media leg %s." % i)
-            ml.delete(WeakMethod(self.media_finished, i, error))  # lame error handling
+            ml.delete()
+            self.media_legs[i] = None  # FIXME: media_finished is now unnecessary
         
         self.may_finish(error)
 
@@ -120,9 +123,9 @@ class SlotLeg(Leg):
 
 
 
-class LegPlan(Plan):
-    def __init__(self, metapoll):
-        Plan.__init__(self, metapoll)
+class LegPlan(zap.Plan):
+    def __init__(self):
+        zap.Plan.__init__(self)
         
         self.leg = None
         
@@ -132,8 +135,7 @@ class LegPlan(Plan):
         
         
     def wait_action(self, action_type=None, timeout=None):
-        tag, event = yield from self.suspend(expect="action", timeout=timeout)
-        action = event
+        action = yield from self.wait_event(timeout=timeout)
         
         if action_type and action["type"] != action_type:
             raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
@@ -153,7 +155,7 @@ class PlannedLeg(Leg):
         Leg.__init__(self)
         
         self.plan = plan
-        self.plan.set_leg(Weak(self))
+        self.plan.set_leg(proxy(self))
 
 
     def __del__(self):
@@ -171,7 +173,8 @@ class PlannedLeg(Leg):
 
 
     def do(self, action):
-        self.plan.resume("action", action)
+        self.plan.queue(action)
+        #self.plan.resume("action", action)
 
 
     def plan_finished(self, error):
@@ -315,7 +318,7 @@ class Routing(CallComponent):
         self.leg_count += 1
 
         slot_leg = self.call.make_slot(self, li)
-        self.legs[li] = Weak(slot_leg)
+        self.legs[li] = proxy(slot_leg)
         
         self.queued_actions[li] = []
         
@@ -444,9 +447,9 @@ class SimpleRouting(Routing):
 
 
 
-class RoutingPlan(Plan):
-    def __init__(self, metapoll):
-        Plan.__init__(self, metapoll)
+class RoutingPlan(zap.Plan):
+    def __init__(self):
+        zap.Plan.__init__(self)
         
         self.routing = None
         
@@ -461,8 +464,7 @@ class RoutingPlan(Plan):
         
         
     def wait_action(self, leg_index=None, action_type=None, timeout=None):
-        tag, event = yield from self.suspend(expect="action", timeout=timeout)
-        li, action = event
+        li, action = yield from self.wait_event(timeout=timeout)
 
         if leg_index is not None and li != leg_index:
             raise Exception("Expected action from %s, got from %s!" % (leg_index, li))
@@ -480,7 +482,7 @@ class PlannedRouting(Routing):
         Routing.__init__(self)
 
         self.plan = plan
-        self.plan.set_routing(Weak(self))
+        self.plan.set_routing(proxy(self))
 
 
     def __del__(self):
@@ -502,10 +504,9 @@ class PlannedRouting(Routing):
             
 
     def plan_finished(self, exception):
-        for tag, event in self.plan.event_queue:
-            if tag == "action":
-                li, action = event
-                Routing.do_slot(self, li, action)
+        for event in self.plan.event_queue:  # FIXME: don't peek into Plan!
+            li, action = event
+            Routing.do_slot(self, li, action)
                 
         self.plan = None
         status = None
@@ -538,7 +539,7 @@ class PlannedRouting(Routing):
         if action["type"] == "dial":
             self.plan.start(action)
         elif self.plan:
-            self.plan.resume("action", (li, action))
+            self.plan.queue((li, action))
         else:
             Routing.do_slot(self, li, action)
         
@@ -555,10 +556,10 @@ class Bridge(CallComponent):
         
     def stand(self):
         incoming_leg = self.call.make_slot(self, 0)
-        self.incoming_leg = Weak(incoming_leg)
+        self.incoming_leg = proxy(incoming_leg)
 
         outgoing_leg = self.call.make_slot(self, 1)
-        self.outgoing_leg = Weak(outgoing_leg)
+        self.outgoing_leg = proxy(outgoing_leg)
         
         routing = self.call.make_thing("routing", self.path, "routing")
         self.call.link_leg_to_thing(outgoing_leg, routing)
@@ -609,8 +610,8 @@ class RecordingBridge(Bridge):
             this = self.incoming_leg.make_media_leg(i, "pass")
             that = self.outgoing_leg.make_media_leg(i, "pass")
             
-            this.pair(Weak(that))
-            that.pair(Weak(this))
+            this.pair(proxy(that))
+            that.pair(proxy(this))
             
             format = ("L16", 8000, 1, None)
             this.refresh(dict(filename="recorded.wav", format=format, record=True))

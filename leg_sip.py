@@ -1,4 +1,3 @@
-from async_base import WeakMethod
 from format import Status
 from util import build_oid
 from leg import Leg, SessionState, Error
@@ -29,7 +28,7 @@ class SipLeg(Leg):
         self.sdp_builder = SdpBuilder(host)
         self.sdp_parser = SdpParser()
         
-        self.dialog.set_report(WeakMethod(self.process))
+        self.dialog.report_slot.plug(self.process)
 
 
     def set_oid(self, oid):
@@ -58,9 +57,11 @@ class SipLeg(Leg):
             raise Error("Already has an invite!")
             
         if is_outgoing:
-            self.invite = InviteClientState(WeakMethod(self.send_request))
+            self.invite = InviteClientState()
+            self.invite.message_slot.plug(self.send_request)
         else:
-            self.invite = InviteServerState(WeakMethod(self.send_response))
+            self.invite = InviteServerState()
+            self.invite.message_slot.plug(self.send_response)
             
         self.invite.set_oid(build_oid(self.oid, "invite"))
         
@@ -118,7 +119,8 @@ class SipLeg(Leg):
         for i in range(len(local_channels)):
             if i >= len(self.media_legs):
                 self.logger.debug("Making media leg for channel %d" % i)
-                self.make_media_leg(i, "net", report=WeakMethod(self.notified))
+                self.make_media_leg(i, "net")
+                self.media_legs[i].event_slot.plug(self.notified)
                 
             lc = local_channels[i]
             rc = remote_channels[i]

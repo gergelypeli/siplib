@@ -1,4 +1,5 @@
-from async_base import Weak, WeakMethod
+from weakref import proxy
+
 from mgc import MediaContext
 from util import build_oid, Loggable
 from leg import SlotLeg
@@ -123,6 +124,7 @@ class Ground(Loggable):
         tmleg = tleg.get_media_leg(ci)
         
         # Without target changes in the source doesn't matter
+        # FIXME: shouldn't we remove the context when the target leg is deleted???
         if not tmleg or not tmleg.is_created:
             self.logger.debug("Dirty channel has no linked pair, ignoring.")
             return
@@ -185,7 +187,7 @@ class Call(Loggable):
         
 
     def setup_thing(self, thing, path, suffix):
-        thing.set_call(Weak(self), path)
+        thing.set_call(proxy(self), path)
         
         oid = self.oid
         
@@ -209,7 +211,7 @@ class Call(Loggable):
     def make_slot(self, owner, li):
         slot_leg = SlotLeg(owner, li)
         
-        slot_leg.set_call(Weak(self), None)
+        slot_leg.set_call(proxy(self), None)
         slot_leg.set_oid(build_oid(owner.oid, "slot", li))
         
         return slot_leg
@@ -260,7 +262,7 @@ class Call(Loggable):
         # TODO
         sid_affinity = None
         ml = self.switch.mgc.make_media_leg(sid_affinity, type, **kwargs)
-        ml.set_report_dirty(WeakMethod(self.ground.refresh_media, lid, channel_index))
+        ml.dirty_slot.plug(self.ground.refresh_media, slid=lid, ci=channel_index)
         
         return ml
 

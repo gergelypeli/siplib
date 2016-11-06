@@ -1,13 +1,10 @@
-from __future__ import print_function, unicode_literals, absolute_import
-
 import uuid
 from weakref import WeakValueDictionary
-#import logging
 
 from format import Uri, Nameaddr
 from sdp import Origin
-from async_base import WeakMethod
 from util import Loggable
+import zap
 
 MAXFWD = 50
 
@@ -36,30 +33,12 @@ def first(x):
     return x[0] if x else None
     
 
-def identify_dialog(dialog):
-    call_id = dialog.call_id
-    local_tag = dialog.local_nameaddr.params.get("tag")
-    remote_tag = dialog.remote_nameaddr.params.get("tag")
-        
-    did = (call_id, local_tag, remote_tag)
-    return did
-
-
-def identify_incoming_request(params):
-    call_id = params["call_id"]
-    remote_tag = params["from"].params.get("tag")
-    local_tag = params["to"].params.get("tag")
-    
-    did = (call_id, local_tag, remote_tag)
-    return did
-    
-
 class Dialog(Loggable):
     def __init__(self, dialog_manager):
         Loggable.__init__(self)
 
         self.dialog_manager = dialog_manager
-        self.report = None
+        self.report_slot = zap.EventSlot()
     
         # Things in the From/To fields
         self.local_nameaddr = None
@@ -82,12 +61,12 @@ class Dialog(Loggable):
         self.remote_sdp_session_version = None
 
 
-    def set_report(self, report):
-        self.report = report
+    def get_remote_tag(self):
+        return self.remote_nameaddr.params.get("tag") if self.remote_nameaddr else None
 
 
-    def is_established(self):
-        return self.remote_nameaddr and "tag" in self.remote_nameaddr.params;
+    def get_local_tag(self):
+        return self.local_nameaddr.params.get("tag") if self.local_nameaddr else None
         
         
     def fix_hop(self, hop):
@@ -96,7 +75,7 @@ class Dialog(Loggable):
         
         if is_next_uri_usable:
             self.logger.debug("Next URI usable, resolving to hop.")
-            self.hop = self.dialog_manager.get_hop(next_uri)
+            self.hop = self.dialog_manager.select_hop(next_uri)
         else:
             self.logger.debug("Next URI fishy, using network hop.")
             self.hop = hop
@@ -112,7 +91,7 @@ class Dialog(Loggable):
         self.route = params["record_route"]
         self.fix_hop(params["hop"])
 
-        self.dialog_manager.dialog_established(self)
+        self.dialog_manager.register(self)
         
         
     def setup_outgoing(self, request_uri, from_nameaddr, to_nameaddr, route=None, hop=None):
@@ -124,24 +103,26 @@ class Dialog(Loggable):
         self.peer_contact = Nameaddr(request_uri)
         self.route = route or []
         self.fix_hop(hop)
+        
+        self.dialog_manager.register(self)
 
 
-    def setup_outgoing2(self, params):
+    def setup_outgoing_responded(self, params):
         self.remote_nameaddr = params["to"]
         
         self.peer_contact = first(params["contact"])
         self.route = list(reversed(params["record_route"]))
         self.fix_hop(params["hop"])
-        
-        self.dialog_manager.dialog_established(self)
 
 
-    def setup_bastard(self, invite_params):
+    def setup_outgoing_bastard(self, invite_params):
         self.local_nameaddr = invite_params["from"]
         self.remote_nameaddr = invite_params["to"]
         self.peer_contact = Nameaddr(invite_params["uri"])
         self.call_id = invite_params["call_id"]
         self.last_sent_cseq = invite_params["cseq"]
+        
+        # Don't register, we already have a dialog with the same local tag
 
 
     def bastard_reaction(self, invite_params, response_params):
@@ -158,8 +139,8 @@ class Dialog(Loggable):
             self.logger.warning("Initiating bastard reaction for status %s!" % status.code)
             
             bastard = Dialog(self.dialog_manager)
-            bastard.setup_bastard(invite_params)
-            bastard.setup_outgoing2(response_params)
+            bastard.setup_outgoing_bastard(invite_params)
+            bastard.setup_outgoing_responded(response_params)
             
             bastard.send_request(dict(method="ACK"), response_params)
             bastard.send_request(dict(method="BYE"))
@@ -242,15 +223,16 @@ class Dialog(Loggable):
         else:
             self.last_recved_cseq = cseq
 
-        if self.is_established():
+        remote_tag = self.get_remote_tag()
+        if remote_tag:
             if call_id != self.call_id:
                 raise Error("Mismatching call id!")
 
-            if from_tag != self.remote_nameaddr.params["tag"]:
+            if from_tag != remote_tag:
                 raise Error("Mismatching remote tag!")
 
             # CANCEL-s may have not To tag
-            if to_tag != self.local_nameaddr.params["tag"] and not (method == "CANCEL" and not to_tag):
+            if to_tag != self.get_local_tag() and not (method == "CANCEL" and not to_tag):
                 raise Error("Mismatching local tag!")
                 
             # TODO: 12.2 only re-INVITE-s modify the peer_contact, and nothing the route set
@@ -307,7 +289,8 @@ class Dialog(Loggable):
         if from_tag != self.local_nameaddr.params["tag"]:
             raise Error("Mismatching local tag!")
 
-        if self.is_established() and to_tag != self.remote_nameaddr.params["tag"]:
+        remote_tag = self.get_remote_tag()
+        if remote_tag and to_tag != remote_tag:
             if related_request.method != "INVITE":
                 raise Error("Mismatching remote tag!")
             else:
@@ -316,8 +299,8 @@ class Dialog(Loggable):
         if status.code < 300:
             # Only successful or early responses create a dialog
 
-            if not self.is_established():
-                self.setup_outgoing2(params)
+            if not remote_tag:
+                self.setup_outgoing_responded(params)
             else:
                 # TODO: 12.2 only re-INVITE-s modify the peer_contact, and nothing the route set
                 peer_contact = first(params.get("contact"))
@@ -359,7 +342,7 @@ class Dialog(Loggable):
             # Even 2xx ACKs are in-dialog
             params = self.make_request(user_params, related_params)
             
-        self.dialog_manager.transmit(params, related_params, WeakMethod(self.recv_response))
+        self.dialog_manager.transmit(params, related_params)
 
 
     def send_response(self, user_params, related_params=None):
@@ -371,24 +354,23 @@ class Dialog(Loggable):
     def recv_request(self, msg):
         request = self.take_request(msg)
         if request:  # may have been denied
-            self.report(request)
+            self.report_slot.zap(request)
     
     
     def recv_response(self, msg, related_request):
         response = self.take_response(msg, related_request)
         if response:  # may have been retried
-            self.report(response)
+            self.report_slot.zap(response)
 
 
 class DialogManager(Loggable):
-    def __init__(self, local_addr, transmission, hopping, authing):
+    def __init__(self, local_addr, switch):
         Loggable.__init__(self)
 
         self.local_addr = local_addr
-        self.transmission = transmission
-        self.hopping = hopping
-        self.authing = authing
-        self.dialogs_by_id = WeakValueDictionary()
+        self.switch = switch
+        #self.process_response_plug = transaction_manager.process_response_slot.plug(self.process_response)
+        self.dialogs_by_local_tag = WeakValueDictionary()
 
         
     def get_local_addr(self):
@@ -399,36 +381,54 @@ class DialogManager(Loggable):
         return Nameaddr(Uri(self.local_addr))  # TODO: more flexible?
 
 
-    def get_hop(self, uri):
-        return self.hopping(uri)
+    def select_hop(self, uri):
+        return self.switch.select_hop(uri)
 
 
     def provide_auth(self, params, related_request):
-        return self.authing(params, related_request)
+        return self.switch.provide_auth(params, related_request)
+        
+        
+    def transmit(self, params, related_params=None):
+        self.switch.send_message(params, related_params)
+
+
+    def register(self, dialog):
+        local_tag = dialog.get_local_tag()
+        self.dialogs_by_local_tag[local_tag] = dialog
+        self.logger.debug("Registered dialog with local tag %s" % (local_tag,))
         
 
-    def dialog_established(self, dialog):
-        did = identify_dialog(dialog)
-        self.dialogs_by_id[did] = dialog
-        self.logger.debug("Established dialog %s" % (did,))
-        
-
-    def match_incoming_request(self, params):
-        call_id, local_tag, remote_tag = did = identify_incoming_request(params)
-        dialog = self.dialogs_by_id.get(did)
+    def process_request(self, params):
+        local_tag = params["to"].params.get("tag")
+        dialog = self.dialogs_by_local_tag.get(local_tag)
         
         if dialog:
-            self.logger.debug("Found dialog: %s" % (did,))
-            return WeakMethod(dialog.recv_request)
+            self.logger.debug("Found dialog: %s" % (local_tag,))
+            dialog.recv_request(params)
+            return True
 
         #print("No dialog %s" % (did,))
 
         if local_tag:
-            self.logger.debug("In-dialog request has no dialog!")
-            return None
+            self.logger.warning("In-dialog request has no dialog!")
             
-        return None
+        return False
         
+
+    def process_response(self, params, related_request):
+        local_tag = params["from"].params.get("tag")
+        dialog = self.dialogs_by_local_tag.get(local_tag)
         
-    def transmit(self, params, related_params=None, report_response=None):
-        self.transmission(params, related_params, report_response)
+        if dialog:
+            self.logger.debug("Found dialog: %s" % (local_tag,))
+            dialog.recv_response(params, related_request)
+            return True
+
+        if params["method"] == "BYE":
+            # This will happen for bastard dialogs
+            self.logger.debug("No dialog for BYE response, oh well.")
+        else:
+            self.logger.warning("No dialog for incoming response %s" % (did,))
+            
+        return False
