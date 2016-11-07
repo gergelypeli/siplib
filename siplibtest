@@ -16,7 +16,7 @@ from registrar import RecordManager
 from account import Account
 from util import setup_logging, build_oid, my_exchandler
 from mgw import MediaGateway
-from mgc import Controller  #, PlayerMediaLeg, EchoMediaLeg
+from mgc import Controller, PlayerMediaLeg  #, EchoMediaLeg
 from switch import Switch
 import zap
 
@@ -101,7 +101,8 @@ class RingingLegPlan(LegPlan):
 class TestLegPlan(LegPlan):
     def update_session(self, offer):
         if not self.leg.media_legs:
-            media_leg = self.leg.make_media_leg(0, "player")
+            media_leg = PlayerMediaLeg()
+            self.leg.set_media_leg(0, media_leg)
             media_leg.play("playback.wav", ("PCMA", 8000, 1, None), volume=0.2, fade=3)
 
         answer = deepcopy(offer)

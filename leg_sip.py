@@ -3,6 +3,7 @@ from util import build_oid
 from leg import Leg, SessionState, Error
 from sdp import SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES
 from leg_sip_invite import InviteClientState, InviteServerState
+from mgc import ProxiedMediaLeg
 
 
 class SipLeg(Leg):
@@ -119,8 +120,9 @@ class SipLeg(Leg):
         for i in range(len(local_channels)):
             if i >= len(self.media_legs):
                 self.logger.debug("Making media leg for channel %d" % i)
-                self.make_media_leg(i, "net")
-                self.media_legs[i].event_slot.plug(self.notified)
+                ml = ProxiedMediaLeg()
+                self.set_media_leg(i, ml)
+                ml.event_slot.plug(self.notified)
                 
             lc = local_channels[i]
             rc = remote_channels[i]

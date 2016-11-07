@@ -6,19 +6,20 @@ import zap
 
 
 class MediaThing(Loggable):
-    def __init__(self, mgc, sid):
+    def __init__(self):
         Loggable.__init__(self)
         
-        self.mgc = mgc
-        self.sid = sid
+        self.mgc = None
+        self.sid = None
         self.is_created = False
 
 
-    def set_oid(self, oid):
-        Loggable.set_oid(self, oid)
-        
-        self.mgc.register_thing(self)
+    def bind(self, mgc, sid):
+        self.mgc = mgc
+        self.sid = sid
 
+        self.mgc.register_thing(self)
+        
 
     def send_request(self, target, params, response_tag='dummy'):
         # The dummy response tag is to tell the Msgp to wait for an answer,
@@ -44,8 +45,8 @@ class MediaThing(Loggable):
 
         
 class MediaLeg(MediaThing):
-    def __init__(self, mgc, sid, type):
-        MediaThing.__init__(self, mgc, sid)
+    def __init__(self, type):
+        MediaThing.__init__(self)
         
         self.type = type
         self.dirty_slot = zap.Slot()
@@ -76,8 +77,8 @@ class MediaLeg(MediaThing):
             
 
 class PassMediaLeg(MediaLeg):
-    def __init__(self, mgc, sid):
-        super().__init__(mgc, sid, "pass")
+    def __init__(self):
+        super().__init__("pass")
         
         self.other = None
         
@@ -91,13 +92,13 @@ class PassMediaLeg(MediaLeg):
         
 
 class EchoMediaLeg(MediaLeg):
-    def __init__(self, mgc, sid):
-        super().__init__(mgc, sid, "echo")
+    def __init__(self):
+        super().__init__("echo")
 
 
 class PlayerMediaLeg(MediaLeg):
-    def __init__(self, mgc, sid):
-        super().__init__(mgc, sid, "player")
+    def __init__(self):
+        super().__init__("player")
         
 
     def play(self, filename=None, format=None, volume=1, fade=0):  # TODO: rename to refresh?
@@ -112,8 +113,8 @@ class PlayerMediaLeg(MediaLeg):
 
 
 class ProxiedMediaLeg(MediaLeg):
-    def __init__(self, mgc, sid):
-        super().__init__(mgc, sid, "net")
+    def __init__(self):
+        super().__init__("net")
 
         self.event_slot = zap.EventSlot()
         self.committed = {}
@@ -136,8 +137,8 @@ class ProxiedMediaLeg(MediaLeg):
         
         
 class MediaContext(MediaThing):
-    def __init__(self, mgc, sid):
-        MediaThing.__init__(self, mgc, sid)
+    def __init__(self):
+        MediaThing.__init__(self)
         
         self.leg_oids = []
         
@@ -229,6 +230,10 @@ class Controller(Loggable):
         if response_tag == 'delete':
             return  # The thing may be gone already
             
+        # FIXME: MGW responses are too simple now!
+        self.logger.debug("Okay, MGW...")
+        return
+        
         oid = params.pop('id', None)
         
         if not oid:
@@ -267,16 +272,21 @@ class Controller(Loggable):
         raise NotImplementedError()
 
     
-    def make_media_leg(self, sid_affinity, type, **kwargs):
-        sid = sid_affinity or self.select_gateway_sid()
+    #def make_media_leg(self, sid_affinity, type, **kwargs):
+    #    sid = sid_affinity or self.select_gateway_sid()
 
-        if type == "pass":
-            return PassMediaLeg(proxy(self), sid, **kwargs)
-        elif type == "echo":
-            return EchoMediaLeg(proxy(self), sid, **kwargs)
-        elif type == "player":
-            return PlayerMediaLeg(proxy(self), sid, **kwargs)
-        elif type == "net":
-            return ProxiedMediaLeg(proxy(self), sid, **kwargs)
-        else:
-            raise Exception("No such media leg type: %s!" % type)
+    #    if type == "pass":
+    #        return PassMediaLeg(proxy(self), sid, **kwargs)
+    #    elif type == "echo":
+    #        return EchoMediaLeg(proxy(self), sid, **kwargs)
+    #    elif type == "player":
+    #        return PlayerMediaLeg(proxy(self), sid, **kwargs)
+    #    elif type == "net":
+    #        return ProxiedMediaLeg(proxy(self), sid, **kwargs)
+    #    else:
+    #        raise Exception("No such media leg type: %s!" % type)
+
+
+    def bind_thing(self, ml, sid_affinity):
+        sid = sid_affinity or self.select_gateway_sid()
+        ml.bind(proxy(self), sid)

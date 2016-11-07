@@ -2,6 +2,7 @@ from weakref import proxy
 
 from util import build_oid, Loggable
 from format import SipError, Status
+from mgc import PassMediaLeg
 import zap
 
 
@@ -72,34 +73,31 @@ class Leg(BareLeg):
         self.finished()
 
 
-    def make_media_leg(self, channel_index, type, **kwargs):
-        media_leg = self.call.make_media_leg(self.oid, channel_index, type, **kwargs)
-        media_leg.set_oid(build_oid(self.oid, "channel", channel_index))
-        
-        if channel_index < len(self.media_legs):
-            self.media_legs[channel_index] = media_leg
-        elif channel_index == len(self.media_legs):
-            self.media_legs.append(media_leg)
-        else:
+    def set_media_leg(self, channel_index, media_leg):
+        if channel_index > len(self.media_legs):
             raise Exception("Invalid media leg index!")
+        elif channel_index == len(self.media_legs):
+            self.media_legs.append(None)
+            
+        old = self.media_legs[channel_index]
         
-        return media_leg
+        if old:
+            self.logger.debug("Deleting media leg %s." % channel_index)
+            self.call.media_leg_changed(self.oid, channel_index, False)
+            old.delete()
         
-
-    def media_finished(self, li, error):
-        # Completed
-        self.media_legs[li] = None
+        self.media_legs[channel_index] = media_leg
         
-        self.may_finish(error)
-
+        if media_leg:
+            self.logger.debug("Adding media leg %s." % channel_index)
+            media_leg.set_oid(build_oid(self.oid, "channel", channel_index))
+            self.call.media_leg_changed(self.oid, channel_index, True)
+        
 
     def finish_media(self, error=None):
-        # Initiated
-        for i, ml in enumerate(self.media_legs):
-            self.logger.debug("Deleting media leg %s." % i)
-            ml.delete()
-            self.media_legs[i] = None  # FIXME: media_finished is now unnecessary
-        
+        for ci in range(len(self.media_legs)):
+            self.set_media_leg(ci, None)
+            
         self.may_finish(error)
 
 
@@ -602,16 +600,19 @@ class Bridge(CallComponent):
     
 class RecordingBridge(Bridge):
     def hack_media(self, li, answer):
-            
         old = len(self.incoming_leg.media_legs)
         new = len(answer["channels"])
         
         for i in range(old, new):
-            this = self.incoming_leg.make_media_leg(i, "pass")
-            that = self.outgoing_leg.make_media_leg(i, "pass")
-            
+            this = PassMediaLeg()
+            that = PassMediaLeg()
+
+            # Pairing must happen before setting it, because realizing needs it
             this.pair(proxy(that))
             that.pair(proxy(this))
+            
+            self.incoming_leg.set_media_leg(i, this)
+            self.outgoing_leg.set_media_leg(i, that)
             
             format = ("L16", 8000, 1, None)
             this.refresh(dict(filename="recorded.wav", format=format, record=True))

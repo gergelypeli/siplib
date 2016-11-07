@@ -111,56 +111,60 @@ class Ground(Loggable):
         self.logger.error("Couldn't forward %s from %s!" % (action["type"], leg_oid))
 
 
-    def refresh_media(self, slid, ci):
+    def media_leg_changed(self, slid, ci, is_added):
+        # Called after adding media legs, or linking legs, and also
+        # before removing media legs, or unlinking legs.
+        # So we only need to do anything if the referred media leg has a pair.
+        
         tlid = self.targets_by_source.get(slid)
         if not tlid:
-            self.logger.debug("Dirty leg is not linked, ignoring.")
+            self.logger.debug("Changed media leg is not linked, ignoring.")
             return
             
         sleg = self.legs_by_oid[slid]
         tleg = self.legs_by_oid[tlid]
         
-        smleg = sleg.get_media_leg(ci)  # Must be non-None, since it is refreshing
+        smleg = sleg.get_media_leg(ci)  # Must be non-None, since it is added
         tmleg = tleg.get_media_leg(ci)
         
         # Without target changes in the source doesn't matter
-        # FIXME: shouldn't we remove the context when the target leg is deleted???
-        if not tmleg or not tmleg.is_created:
-            self.logger.debug("Dirty channel has no linked pair, ignoring.")
+        if not tmleg:
+            self.logger.debug("Changed media leg has no linked pair, ignoring.")
             return
 
         soid = smleg.oid
         toid = tmleg.oid
-        
         span = (soid, toid, ci) if soid < toid else (toid, soid, ci)
         
-        if smleg.is_created:
-            # Create
-            
+        if is_added:
             if span in self.media_contexts_by_span:
-                self.logger.debug("Hm, context already exists, how can you be dirty?")
-            else:
-                coid = self.generate_context_oid()
-                self.logger.debug("Creating context %s: %s" % (coid, span))
-                
-                if smleg.sid != tmleg.sid:
-                    raise Exception("Sid mismatch!")
-                else:
-                    sid = smleg.sid
-                
-                mc = MediaContext(self.mgc, sid)
-                mc.set_oid(coid)
-                self.media_contexts_by_span[span] = mc
-                
-                mc.set_leg_oids([ soid, toid ])
+                raise Exception("Hm, context already exists, how can you be added?")
+
+            smleg.refresh({})
+            tmleg.refresh({})
+            
+            coid = self.generate_context_oid()
+            self.logger.debug("Creating context %s: %s" % (coid, span))
+        
+            if smleg.sid != tmleg.sid:
+                raise Exception("Sid mismatch!")
+
+            sid_affinity = smleg.sid
+        
+            mc = MediaContext()
+            mc.set_oid(coid)
+            self.mgc.bind_thing(mc, sid_affinity)
+        
+            self.media_contexts_by_span[span] = mc
+            mc.set_leg_oids([ soid, toid ])
         else:
             ctx = self.media_contexts_by_span.pop(span, None)
             
             if not ctx:
-                self.logger.debug("Hm, context does not exist, how can you be dirty?")
-            else:
-                self.logger.debug("Removing context: %s" % str(span))
-                ctx.delete()
+                raise Exception("Hm, context does not exist, how can you be removed?")
+                
+            self.logger.debug("Removing context %s: %s" % (ctx.oid, span))
+            ctx.delete()
 
 
 class Call(Loggable):
@@ -258,13 +262,14 @@ class Call(Loggable):
         self.switch.mgc.deallocate_media_address(addr)
         
 
-    def make_media_leg(self, lid, channel_index, type, **kwargs):
-        # TODO
-        sid_affinity = None
-        ml = self.switch.mgc.make_media_leg(sid_affinity, type, **kwargs)
-        ml.dirty_slot.plug(self.ground.refresh_media, slid=lid, ci=channel_index)
-        
-        return ml
+    def media_leg_changed(self, leg_index, channel_index, is_added):
+        if is_added:
+            leg = self.ground.legs_by_oid[leg_index]
+            ml = leg.get_media_leg(channel_index)
+            sid_affinity = None  # TODO
+            self.switch.mgc.bind_thing(ml, sid_affinity)
+            
+        self.ground.media_leg_changed(leg_index, channel_index, is_added)
 
 
     def forward(self, leg, action):
