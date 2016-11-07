@@ -82,6 +82,14 @@ def setup_logging():
             if not hasattr(record, 'oid'):
                 record.oid = record.name
             
+            record.mark = {
+                logging.DEBUG:    ' ',
+                logging.INFO:     ':',
+                logging.WARNING:  '?',
+                logging.ERROR:    '!',
+                logging.CRITICAL: '@'
+            }.get(record.levelno, '#')
+            
             #if "/" in record.oid:
                 #record.oid = ".".join(
                 #    x[:1] if not x.isdigit() else x for x in record.oid.split(".")
@@ -99,7 +107,8 @@ def setup_logging():
             'default': {
                 #'format': '%(asctime)s.%(msecs)03d  %(name)s  %(levelname)s  %(message)s',
                 #'format': '%(name)-10s | %(message)s',
-                'format': '%(oid)s | %(message)s',
+                #'format': '%(oid)s | %(message)s',
+                'format': '%(mark)s | %(oid)s | %(message)s',
                 'datefmt': '%F %T'
             }
         },
