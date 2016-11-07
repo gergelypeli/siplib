@@ -1,5 +1,5 @@
 import socket
-from weakref import proxy, WeakValueDictionary
+from weakref import ref, proxy, WeakValueDictionary
 
 from rtp import read_wav, write_wav, RtpPlayer, RtpRecorder, RtpBuilder, RtpParser, DtmfExtractor, DtmfInjector, Format
 from msgp import MsgpPeer  # MsgpServer
@@ -402,7 +402,11 @@ class MediaGateway(Loggable):
         
         
     def delete_thing(self, things, label):
-        things.pop(label)
+        wthing = ref(things.pop(label))
+        
+        if wthing():
+            # This is to ensure contexts are removed before removing legs.
+            self.logger.error("Deleted thing %s remained alive!" % label)
 
 
     def take_thing(self, things, label, owner_sid):
@@ -507,6 +511,9 @@ class MediaGateway(Loggable):
             self.msgp.send(msgid, "error")
         else:
             self.msgp.send(msgid, "ok")
+            
+            if not self.legs_by_label and not self.contexts_by_label:
+                self.logger.info("Back to clean state.")
 
 
     def process_response(self, response_tag, msgid, params):

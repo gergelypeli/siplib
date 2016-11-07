@@ -21,14 +21,13 @@ class MediaThing(Loggable):
         self.mgc.register_thing(self)
         
 
-    def send_request(self, target, params, response_tag='dummy'):
-        # The dummy response tag is to tell the Msgp to wait for an answer,
-        # because the MGW will send it anyway, even in we later choose to ignore it here.
-        self.mgc.send_message((self.sid, target), params, response_tag)
+    def send_request(self, target, params, drop_response=False):
+        response_tag = (self.oid, drop_response)
+        self.mgc.send_message((self.sid, target), params, response_tag=response_tag)
 
 
-    def send_response(self, msgid, params, response_tag=None):
-        self.mgc.send_message(msgid, params, response_tag)
+    def send_response(self, msgid, params):
+        self.mgc.send_message(msgid, params, response_tag=None)
         
 
     def process_request(self, target, msgid, params):
@@ -67,13 +66,13 @@ class MediaLeg(MediaThing):
         if self.is_created:
             self.is_created = False  # Call uses this to ignore such MediaLeg-s
             params = dict(id=self.oid)
-            self.send_request("delete_leg", params, response_tag='delete')
+            self.send_request("delete_leg", params, drop_response=True)
             self.dirty_slot.zap()
 
 
-    def notify(self, type, params):
+    def notify(self, target, params):
         params = dict(params, id=self.oid)
-        self.mgc.send_message((self.sid, type), params)
+        self.send_request(target, params)
             
 
 class PassMediaLeg(MediaLeg):
@@ -173,7 +172,7 @@ class MediaContext(MediaThing):
             self.is_created = False
             self.logger.debug("Deleting context")
             params = dict(id=self.oid)
-            self.send_request("delete_context", params, response_tag='delete')
+            self.send_request("delete_context", params, drop_response=True)
 
 
 class Controller(Loggable):
@@ -207,7 +206,7 @@ class Controller(Loggable):
         self.things_by_oid[thing.oid] = thing
         
     
-    def send_message(self, msgid, params, response_tag=None):
+    def send_message(self, msgid, params, response_tag):
         self.msgp.send(msgid, params, response_tag=response_tag)
         
         
@@ -227,25 +226,15 @@ class Controller(Loggable):
 
 
     def process_response(self, response_tag, msgid, params):
-        if response_tag == 'delete':
-            return  # The thing may be gone already
-            
-        # FIXME: MGW responses are too simple now!
-        self.logger.debug("Okay, MGW...")
-        return
+        oid, drop_response = response_tag
+        thing = self.things_by_oid.get(oid)
         
-        oid = params.pop('id', None)
-        
-        if not oid:
-            self.logger.error("Response from MGW without id, can't process!")
+        if not thing:
+            if not drop_response:
+                self.logger.error("Response from MGW to unknown entity!")
         else:
-            self.logger.debug("Response %s from MGW to %s" % (response_tag, oid))
-            thing = self.things_by_oid.get(oid)
-            
-            if thing:
-                thing.process_response(response_tag, msgid, params)
-            else:
-                self.logger.warning("No thing for this response!")
+            self.logger.debug("Response from MGW to %s" % oid)
+            thing.process_response(None, msgid, params)
         
         
     def status_changed(self, sid, remote_addr):

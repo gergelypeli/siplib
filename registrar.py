@@ -137,10 +137,9 @@ class RecordManager(Loggable):
         self.records_by_uri = {}
         
         
-    def reject_request(self, msg, status):
-        if msg:
-            response = make_simple_response(msg, status)
-            self.transmit(response, msg)
+    def reject_request(self, request, status):
+        response = make_simple_response(request, status)
+        self.transmit(response, request)
 
 
     def add_record(self, record_uri):

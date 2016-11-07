@@ -144,7 +144,7 @@ class Ground(Loggable):
             tmleg.refresh({})
             
             coid = self.generate_context_oid()
-            self.logger.debug("Creating context %s: %s" % (coid, span))
+            self.logger.debug("Creating context %s" % coid)
         
             if smleg.sid != tmleg.sid:
                 raise Exception("Sid mismatch!")
@@ -163,7 +163,7 @@ class Ground(Loggable):
             if not ctx:
                 raise Exception("Hm, context does not exist, how can you be removed?")
                 
-            self.logger.debug("Removing context %s: %s" % (ctx.oid, span))
+            self.logger.debug("Removing context %s" % ctx.oid)
             ctx.delete()
 
 

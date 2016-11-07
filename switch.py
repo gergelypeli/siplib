@@ -86,10 +86,9 @@ class Switch(Loggable):
         return self.transaction_manager.send_message(msg, related_msg)
         
     
-    def reject_request(self, msg, status):
-        if msg:
-            response = make_simple_response(msg, status)
-            self.transaction_manager.send_message(response, msg)
+    def reject_request(self, request, status):
+        response = make_simple_response(request, status)
+        self.transaction_manager.send_message(response, request)
 
 
     def challenge_request(self, msg, challenge):
@@ -157,7 +156,7 @@ class Switch(Loggable):
             return False
         elif not auth_policy:
             self.logger.debug("Rejecting request because account is unknown")
-            self.reject_request(Status(403, "Forbidden"))
+            self.reject_request(params, Status(403, "Forbidden"))
             return True
         elif auth_policy == Account.AUTH_NEVER:
             self.logger.debug("Accepting request because authentication is never needed")
@@ -178,7 +177,7 @@ class Switch(Loggable):
             
             if hop_unknown:
                 self.logger.debug("Rejecting request because hop address is not allowed")
-                self.reject_request(Status(403, "Forbidden"))
+                self.reject_request(params, Status(403, "Forbidden"))
                 return True
             else:
                 self.logger.debug("Accepting request because hop address is allowed")
@@ -203,7 +202,7 @@ class Switch(Loggable):
         request_uri = params["uri"]
         
         if request_uri.scheme != "sip":  # TODO: add some addr checks, too
-            self.reject_request(Status(404, "Not found"))
+            self.reject_request(params, Status(404, "Not found"))
             return
 
         processed = self.auth_request(params)
@@ -224,7 +223,7 @@ class Switch(Loggable):
             self.start_sip_call(params)
             return
     
-        self.reject_request(Status(400, "Bad request"))
+        self.reject_request(params, Status(400, "Bad request"))
 
 
     def process_response(self, params, related_request):
