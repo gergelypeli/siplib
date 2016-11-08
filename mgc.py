@@ -48,7 +48,6 @@ class MediaLeg(MediaThing):
         MediaThing.__init__(self)
         
         self.type = type
-        self.dirty_slot = zap.Slot()
 
 
     def refresh(self, params):
@@ -56,7 +55,6 @@ class MediaLeg(MediaThing):
             self.is_created = True
             params = dict(params, id=self.oid, type=self.type)
             self.send_request("create_leg", params)
-            self.dirty_slot.zap()
         else:
             params = dict(params, id=self.oid)
             self.send_request("modify_leg", params)
@@ -67,7 +65,6 @@ class MediaLeg(MediaThing):
             self.is_created = False  # Call uses this to ignore such MediaLeg-s
             params = dict(id=self.oid)
             self.send_request("delete_leg", params, drop_response=True)
-            self.dirty_slot.zap()
 
 
     def notify(self, target, params):
