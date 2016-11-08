@@ -24,8 +24,7 @@ class SipLeg(Leg):
         self.session = SessionState()
         self.pending_actions = []
         
-        host = dialog.dialog_manager.get_local_addr().resolve()[0]  # TODO: not nice
-        self.sdp_builder = SdpBuilder(host)
+        self.sdp_builder = SdpBuilder()
         self.sdp_parser = SdpParser()
         
         self.dialog.report_slot.plug(self.process)

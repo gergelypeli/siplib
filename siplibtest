@@ -101,7 +101,7 @@ class RingingLegPlan(LegPlan):
 class TestLegPlan(LegPlan):
     def update_session(self, offer):
         if not self.leg.media_legs:
-            media_leg = self.make_media_leg("player")
+            media_leg = self.leg.make_media_leg("player")
             self.leg.set_media_leg(0, media_leg)
             media_leg.play("playback.wav", ("PCMA", 8000, 1, None), volume=0.2, fade=3)
 
@@ -207,11 +207,9 @@ class TestController(Controller):
     def __init__(self, ports):
         super().__init__()
         
-        #self.mgw_addr = resolve(mgw_addr)
-        
         # Must use IP4 addresses or FQDN in SDP, so let's go with IP4
         # Media host may be different from the signaling host
-        self.media_addresses = set(Addr(MEDIA_HOST, port).resolve() for port in ports)
+        self.media_addresses = set(Addr(MEDIA_HOST, port).resolved() for port in ports)
         
     
     def allocate_media_address(self, sid):
@@ -248,6 +246,9 @@ class TestRouting(SimpleRouting):
 
 class TestSwitch(Switch):
     def __init__(self, local_addr, mgw_addr, media_ports):
+        local_addr.assert_resolved()
+        mgw_addr.assert_resolved()
+        
         transport = UdpTransport(local_addr)
         transaction_manager = TransactionManager(local_addr, proxy(transport))
         record_manager = TestRecordManager(proxy(self))
@@ -306,7 +307,7 @@ class SwitchA(TestSwitch):
         # This is to accept calls from it TODO: compute hop nicely!
         b_uri = Uri(Addr(B_DOMAIN, None), None)
         #hop = Hop(local_addr=resolve(A_ADDR), remote_addr=resolve(B_ADDR), interface='eth0')
-        hop = Hop(A_ADDR, B_ADDR, 'eth0')
+        hop = Hop(A_ADDR.resolved(), B_ADDR.resolved(), 'eth0')
         self.account_manager.add_account(b_uri, "B", Account.AUTH_BY_HOP, None, None, hops=[ hop ])
         
         self.account_manager.set_our_credentials(*A_CRED)
@@ -329,7 +330,7 @@ class SwitchA(TestSwitch):
         snom_uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
         snom_addr = Addr("192.168.1.8", 1024)  # Quite fake
         snom_contact = Uri(snom_addr, SNOM_NUMBER)
-        snom_hop = Hop(A_ADDR, snom_addr, 'eth0')
+        snom_hop = Hop(A_ADDR.resolved(), snom_addr.resolved(), 'eth0')
         
         self.record_manager.emulate_registration(snom_uri, snom_contact, 60, snom_hop)
         
@@ -432,15 +433,15 @@ def main():
 
     #metapoll = Metapoll()
 
-    mgw = MediaGateway(MGW_ADDR)
+    mgw = MediaGateway(MGW_ADDR.resolved())
     mgw.set_oid("mgw")
     mgw.set_name("the-mgw")
 
-    switch_a = SwitchA(A_ADDR.resolve(), MGW_ADDR, range(30000, 30020, 2))
+    switch_a = SwitchA(A_ADDR.resolved(), MGW_ADDR.resolved(), range(30000, 30020, 2))
     switch_a.set_oid(build_oid(None, "switch", "a"))
     switch_a.set_name("switch-a")
     
-    switch_b = SwitchB(B_ADDR.resolve(), MGW_ADDR, range(40000, 40020, 2))
+    switch_b = SwitchB(B_ADDR.resolved(), MGW_ADDR.resolved(), range(40000, 40020, 2))
     switch_b.set_oid(build_oid(None, "switch", "b"))
     switch_b.set_name("switch-b")
 

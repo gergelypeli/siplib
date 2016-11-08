@@ -199,6 +199,7 @@ class Controller(Loggable):
 
 
     def add_mgw_addr(self, addr):
+        addr.assert_resolved()
         self.msgp.add_remote_addr(addr)
     
     

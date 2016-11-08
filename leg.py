@@ -607,8 +607,8 @@ class RecordingBridge(Bridge):
         new = len(answer["channels"])
         
         for i in range(old, new):
-            this = self.make_media_leg("pass")
-            that = self.make_media_leg("pass")
+            this = self.incoming_leg.make_media_leg("pass")
+            that = self.outgoing_leg.make_media_leg("pass")
 
             # Pairing must happen before setting it, because realizing needs it
             this.pair(proxy(that))

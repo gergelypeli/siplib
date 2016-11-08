@@ -2,7 +2,6 @@ import uuid
 from weakref import WeakValueDictionary
 
 from format import Uri, Nameaddr
-from sdp import Origin
 from util import Loggable
 import zap
 
@@ -54,11 +53,6 @@ class Dialog(Loggable):
         self.call_id = None
         self.last_sent_cseq = 0
         self.last_recved_cseq = None
-
-        self.local_sdp_session_id = Origin.generate_session_id()
-        self.local_sdp_session_version = 0
-        self.local_sdp_session_host = self.dialog_manager.get_local_addr().resolve()[0]
-        self.remote_sdp_session_version = None
 
 
     def get_remote_tag(self):
@@ -148,30 +142,6 @@ class Dialog(Loggable):
             self.logger.warning("Skipping bastard reaction for status %s!" % status.code)
 
 
-    def make_sdp(self, params):
-        sdp = params.get("sdp")
-        if sdp:
-            self.local_sdp_session_version += 1
-            sdp.origin = Origin(
-                "-",
-                self.local_sdp_session_id,
-                self.local_sdp_session_version,
-                "IN",
-                "IP4",
-                self.local_sdp_session_host
-            )
-
-
-    def take_sdp(self, params):
-        sdp = params.get("sdp")
-        if sdp:
-            if self.remote_sdp_session_version is not None and sdp.origin.session_version <= self.remote_sdp_session_version:
-                params["sdp"] = None
-                return
-                
-            self.remote_sdp_session_version = sdp.origin.session_version
-
-
     def make_request(self, user_params, related_params=None):
         method = user_params["method"]
         
@@ -199,7 +169,6 @@ class Dialog(Loggable):
             dialog_params["contact"] = [ self.my_contact ]
 
         safe_update(user_params, dialog_params)
-        self.make_sdp(user_params)
 
         return user_params
 
@@ -246,8 +215,6 @@ class Dialog(Loggable):
 
             self.setup_incoming(params)
 
-        self.take_sdp(params)
-
         return params
 
 
@@ -270,7 +237,6 @@ class Dialog(Loggable):
             dialog_params["contact"] = [ self.my_contact ]
 
         safe_update(user_params, dialog_params)
-        self.make_sdp(user_params)
 
         return user_params
 
@@ -325,8 +291,6 @@ class Dialog(Loggable):
                 return None
             else:
                 self.logger.debug("Couldn't authorize, being rejected!")
-
-        self.take_sdp(params)
 
         return params
 

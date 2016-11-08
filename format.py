@@ -10,6 +10,14 @@ META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "sdp", "hop", "
 LIST_HEADER_FIELDS = [ "via", "route", "record_route", "contact" ]
 
 
+def assert_numeric_hostname(ip4):
+    socket.inet_aton(ip4)
+    
+    
+def resolve_hostname(hostname):
+    return socket.gethostbyname(hostname)
+    
+
 class FormatError(Exception):
     pass
 
@@ -28,10 +36,14 @@ class Addr(collections.namedtuple("Addr", [ "host", "port" ])):
         return "%s:%d" % self if self.port is not None else "%s" % self.host
 
 
-    def resolve(self):
-        return Addr(socket.gethostbyname(self.host), self.port)
+    def resolved(self):
+        return Addr(resolve_hostname(self.host), self.port)
 
+
+    def assert_resolved(self):
+        assert_numeric_hostname(self.host)
         
+
 Addr.__new__.__defaults__ = (None,)
 
 
@@ -96,7 +108,10 @@ class Via(collections.namedtuple("Via", [ "addr", "branch" ])):
 
 class Hop(collections.namedtuple("Hop", [ "local_addr", "remote_addr", "interface" ])):
     def __new__(cls, local_addr, remote_addr, interface):
-        return super().__new__(cls, local_addr.resolve(), remote_addr.resolve(), interface)
+        local_addr.assert_resolved()
+        remote_addr.assert_resolved()
+        
+        return super().__new__(cls, local_addr, remote_addr, interface)
         
         
     def __str__(self):

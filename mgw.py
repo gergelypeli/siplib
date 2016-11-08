@@ -359,6 +359,7 @@ class Context(Thing):
 class MediaGateway(Loggable):
     def __init__(self, mgw_addr):
         Loggable.__init__(self)
+        mgw_addr.assert_resolved()
 
         self.contexts_by_label = {}
         self.legs_by_label = {}

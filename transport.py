@@ -2,7 +2,7 @@ import socket
 #from datetime import timedelta
 #import logging
 
-from format import Hop, Addr, parse_structured_message, print_structured_message
+from format import Hop, Addr, parse_structured_message, print_structured_message, assert_numeric_hostname
 from util import Loggable
 import zap
 
@@ -50,7 +50,9 @@ class TestTransport(Loggable):
 
 class UdpTransport(Loggable):
     def __init__(self, local_addr):
-        self.local_addr = local_addr.resolve()
+        assert_numeric_hostname(local_addr.host)
+        
+        self.local_addr = local_addr
         self.process_slot = zap.EventSlot()
         
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -61,7 +63,7 @@ class UdpTransport(Loggable):
         
         
     def select_hop(self, uri):
-        raddr = Addr(uri.addr.host, uri.addr.port or 5060)
+        raddr = Addr(uri.addr.host, uri.addr.port or 5060).resolved()
         return Hop(self.local_addr, raddr, "eth0")  # TODO: eth0?
         
         

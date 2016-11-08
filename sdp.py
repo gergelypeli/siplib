@@ -321,10 +321,20 @@ class Sdp:
 
 
 class SdpBuilder:
-    def __init__(self, host):
-        self.host = host
+    def __init__(self):
+        # NOTE: these fields are totally meaningless, because they're only used
+        # to identify the session, but the session id is already unique, so
+        # nobody should ever use these two for anything more.
+        self.origin_username = "-"
+        self.origin_hostname = "127.0.0.1"
+        
         self.session_id = generate_session_id()
         self.last_session_version = 0
+        
+        
+    def set_origin_parameters(self, hostname, username):
+        self.origin_hostname = hostname
+        self.origin_username = username
         
         
     def build(self, session):
@@ -366,12 +376,12 @@ class SdpBuilder:
         self.last_session_version += 1
         
         origin = Origin(
-            username="siplib",
+            username=self.origin_username,
             session_id=self.session_id,
             session_version=self.last_session_version,
             net_type="IN",
             addr_type="IP4",
-            host=self.host
+            host=self.origin_hostname
         )
         
         connection = Connection("IN", "IP4", session_host) if session_host else None
@@ -394,6 +404,7 @@ class SdpBuilder:
 
 class SdpParser:
     def __init__(self):
+        # TODO: check version!
         pass
         
 

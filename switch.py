@@ -21,6 +21,7 @@ class Switch(Loggable):
         dialog_manager=None, mgc=None, account_manager=None
     ):
         Loggable.__init__(self)
+        local_addr.assert_resolved()
 
         self.calls_by_oid = {}
         self.call_count = 0
@@ -28,10 +29,10 @@ class Switch(Loggable):
         self.local_addr = local_addr
         
         self.transport = transport or UdpTransport(
-            local_addr,
+            self.local_addr,
         )
         self.transaction_manager = transaction_manager or TransactionManager(
-            local_addr, proxy(self.transport)
+            self.local_addr, proxy(self.transport)
         )
         self.record_manager = record_manager or RecordManager(
             proxy(self)
@@ -130,10 +131,13 @@ class Switch(Loggable):
         call.start(incoming_leg)
 
 
-    def start_sip_call(self):
+    def start_sip_call(self, params):
         incoming_dialog = Dialog(proxy(self.dialog_manager))
         incoming_leg = SipLeg(incoming_dialog)
         self.start_call(incoming_leg)
+        
+        # The dialog must be fed directly, since the request contains no local tag yet.
+        incoming_dialog.recv_request(params)
         
 
     def call_finished(self, call):
@@ -221,12 +225,7 @@ class Switch(Loggable):
             return
     
         if method == "INVITE" and "tag" not in params["to"].params:
-            self.start_sip_call()
-            
-            processed = self.dialog_manager.process_request(params)
-            if not processed:
-                self.logger.error("Failed to start SIP call!")
-                
+            self.start_sip_call(params)
             return
     
         self.reject_request(params, Status(400, "Bad request"))
