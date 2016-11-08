@@ -260,7 +260,11 @@ class Call(Loggable):
         
     def deallocate_media_address(self, addr):
         self.switch.mgc.deallocate_media_address(addr)
-        
+    
+    
+    def make_media_leg(self, type):
+        return self.switch.make_media_leg(type)
+            
 
     def media_leg_changed(self, leg_index, channel_index, is_added):
         if is_added:

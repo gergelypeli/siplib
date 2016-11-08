@@ -111,7 +111,7 @@ class PlayerMediaLeg(MediaLeg):
         self.refresh(new)
 
 
-class ProxiedMediaLeg(MediaLeg):
+class NetMediaLeg(MediaLeg):
     def __init__(self):
         super().__init__("net")
 
@@ -261,19 +261,19 @@ class Controller(Loggable):
         raise NotImplementedError()
 
     
-    #def make_media_leg(self, sid_affinity, type, **kwargs):
-    #    sid = sid_affinity or self.select_gateway_sid()
-
-    #    if type == "pass":
-    #        return PassMediaLeg(proxy(self), sid, **kwargs)
-    #    elif type == "echo":
-    #        return EchoMediaLeg(proxy(self), sid, **kwargs)
-    #    elif type == "player":
-    #        return PlayerMediaLeg(proxy(self), sid, **kwargs)
-    #    elif type == "net":
-    #        return ProxiedMediaLeg(proxy(self), sid, **kwargs)
-    #    else:
-    #        raise Exception("No such media leg type: %s!" % type)
+    def make_media_leg(self, type):
+        # TODO: maybe this function shouldn't be in Controller at all.
+        
+        if type == "pass":
+            return PassMediaLeg()
+        elif type == "echo":
+            return EchoMediaLeg()
+        elif type == "player":
+            return PlayerMediaLeg()
+        elif type == "net":
+            return NetMediaLeg()
+        else:
+            raise Exception("No such media leg type: %s!" % type)
 
 
     def bind_thing(self, ml, sid_affinity):

@@ -97,6 +97,10 @@ class Switch(Loggable):
             self.transaction_manager.send_message(response, msg)
 
 
+    def make_media_leg(self, type):
+        return self.mgc.make_media_leg(type)
+        
+
     def make_thing(self, type):
         if type == "routing":
             return Routing()
@@ -126,13 +130,10 @@ class Switch(Loggable):
         call.start(incoming_leg)
 
 
-    def start_sip_call(self, params):
+    def start_sip_call(self):
         incoming_dialog = Dialog(proxy(self.dialog_manager))
         incoming_leg = SipLeg(incoming_dialog)
-        
         self.start_call(incoming_leg)
-        
-        incoming_dialog.recv_request(params)
         
 
     def call_finished(self, call):
@@ -220,7 +221,12 @@ class Switch(Loggable):
             return
     
         if method == "INVITE" and "tag" not in params["to"].params:
-            self.start_sip_call(params)
+            self.start_sip_call()
+            
+            processed = self.dialog_manager.process_request(params)
+            if not processed:
+                self.logger.error("Failed to start SIP call!")
+                
             return
     
         self.reject_request(params, Status(400, "Bad request"))

@@ -2,7 +2,6 @@ from weakref import proxy
 
 from util import build_oid, Loggable
 from format import SipError, Status
-from mgc import PassMediaLeg
 import zap
 
 
@@ -72,6 +71,10 @@ class Leg(BareLeg):
         
         self.finished()
 
+
+    def make_media_leg(self, type):
+        return self.call.make_media_leg(type)
+        
 
     def set_media_leg(self, channel_index, media_leg):
         if channel_index > len(self.media_legs):
@@ -604,8 +607,8 @@ class RecordingBridge(Bridge):
         new = len(answer["channels"])
         
         for i in range(old, new):
-            this = PassMediaLeg()
-            that = PassMediaLeg()
+            this = self.make_media_leg("pass")
+            that = self.make_media_leg("pass")
 
             # Pairing must happen before setting it, because realizing needs it
             this.pair(proxy(that))

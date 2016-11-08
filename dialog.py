@@ -429,6 +429,6 @@ class DialogManager(Loggable):
             # This will happen for bastard dialogs
             self.logger.debug("No dialog for BYE response, oh well.")
         else:
-            self.logger.warning("No dialog for incoming response %s" % (did,))
+            self.logger.warning("No dialog for incoming response %s" % (local_tag,))
             
         return False

@@ -3,7 +3,6 @@ import weakref
 import heapq
 import datetime
 import collections
-import logging
 
 from util import Loggable
 
