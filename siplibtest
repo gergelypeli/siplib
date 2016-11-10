@@ -249,8 +249,8 @@ class TestSwitch(Switch):
         local_addr.assert_resolved()
         mgw_addr.assert_resolved()
         
-        transport = UdpTransport(local_addr)
-        transaction_manager = TransactionManager(local_addr, proxy(transport))
+        #transport_manager = UdpTransport(local_addr)
+        #transaction_manager = TransactionManager(local_addr, proxy(transport))
         record_manager = TestRecordManager(proxy(self))
         authority = TestAuthority()
         #self.registration_manager = RegistrationManager(
@@ -269,11 +269,13 @@ class TestSwitch(Switch):
         #self.account_manager = AccountManager()
 
         Switch.__init__(
-            self, local_addr,
-            transport=transport, transaction_manager=transaction_manager,
+            self,
+            #transport=transport, transaction_manager=transaction_manager,
             record_manager=record_manager, authority=authority, registration_manager=None,
             dialog_manager=None, mgc=mgc, account_manager=None
         )
+
+        self.transport_manager.add_udp_transport(local_addr, "eth0")
 
         #metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
         zap.time_slot(0.2, repeat=True).plug(self.transaction_manager.maintenance)
@@ -410,7 +412,8 @@ class SwitchB(TestSwitch):
         self.registration_manager.start_registration(
             registrar_uri=Uri(A_ADDR),
             record_uri=Uri(Addr(A_DOMAIN, None), CALLEE_NUMBER),
-            contact_uri=Uri(B_ADDR, CALLEE_NUMBER)
+            contact_uri=Uri(B_ADDR, CALLEE_NUMBER),
+            hop=Hop(B_ADDR.resolved(), A_ADDR.resolved(), 'eth0')  # TODO: ugly
         )
         
         

@@ -63,40 +63,29 @@ class Dialog(Loggable):
         return self.local_nameaddr.params.get("tag") if self.local_nameaddr else None
         
         
-    def fix_hop(self, hop):
-        next_uri = self.route[0].uri if self.route else self.peer_contact.uri
-        is_next_uri_usable = True  # TODO: not if URI is local while hop is public
-        
-        if is_next_uri_usable:
-            self.logger.debug("Next URI usable, resolving to hop.")
-            self.hop = self.dialog_manager.select_hop(next_uri)
-        else:
-            self.logger.debug("Next URI fishy, using network hop.")
-            self.hop = hop
-        
-
     def setup_incoming(self, params):
         self.local_nameaddr = params["to"].tagged(generate_tag())
         self.remote_nameaddr = params["from"]
-        self.my_contact = self.dialog_manager.get_my_contact()  # TODO: improve
+        self.my_contact = Nameaddr(Uri(params["hop"].local_addr))
         self.call_id = params["call_id"]
         
         self.peer_contact = first(params["contact"])
         self.route = params["record_route"]
-        self.fix_hop(params["hop"])
+        self.hop = params["hop"]
 
         self.dialog_manager.register(self)
         
         
+    # TODO: maybe use a params here, too?
     def setup_outgoing(self, request_uri, from_nameaddr, to_nameaddr, route=None, hop=None):
         self.local_nameaddr = from_nameaddr.tagged(generate_tag())
         self.remote_nameaddr = to_nameaddr
-        self.my_contact = self.dialog_manager.get_my_contact()  # TODO: improve
+        self.my_contact = Nameaddr(Uri(hop.local_addr))
         self.call_id = generate_call_id()
         
         self.peer_contact = Nameaddr(request_uri)
         self.route = route or []
-        self.fix_hop(hop)
+        self.hop = hop
         
         self.dialog_manager.register(self)
 
@@ -106,7 +95,6 @@ class Dialog(Loggable):
         
         self.peer_contact = first(params["contact"])
         self.route = list(reversed(params["record_route"]))
-        self.fix_hop(params["hop"])
 
 
     def setup_outgoing_bastard(self, invite_params):
@@ -115,6 +103,7 @@ class Dialog(Loggable):
         self.peer_contact = Nameaddr(invite_params["uri"])
         self.call_id = invite_params["call_id"]
         self.last_sent_cseq = invite_params["cseq"]
+        self.hop = invite_params["hop"]
         
         # Don't register, we already have a dialog with the same local tag
 
@@ -208,7 +197,6 @@ class Dialog(Loggable):
             peer_contact = first(params.get("contact"))
             if peer_contact:
                 self.peer_contact = peer_contact
-                self.fix_hop(params["hop"])
         else:
             if to_tag:
                 raise Error("Unexpected to tag!")
@@ -230,7 +218,7 @@ class Dialog(Loggable):
             "call_id": self.call_id,
             "cseq": request_params["cseq"],
             "method": request_params["method"],  # only for internal use
-            "hop": request_params["hop"]
+            "hop": request_params["hop"]  # always use the request's hop, just in case
         }
 
         if dialog_params["method"] == "INVITE":
@@ -272,7 +260,6 @@ class Dialog(Loggable):
                 peer_contact = first(params.get("contact"))
                 if peer_contact:
                     self.peer_contact = peer_contact
-                    self.fix_hop(params["hop"])
         elif status.code == 401:
             # Let's try authentication! TODO: 407, too!
             auth = self.dialog_manager.provide_auth(params, related_request)
@@ -328,27 +315,14 @@ class Dialog(Loggable):
 
 
 class DialogManager(Loggable):
-    def __init__(self, local_addr, switch):
+    def __init__(self, switch):
         Loggable.__init__(self)
 
-        self.local_addr = local_addr
         self.switch = switch
         #self.process_response_plug = transaction_manager.process_response_slot.plug(self.process_response)
         self.dialogs_by_local_tag = WeakValueDictionary()
 
         
-    def get_local_addr(self):
-        return self.local_addr
-
-
-    def get_my_contact(self):
-        return Nameaddr(Uri(self.local_addr))  # TODO: more flexible?
-
-
-    def select_hop(self, uri):
-        return self.switch.select_hop(uri)
-
-
     def provide_auth(self, params, related_request):
         return self.switch.provide_auth(params, related_request)
         

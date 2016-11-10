@@ -153,8 +153,8 @@ class PlainClientTransaction(Transaction):
     def transmit(self, msg):
         if msg.get("via"):
             raise Error("Don't mess with the request Via headers!")
-            
-        msg["via"] = [ Via(self.manager.get_local_addr(), self.branch) ]
+
+        msg["via"] = [ Via(msg["hop"].local_addr, self.branch) ]
         super().transmit(msg)
 
 
@@ -363,10 +363,9 @@ class AckServerTransaction(PlainServerTransaction):
 
 
 class TransactionManager(Loggable):
-    def __init__(self, local_addr, transport):
+    def __init__(self, transport):
         Loggable.__init__(self)
 
-        self.local_addr = local_addr
         self.transport = transport
         self.client_transactions = {}  # by (branch, method)
         self.server_transactions = {}  # by (branch, method)
@@ -379,13 +378,9 @@ class TransactionManager(Loggable):
 
         
     def transmit(self, msg):
-        self.transport.send(msg)
+        self.transport.send_message(msg)
         
         
-    def get_local_addr(self):
-        return self.local_addr
-
-
     def maintain_transactions(self, now, transactions):
         for tr_id, tr in list(transactions.items()):
             keep = tr.maintain(now)

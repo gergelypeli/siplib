@@ -226,7 +226,10 @@ class Registration(object):
         self.record_uri = record_uri
         self.contact_uri = contact_uri
         
-        self.hop = hop or self.registration_manager.select_hop(registrar_uri)
+        if not hop:
+            raise Exception("Please select the hop before invoking the registration!")
+        
+        self.hop = hop
         self.local_tag = generate_tag()  # make it persistent just for the sake of safety
         self.call_id = generate_call_id()
         self.cseq = 0
@@ -316,10 +319,6 @@ class RegistrationManager(Loggable):
         self.registrations_by_id = {}
         
         
-    def select_hop(self, uri):
-        return self.switch.select_hop(uri)
-
-
     def provide_auth(self, params, related_request):
         return self.switch.provide_auth(params, related_request)
         

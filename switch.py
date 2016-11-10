@@ -1,7 +1,7 @@
 from weakref import proxy
 
 from format import Status
-from transport import UdpTransport
+from transport import TransportManager
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
 from leg import Routing, Bridge, RecordingBridge
@@ -15,24 +15,20 @@ from mgc import Controller
 
 
 class Switch(Loggable):
-    def __init__(self, local_addr,
-        transport=None, transaction_manager=None,
+    def __init__(self,
+        transport_manager=None, transaction_manager=None,
         record_manager=None, authority=None, registration_manager=None,
         dialog_manager=None, mgc=None, account_manager=None
     ):
         Loggable.__init__(self)
-        local_addr.assert_resolved()
 
         self.calls_by_oid = {}
         self.call_count = 0
 
-        self.local_addr = local_addr
-        
-        self.transport = transport or UdpTransport(
-            self.local_addr,
+        self.transport_manager = transport_manager or TransportManager(
         )
         self.transaction_manager = transaction_manager or TransactionManager(
-            self.local_addr, proxy(self.transport)
+            proxy(self.transport_manager)
         )
         self.record_manager = record_manager or RecordManager(
             proxy(self)
@@ -43,7 +39,6 @@ class Switch(Loggable):
             proxy(self)
         )
         self.dialog_manager = dialog_manager or DialogManager(
-            local_addr,
             proxy(self)
         )
         self.mgc = mgc or Controller(
@@ -63,8 +58,8 @@ class Switch(Loggable):
         self.authority.set_oid(build_oid(oid, "authority"))
         self.record_manager.set_oid(build_oid(oid, "recman"))
         self.registration_manager.set_oid(build_oid(oid, "regman"))
-        self.transport.set_oid(build_oid(oid, "transport"))
-        self.transaction_manager.set_oid(build_oid(oid, "transman"))
+        self.transport_manager.set_oid(build_oid(oid, "transport"))
+        self.transaction_manager.set_oid(build_oid(oid, "transaction"))
         self.dialog_manager.set_oid(build_oid(oid, "diaman"))
         self.mgc.set_oid(build_oid(oid, "mgc"))
         self.ground.set_oid(build_oid(oid, "ground"))
@@ -74,8 +69,8 @@ class Switch(Loggable):
         self.mgc.set_name(name)
         
         
-    def select_hop(self, uri):
-        return self.transport.select_hop(uri)
+    def select_hop(self, request):
+        return self.transport_manager.select_hop(request)
         
 
     def provide_auth(self, response, request):

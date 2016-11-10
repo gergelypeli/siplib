@@ -214,8 +214,10 @@ class SipLeg(Leg):
                 
                 self.dialog.setup_outgoing(
                     self.ctx["uri"],
-                    self.ctx["from"], self.ctx["to"],
-                    self.ctx.get("route"), self.ctx.get("hop")
+                    self.ctx["from"],
+                    self.ctx["to"],
+                    self.ctx.get("route"),
+                    self.ctx["hop"]  # Kinda mandatory now
                 )
                 
                 self.make_invite(True)
