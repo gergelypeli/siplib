@@ -19,11 +19,12 @@ class Plug:
         self.unplug()
         
         
-    def __call__(self, *args):
+    def schedule(self, *args):
         method = self.callable()
         
         if method:
-            method(*args, **self.kwargs)
+            kwargs = self.kwargs
+            schedule(lambda: method(*args, **kwargs))
             
         
     def unplug(self):
@@ -80,7 +81,7 @@ class Slot:
 
     def zap(self):
         for plug in self.plugs:
-            schedule(plug)
+            plug.schedule()
 
 
 class EventSlot(Slot):
@@ -102,7 +103,7 @@ class EventSlot(Slot):
     def zap(self, *args):
         if self.plugs:
             for plug in self.plugs:
-                schedule(lambda plug=plug: plug(*args))
+                plug.schedule(*args)
         else:
             self.queue.append(args)
 
