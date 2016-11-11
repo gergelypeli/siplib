@@ -13,10 +13,17 @@ class Plug:
         self.callable = callable
         #self.args = args
         self.kwargs = kwargs
+        self.is_sync = False
         
         
     def __del__(self):
         self.unplug()
+        
+        
+    def sync(self):
+        self.is_sync = True
+        
+        return self
         
         
     def zap(self, *args):
@@ -24,7 +31,12 @@ class Plug:
         
         if method:
             kwargs = self.kwargs
-            schedule(lambda: method(*args, **kwargs))
+            task = lambda: method(*args, **kwargs)
+            
+            if self.is_sync:
+                task()
+            else:
+                schedule(task)
             
         
     def unplug(self):
@@ -80,7 +92,7 @@ class Slot:
 
 
     def zap(self):
-        for plug in self.plugs:
+        for plug in list(self.plugs):  # plugs may unplug
             plug.zap()
 
 
@@ -102,7 +114,7 @@ class EventSlot(Slot):
     
     def zap(self, *args):
         if self.plugs:
-            for plug in self.plugs:
+            for plug in list(self.plugs):  # plugs may unplug
                 plug.zap(*args)
         else:
             self.queue.append(args)
@@ -131,6 +143,7 @@ class Kernel(Loggable):
         self.registered_keys = set()
         self.slots_by_key = {}
         self.time_heap = []
+        self.never_slot = Slot()
 
 
     def update_poll(self, fd):
@@ -174,9 +187,22 @@ class Kernel(Loggable):
                 heapq.heappush(self.time_heap, key)
                 
         return weakref.proxy(slot)
+
+
+    def file_slot(self, socket, write):
+        # Damn, multiprocessing.Pipe is different
+        if hasattr(socket, "gettimeout") and socket.gettimeout() != 0.0:
+            raise Exception("Socket is still blocking!")
+        
+        key = (socket.fileno(), write)
+        
+        return self.add_slot(key)
         
         
     def time_slot(self, delay, repeat=False):
+        if delay is None:
+            return self.never_slot
+            
         if isinstance(delay, (int, float)):
             delay = datetime.timedelta(seconds=delay)
 
@@ -271,9 +297,7 @@ class Plan(Loggable):
         self.generator = None
         self.event_queue = []
         self.event_slot = Slot()
-        
-        self.timeout_plug = None
-        self.event_plug = None
+        self.current_plugs = None
 
 
     def finished(self, error):
@@ -312,46 +336,25 @@ class Plan(Loggable):
         self.event_slot.zap()
 
 
-    def suspend(self, timeout):
-        if timeout is not None:
-            self.timeout_plug = time_slot(timeout).plug(self.resume, value=None)
-
-        self.logger.debug("Suspending plan.")
-    
-        try:
-            yield
-        except Exception as e:
-            self.logger.debug("Aborting plan.")
-            raise e
-        else:
-            self.logger.debug("Resuming plan.")
-
-        if timeout is not None:
-            self.timeout_plug.unplug()
-
-
     def wait_event(self, timeout=None):
-        if not self.event_queue:
-            self.event_plug = self.event_slot.plug(self.resume, value=None)
-            
-            yield from self.suspend(timeout)
-            
-            self.event_plug.unplug()
-
-            if not self.event_queue:
-                self.logger.debug("Timed out waiting for an event.")
-                return None
-
-        self.logger.debug("Unqueueing event.")
-        event = self.event_queue.pop(0)
-        return event
+        slot_index = yield time_slot(timeout), self.event_slot
+        
+        return self.event_queue.pop(0) if slot_index == 1 else None
 
 
     def sleep(self, timeout):
-        yield from self.suspend(timeout)
+        yield time_slot(timeout)
         
         
-    def resume(self, value):
+    def zapped(self, slot_index):
+        for plug in self.current_plugs:
+            plug.unplug()
+            
+        self.current_plugs = None
+        schedule(lambda: self.resume(slot_index))  # strong self is OK for scheduling now
+        
+        
+    def resume(self, slot_index):
         # TODO: seems like this value is not used anymore, so it can be
         # renamed to exception, and use it to abort the plan with it
         
@@ -359,12 +362,16 @@ class Plan(Loggable):
             raise Exception("Plan already finished!")
     
         try:
-            # This just returns if the plan is suspended again, or
-            # raises StopIteration if it ended.
-            self.generator.send(value)
+            # This just returns when the plan is suspended again, or
+            # raises StopIteration if it terminated.
+            self.logger.debug("Resuming plan by slot %s." % slot_index)  # can be None
+            slots = self.generator.send(slot_index)
+            if not isinstance(slots, tuple): slots = (slots,)
+            self.logger.debug("Suspended plan for %d slots." % len(slots))
         except StopIteration as e:
             self.logger.debug("Terminated plan.")
             self.generator = None
+            self.current_plugs = None
             
             if e.value:
                 self.logger.debug("Plan return value ignored!")
@@ -373,8 +380,11 @@ class Plan(Loggable):
         except Exception as e:
             self.logger.warning("Aborted plan with exception!", exc_info=True)
             self.generator = None
+            self.current_plugs = None
             
             self.finished(e)
+        else:
+            self.current_plugs = [ slot.plug(self.zapped, slot_index=i).sync() for i, slot in enumerate(slots) ]
 
 
     def plan(self):
@@ -390,18 +400,11 @@ def time_slot(delay, repeat=False):
 
 
 def read_slot(socket):
-    # Damn, multiprocessing.Pipe is different
-    if hasattr(socket, "gettimeout") and socket.gettimeout() != 0.0:
-        raise Exception("Socket is still blocking!")
-        
-    return kernel.add_slot((socket.fileno(), False))
+    return kernel.file_slot(socket, False)
 
 
 def write_slot(socket):
-    if socket.gettimeout() != 0.0:
-        raise Exception("Socket is still blocking!")
-
-    return kernel.add_slot((socket.fileno(), True))
+    return kernel.file_slot(socket, True)
 
 
 # Seems like we need to keep this ordered, because sometimes we want to

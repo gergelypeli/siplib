@@ -174,7 +174,6 @@ class PlannedLeg(Leg):
 
     def do(self, action):
         self.plan.queue(action)
-        #self.plan.resume("action", action)
 
 
     def plan_finished(self, error):
