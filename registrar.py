@@ -5,7 +5,7 @@ import datetime
 import collections
 from weakref import proxy
 
-from format import Nameaddr, Status
+from format import Nameaddr, Status, Uri
 from transactions import make_simple_response
 from util import Loggable
 
@@ -219,12 +219,12 @@ class RecordManager(Loggable):
 
 
 class Registration(object):
-    def __init__(self, registration_manager, registrar_uri, record_uri, contact_uri, hop=None):
+    def __init__(self, registration_manager, registrar_uri, record_uri, hop):
         self.registration_manager = registration_manager
 
         self.registrar_uri = registrar_uri
         self.record_uri = record_uri
-        self.contact_uri = contact_uri
+        self.contact_uri = Uri(hop.local_addr)
         
         if not hop:
             raise Exception("Please select the hop before invoking the registration!")
@@ -327,9 +327,17 @@ class RegistrationManager(Loggable):
         self.switch.send_message(params, related_params)
 
 
-    def start_registration(self, registrar_uri, record_uri, contact_uri, hop=None):
+    def start_registration(self, registrar_uri, record_uri):
+        self.switch.select_hop_slot(registrar_uri, None).plug(
+            self.start_registration_with_hop,
+            registrar_uri=registrar_uri,
+            record_uri=record_uri
+        )
+        
+        
+    def start_registration_with_hop(self, hop, registrar_uri, record_uri):
         id = (registrar_uri.print(), record_uri.print())
-        registration = Registration(proxy(self), registrar_uri, record_uri, contact_uri, hop)
+        registration = Registration(proxy(self), registrar_uri, record_uri, hop)
         self.registrations_by_id[id] = registration
         registration.update()
 

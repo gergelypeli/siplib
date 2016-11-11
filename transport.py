@@ -4,6 +4,7 @@ from weakref import proxy
 from format import Hop, Addr, parse_structured_message, print_structured_message
 from util import Loggable, build_oid
 import zap
+import resolver
 
 
 def indented(packet, indent="  "):
@@ -100,17 +101,20 @@ class TransportManager(Loggable):
     def add_test_transport(self, local_addr, interface=None):
         transport = TestTransport(proxy(self), local_addr, interface)
         self.transports.append(transport)
-        
 
-    def select_hop(self, request):
-        # TODO: this function must be an async resolver
-        route = request.get("route")
-        next_uri = route[0].uri if route else request["uri"]
-        raddr = Addr(next_uri.addr.host, next_uri.addr.port or 5060).resolved()
+
+    def select_hop_slot(self, uri, routes):
+        next_addr = routes[0].uri.addr if routes else uri.addr
+        slot = zap.EventSlot()
+        
+        resolver.resolve_slot(next_addr.host).plug(self.select_hop_finish, port=next_addr.port, slot=slot)
+        return slot
+
+
+    def select_hop_finish(self, address, port, slot):
         transport = self.transports[0]
+        slot.zap(Hop(transport.local_addr, Addr(address, port), transport.interface))
         
-        return Hop(transport.local_addr, raddr, transport.interface)
-
 
     def send_message(self, msg):
         sip = print_structured_message(msg)

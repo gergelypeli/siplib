@@ -153,6 +153,15 @@ class SipLeg(Leg):
             
         return session
 
+
+    def process_incoming_sdp(self, sdp, is_answer):
+        if not sdp:
+            return None
+        elif is_answer:
+            return self.process_incoming_answer(sdp)
+        else:
+            return self.process_incoming_offer(sdp)
+            
     
     def process_outgoing_offer(self, session):
         if session["is_answer"]:
@@ -174,20 +183,28 @@ class SipLeg(Leg):
         sdp = self.sdp_builder.build(session)
         return sdp
 
-
-    def process_incoming_sdp(self, sdp, is_answer):
-        if not sdp:
-            return None
-        elif is_answer:
-            return self.process_incoming_answer(sdp)
-        else:
-            return self.process_incoming_offer(sdp)
             
+    def process_outgoing_session(self, session):
+        # Returns the sdp
+        
+        if not session:
+            return None
+        elif session["is_answer"]:
+            return self.process_outgoing_answer(session)
+        else:
+            return self.process_outgoing_offer(session)
+        
 
     def finish_media(self, error=None):
         self.deallocate_local_media(None, self.session.local_session)
         Leg.finish_media(self, error)
 
+
+    def hop_selected(self, hop, action):
+        action["ctx"]["hop"] = hop
+        self.logger.debug("Retrying dial with resolved hop")
+        self.do(action)
+        
 
     def do(self, action):
         # TODO: we probably need an inner do method, to retry pending actions,
@@ -198,26 +215,25 @@ class SipLeg(Leg):
         type = action["type"]
         session = action.get("session")
         
-        if not session:
-            sdp = None
-        elif session["is_answer"]:
-            sdp = self.process_outgoing_answer(session)
-        else:
-            sdp = self.process_outgoing_offer(session)
-        
         if self.state == self.DOWN:
             if type == "dial":
-                self.ctx.update(action["ctx"])
+                ctx = action["ctx"]
                 
+                if not ctx.get("hop"):
+                    uri = ctx["uri"]
+                    routes = ctx.get("route")
+                    self.call.switch.select_hop_slot(uri, routes).plug(self.hop_selected, action=action)
+                    return  # Don't change state, we'd have to handle it everywhere...
+            
                 # TODO: uri and hop should be set in the constructor, route is
                 # empty, others may come from the ctx (currently from and to only).
                 
                 self.dialog.setup_outgoing(
-                    self.ctx["uri"],
-                    self.ctx["from"],
-                    self.ctx["to"],
-                    self.ctx.get("route"),
-                    self.ctx["hop"]  # Kinda mandatory now
+                    ctx["uri"],
+                    ctx["from"],
+                    ctx["to"],
+                    ctx.get("route"),
+                    ctx["hop"]  # Kinda mandatory now
                 )
                 
                 self.make_invite(True)
@@ -225,6 +241,7 @@ class SipLeg(Leg):
                 if "100rel" in action.get("options", set()):
                     self.invite.use_rpr_locally()
                     
+                sdp = self.process_outgoing_session(session)
                 self.invite.outgoing(dict(method="INVITE"), sdp)
                 self.change_state(self.DIALING_OUT)
                 
@@ -240,6 +257,7 @@ class SipLeg(Leg):
                 if self.invite.is_session_finished():
                     raise Error("Can't send UPDATE yet!")
                 else:
+                    sdp = self.process_outgoing_session(session)
                     self.invite.outgoing(None, sdp)
                     
                     if self.invite.is_finished():  # may have sent an ACK
@@ -258,11 +276,13 @@ class SipLeg(Leg):
             if type == "session":
                 # TODO: use an empty msg, to have opportunity for extra fields!
                 msg = dict(status=Status(180)) if already_ringing else None
+                sdp = self.process_outgoing_session(session)
                 self.invite.outgoing(msg, sdp)
                 return
                 
             elif type == "ring":
                 msg = dict(status=Status(180))
+                sdp = self.process_outgoing_session(session)
                 self.invite.outgoing(msg, sdp)
 
                 if not already_ringing:
@@ -272,6 +292,7 @@ class SipLeg(Leg):
                     
             elif type == "accept":
                 msg = dict(status=Status(200))
+                sdp = self.process_outgoing_session(session)
                 self.invite.outgoing(msg, sdp)
                 # Wait for the ACK before changing state
                 return
@@ -291,11 +312,12 @@ class SipLeg(Leg):
                 if not self.invite:
                     self.make_invite(True)
                     msg = dict(method="INVITE")
+                    sdp = self.process_outgoing_session(session)
                     self.invite.outgoing(msg, sdp)
                 else:
                     msg = dict(status=Status(200))  # TODO: handle rejection!
+                    sdp = self.process_outgoing_session(session)
                     self.invite.outgoing(msg, sdp)
-                    
                 return
         
             elif type == "tone":
@@ -329,11 +351,11 @@ class SipLeg(Leg):
         
         if self.state == self.DOWN:
             if not is_response and method == "INVITE":
-                self.ctx.update({
+                ctx = {
                     "uri": msg["uri"],
                     "from": msg["from"],
                     "to": msg["to"]
-                })
+                }
                 
                 self.make_invite(False)
                 msg, sdp, is_answer = self.invite.incoming(msg)
@@ -341,7 +363,7 @@ class SipLeg(Leg):
                 options = set("100rel") if self.invite.is_rpr_supported() else set()
                 
                 self.change_state(self.DIALING_IN)
-                self.report(dict(type="dial", ctx=self.ctx, session=session, options=options))
+                self.report(dict(type="dial", ctx=ctx, session=session, options=options))
                 return
                 
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):

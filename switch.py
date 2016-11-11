@@ -65,12 +65,18 @@ class Switch(Loggable):
         self.ground.set_oid(build_oid(oid, "ground"))
 
 
+    def start(self):
+        # Just to delay some operations after oid-s are set
+        
+        self.mgc.start()
+        
+
     def set_name(self, name):
         self.mgc.set_name(name)
         
         
-    def select_hop(self, request):
-        return self.transport_manager.select_hop(request)
+    def select_hop_slot(self, uri, routes):
+        return self.transport_manager.select_hop_slot(uri, routes)
         
 
     def provide_auth(self, response, request):

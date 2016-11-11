@@ -376,6 +376,10 @@ class MediaGateway(Loggable):
     def set_name(self, name):
         self.msgp.set_name(name)
         
+        
+    def start(self):
+        self.msgp.start()
+        
     
     def get_leg(self, label):
         return self.legs_by_label[label]

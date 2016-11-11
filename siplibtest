@@ -7,8 +7,8 @@ import sys
 from weakref import proxy
 
 from format import Addr, Uri, Nameaddr, Status, SipError, Hop
-from transport import UdpTransport
-from transactions import TransactionManager
+#from transport import UdpTransport
+#from transactions import TransactionManager
 from leg import PlannedLeg, LegPlan, SimpleRouting, PlannedRouting, RoutingPlan
 from sdp import Sdp
 from authority import Authority
@@ -411,9 +411,9 @@ class SwitchB(TestSwitch):
 
         self.registration_manager.start_registration(
             registrar_uri=Uri(A_ADDR),
-            record_uri=Uri(Addr(A_DOMAIN, None), CALLEE_NUMBER),
-            contact_uri=Uri(B_ADDR, CALLEE_NUMBER),
-            hop=Hop(B_ADDR.resolved(), A_ADDR.resolved(), 'eth0')  # TODO: ugly
+            record_uri=Uri(Addr(A_DOMAIN, None), CALLEE_NUMBER)#,
+            #contact_uri=Uri(B_ADDR, CALLEE_NUMBER),
+            #hop=Hop(B_ADDR.resolved(), A_ADDR.resolved(), 'eth0')  # TODO: ugly
         )
         
         
@@ -439,14 +439,17 @@ def main():
     mgw = MediaGateway(MGW_ADDR.resolved())
     mgw.set_oid("mgw")
     mgw.set_name("the-mgw")
+    mgw.start()
 
     switch_a = SwitchA(A_ADDR.resolved(), MGW_ADDR.resolved(), range(30000, 30020, 2))
     switch_a.set_oid(build_oid(None, "switch", "a"))
     switch_a.set_name("switch-a")
+    switch_a.start()
     
     switch_b = SwitchB(B_ADDR.resolved(), MGW_ADDR.resolved(), range(40000, 40020, 2))
     switch_b.set_oid(build_oid(None, "switch", "b"))
     switch_b.set_name("switch-b")
+    switch_b.start()
 
     try:
         zap.loop()

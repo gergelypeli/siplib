@@ -687,7 +687,6 @@ class MsgpPeer(MsgpDispatcher):
         
         if local_addr:
             self.listener = TcpListener(local_addr)
-            self.listener.set_oid(build_oid(self.oid, "listener"))
             self.listener.accepted_slot.plug(self.accepted)
         else:
             self.listener = None
@@ -695,15 +694,29 @@ class MsgpPeer(MsgpDispatcher):
         self.reconnectors_by_addr = {}
 
 
+    def set_oid(self, oid):
+        MsgpDispatcher.set_oid(self, oid)
+        
+        if self.listener:
+            self.listener.set_oid(build_oid(self.oid, "listener"))
+
+        for addr, reconnector in self.reconnectors_by_addr.items():
+            reconnector.set_oid(build_oid(self.oid, "reconnector", str(addr)))
+
+
     def set_name(self, name):
         self.name = name
 
 
+    def start(self):
+        for reconnector in self.reconnectors_by_addr.values():
+            reconnector.start()
+            
+
     def add_remote_addr(self, remote_addr):
         reconnector = TcpReconnector(remote_addr, datetime.timedelta(seconds=1))
-        reconnector.set_oid(build_oid(self.oid, "reconnector", str(remote_addr)))
         reconnector.connected_slot.plug(self.connected)
-        reconnector.start()
+        #reconnector.start()
         self.reconnectors_by_addr[remote_addr] = reconnector
         
         

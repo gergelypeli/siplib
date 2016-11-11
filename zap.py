@@ -19,7 +19,7 @@ class Plug:
         self.unplug()
         
         
-    def schedule(self, *args):
+    def zap(self, *args):
         method = self.callable()
         
         if method:
@@ -81,7 +81,7 @@ class Slot:
 
     def zap(self):
         for plug in self.plugs:
-            plug.schedule()
+            plug.zap()
 
 
 class EventSlot(Slot):
@@ -103,7 +103,7 @@ class EventSlot(Slot):
     def zap(self, *args):
         if self.plugs:
             for plug in self.plugs:
-                plug.schedule(*args)
+                plug.zap(*args)
         else:
             self.queue.append(args)
 
@@ -390,7 +390,8 @@ def time_slot(delay, repeat=False):
 
 
 def read_slot(socket):
-    if socket.gettimeout() != 0.0:
+    # Damn, multiprocessing.Pipe is different
+    if hasattr(socket, "gettimeout") and socket.gettimeout() != 0.0:
         raise Exception("Socket is still blocking!")
         
     return kernel.add_slot((socket.fileno(), False))

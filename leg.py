@@ -61,7 +61,6 @@ class Leg(BareLeg):
     def __init__(self):
         BareLeg.__init__(self)
         
-        self.ctx = {}
         self.media_legs = []
 
     
