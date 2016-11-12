@@ -19,6 +19,7 @@ from mgw import MediaGateway
 from mgc import Controller  #, PlayerMediaLeg  #, EchoMediaLeg
 from switch import Switch
 import zap
+import resolver
 
 TEST_DIALIN = 1
 TEST_DIALOUT = 2
@@ -165,6 +166,9 @@ class CallerLegPlan(TestLegPlan):
     
     def plan(self):
         self.logger.debug("Caller created")
+        
+        slot_index, slot_args = yield resolver.resolve_slot("index.hu")
+        self.logger.debug("Resolved in plan index.hu to: %s" % slot_args)
         
         yield from self.sleep(0)  # Hm?
         
