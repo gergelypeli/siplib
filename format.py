@@ -106,12 +106,12 @@ class Via(collections.namedtuple("Via", [ "addr", "branch" ])):
         return cls(Addr(host, port), branch)
 
 
-class Hop(collections.namedtuple("Hop", [ "local_addr", "remote_addr", "interface" ])):
-    def __new__(cls, local_addr, remote_addr, interface):
+class Hop(collections.namedtuple("Hop", [ "interface", "local_addr", "remote_addr" ])):
+    def __new__(cls, interface, local_addr, remote_addr):
         local_addr.assert_resolved()
         remote_addr.assert_resolved()
         
-        return super().__new__(cls, local_addr, remote_addr, interface)
+        return super().__new__(cls, interface, local_addr, remote_addr)
         
         
     def __str__(self):

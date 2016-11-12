@@ -39,14 +39,14 @@ class TestTransport(Transport):
         if hop.local_addr != self.local_addr or hop.interface != self.interface:
             return False
             
-        self.logger.info("Sending from %s to %s\n%s" % (hop.local_addr, hop.remote_addr, indented(packet)))
+        self.logger.info("Sending via %s\n%s" % (hop, indented(packet)))
         self.exchange_slot.zap(packet)
         return True
 
 
     def recved(self, packet):
-        hop = Hop(local_addr=self.local_addr, remote_addr=self.remote_addr, interface=self.interface)
-        self.logger.info("Receiving from %s to %s\n%s" % (hop.remote_addr, hop.local_addr, indented(packet)))
+        hop = Hop(self.interface, self.local_addr, self.remote_addr)
+        self.logger.info("Receiving via %s\n%s" % (hop, indented(packet)))
 
         self.manager.process_packet(hop, packet)
 
@@ -65,15 +65,15 @@ class UdpTransport(Transport):
         if hop.local_addr != self.local_addr or hop.interface != self.interface:
             return False
             
-        self.logger.info("Sending from %s to %s\n%s" % (hop.local_addr, hop.remote_addr, indented(packet)))
+        self.logger.info("Sending via %s\n%s" % (hop, indented(packet)))
         self.socket.sendto(packet, hop.remote_addr)
         return True
 
 
     def recved(self):
         packet, raddr = self.socket.recvfrom(65535)
-        hop = Hop(local_addr=self.local_addr, remote_addr=Addr(*raddr), interface=self.interface)
-        self.logger.info("Receiving from %s to %s\n%s" % (hop.remote_addr, hop.local_addr, indented(packet)))
+        hop = Hop(self.interface, self.local_addr, Addr(*raddr))
+        self.logger.info("Receiving via %s\n%s" % (hop, indented(packet)))
 
         self.manager.process_packet(hop, packet)
 
@@ -114,7 +114,7 @@ class TransportManager(Loggable):
 
     def select_hop_finish(self, address, port, slot):
         transport = self.transports[0]
-        hop = Hop(transport.local_addr, Addr(address, port), transport.interface)
+        hop = Hop(transport.interface, transport.local_addr, Addr(address, port))
         slot.zap(hop)
         
         

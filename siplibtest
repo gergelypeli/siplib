@@ -294,7 +294,7 @@ class SwitchA(TestSwitch):
         
         # Allow calls from anyone on switch-b as long as they use this hop
         b_uri = Uri(Addr(B_DOMAIN, None), None)
-        hop = Hop(A_ADDR.resolved(), B_ADDR.resolved(), 'eth0')
+        hop = Hop('eth0', A_ADDR.resolved(), B_ADDR.resolved())
         self.account_manager.add_account(b_uri, "B", Account.AUTH_BY_HOP, None, None, hops=[ hop ])
         
         # Allow us to register at other places
@@ -308,7 +308,7 @@ class SwitchA(TestSwitch):
         snom_uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
         snom_addr = Addr("192.168.1.8", 1024)  # Quite fake
         snom_contact = Uri(snom_addr, SNOM_NUMBER)
-        snom_hop = Hop(A_ADDR.resolved(), snom_addr.resolved(), 'eth0')
+        snom_hop = Hop('eth0', A_ADDR.resolved(), snom_addr.resolved())
         
         self.record_manager.emulate_registration(snom_uri, snom_contact, 60, snom_hop)
         
