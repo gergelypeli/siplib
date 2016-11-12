@@ -319,6 +319,7 @@ class Context(Thing):
 
         self.manager = manager
         self.legs = []
+        self.forward_plugs = []
         self.logger.debug("Created context")
         
         
@@ -329,21 +330,17 @@ class Context(Thing):
     def modify(self, params):
         leg_labels = params["legs"]
 
-        for i, leg in enumerate(self.legs):
-            leg.forward_slot.unplug_all()  # FIXME: ugly!
+        for plug in self.forward_plugs:
+            plug.unplug()
 
         self.legs = [ self.manager.get_leg(label) for label in leg_labels ]
-
-        for i, leg in enumerate(self.legs):
-            leg.forward_slot.plug(self.fixme, li=i)
-            #set_forward_handler(WeakMethod(self.forward, i).bind_front())
-
-
-    def fixme(self, packet, li):
-        return self.forward(li, packet)
+        self.forward_plugs = []
         
+        for i, leg in enumerate(self.legs):
+            self.forward_plugs.append(leg.forward_slot.plug(self.forward, li=i))
 
-    def forward(self, li, packet):
+
+    def forward(self, packet, li):
         lj = (1 if li == 0 else 0)
         
         try:

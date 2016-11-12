@@ -19,6 +19,7 @@ class Resolver(Loggable):
         
     def resolver(self):
         # Don't log here, it's a background process
+        socket.setdefaulttimeout(5)
         
         try:
             while True:

@@ -11,19 +11,11 @@ class Plug:
     def __init__(self, callable, kwargs):
         self.slot = None
         self.callable = callable
-        #self.args = args
         self.kwargs = kwargs
-        self.is_sync = False
         
         
     def __del__(self):
         self.unplug()
-        
-        
-    def sync(self):
-        self.is_sync = True
-        
-        return self
         
         
     def zap(self, *args):
@@ -32,20 +24,25 @@ class Plug:
         if method:
             kwargs = self.kwargs
             task = lambda: method(*args, **kwargs)
+            self.invoke(task)
             
-            if self.is_sync:
-                task()
-            else:
-                schedule(task)
+            
+    def invoke(self, task):
+        schedule(task)
             
         
     def unplug(self):
         try:
             if self.slot:
-                self.slot.unplug(self)
+                self.slot.plug_out(self)
         except ReferenceError:
             pass
 
+
+class InstaPlug(Plug):
+    def invoke(self, task):
+        task()
+            
 
 class Slot:
     def __init__(self):
@@ -53,47 +50,47 @@ class Slot:
         
         
     def __del__(self):
-        self.unplug_all()
+        for plug in set(self.plugs):
+            plug.unplug()
         
         
-    def inplug(self, plug):
+    def plug_in(self, plug):  # to be called by Slot only
         plug.slot = weakref.proxy(self)
         self.plugs.add(plug)
-        self.postplug()
+        self.post_plug_in()
         
         
-    def unplug(self, plug):
-        self.preunplug()
+    def plug_out(self, plug):
+        self.pre_plug_out()  # to be called by Slot only
         self.plugs.remove(plug)
         plug.slot = None
     
     
-    def unplug_all(self):
-        plugs = set(self.plugs)
-        
-        for plug in plugs:
-            plug.unplug()
-            
-        return plugs
-        
-
     def plug(self, method, **kwargs):
         plug = Plug(weakref.WeakMethod(method), kwargs)
-        self.inplug(plug)
+        self.plug_in(plug)
+        return plug
+
+
+    def instaplug(self, method, **kwargs):
+        plug = InstaPlug(weakref.WeakMethod(method), kwargs)
+        self.plug_in(plug)
         return plug
 
     
-    def postplug(self):
+    def post_plug_in(self):
         pass
         
         
-    def preunplug(self):
+    def pre_plug_out(self):
         pass
 
 
-    def zap(self):
-        for plug in list(self.plugs):  # plugs may unplug
-            plug.zap()
+    def zap(self, *args):
+        # Plugs may unplug themselves during zapping, so this must be done carefully
+        for plug in list(self.plugs):
+            if plug in self.plugs:
+                plug.zap(*args)
 
 
 class EventSlot(Slot):
@@ -103,7 +100,7 @@ class EventSlot(Slot):
         self.queue = []
         
 
-    def postplug(self):
+    def post_plug_in(self):
         if len(self.plugs) == 1:
             queue = self.queue
             self.queue = []
@@ -113,11 +110,10 @@ class EventSlot(Slot):
 
     
     def zap(self, *args):
-        if self.plugs:
-            for plug in list(self.plugs):  # plugs may unplug
-                plug.zap(*args)
-        else:
+        if not self.plugs:
             self.queue.append(args)
+        else:
+            Slot.zap(self, *args)
 
 
 class KernelSlot(Slot):
@@ -127,16 +123,16 @@ class KernelSlot(Slot):
         self.key = key
         
         
-    def postplug(self):
+    def post_plug_in(self):
         if len(self.plugs) == 1:
             kernel.register(self.key)
         
         
-    def preunplug(self):
+    def pre_plug_out(self):
         if len(self.plugs) == 1:
             kernel.unregister(self.key)
-            
-            
+
+
 class Kernel(Loggable):
     def __init__(self):
         self.poll = select.poll()
@@ -272,7 +268,11 @@ class Kernel(Loggable):
                 
             slot = self.slots_by_key[key]
             slot.zap()
-            plugs = slot.unplug_all()  # also unregisters
+            
+            plugs = set(slot.plugs)
+            for plug in plugs:
+                plug.unplug()  # also unregisters the slot when the last plug is unplugged
+                
             self.get_earliest_key()    # also pops key
             
             if delta:
@@ -281,8 +281,8 @@ class Kernel(Loggable):
                 new_slot = self.add_slot(new_key)
                 
                 for plug in plugs:
-                    new_slot.inplug(plug)  # registers new_slot if necessary
-                    
+                    new_slot.plug_in(plug)  # registers new_slot if necessary
+
         if len(self.slots_by_key) > 2 * len(self.registered_keys):
             self.logger.debug("Kernel slot maintenance")
             self.slots_by_key = { key: self.slots_by_key[key] for key in self.registered_keys }
@@ -297,7 +297,8 @@ class Plan(Loggable):
         self.generator = None
         self.event_queue = []
         self.event_slot = Slot()
-        self.current_plugs = None
+        self.resume_plugs = None
+        self.resume_value = None
 
 
     def finished(self, error):
@@ -315,8 +316,7 @@ class Plan(Loggable):
         if not self.generator:
             raise Exception("Couldn't create plan generator!")
             
-        #self.timeout_plug.zap()
-        self.resume(None)
+        self.resume()
 
 
     def abort(self):
@@ -337,7 +337,7 @@ class Plan(Loggable):
 
 
     def wait_event(self, timeout=None):
-        slot_index = yield time_slot(timeout), self.event_slot
+        slot_index, args = yield time_slot(timeout), self.event_slot
         
         return self.event_queue.pop(0) if slot_index == 1 else None
 
@@ -346,15 +346,16 @@ class Plan(Loggable):
         yield time_slot(timeout)
         
         
-    def zapped(self, slot_index):
-        for plug in self.current_plugs:
+    def zapped(self, *args, slot_index):
+        for plug in self.resume_plugs:
             plug.unplug()
             
-        self.current_plugs = None
-        schedule(lambda: self.resume(slot_index))  # strong self is OK for scheduling now
+        self.resume_plugs = None
+        self.resume_value = (slot_index, args)
+        schedule(self.resume)  # strong self is OK for scheduling now
         
         
-    def resume(self, slot_index):
+    def resume(self):
         # TODO: seems like this value is not used anymore, so it can be
         # renamed to exception, and use it to abort the plan with it
         
@@ -364,14 +365,23 @@ class Plan(Loggable):
         try:
             # This just returns when the plan is suspended again, or
             # raises StopIteration if it terminated.
-            self.logger.debug("Resuming plan by slot %s." % slot_index)  # can be None
-            slots = self.generator.send(slot_index)
+            value = self.resume_value
+            self.resume_value = None
+            
+            if value is None:
+                self.logger.debug("Starting plan.")
+            else:
+                self.logger.debug("Resuming plan by slot %d." % value[0])
+                
+            slots = self.generator.send(value)
             if not isinstance(slots, tuple): slots = (slots,)
+            
             self.logger.debug("Suspended plan for %d slots." % len(slots))
+            self.resume_plugs = [ slot.instaplug(self.zapped, slot_index=i) for i, slot in enumerate(slots) ]
         except StopIteration as e:
             self.logger.debug("Terminated plan.")
             self.generator = None
-            self.current_plugs = None
+            self.resume_plugs = None
             
             if e.value:
                 self.logger.debug("Plan return value ignored!")
@@ -380,11 +390,9 @@ class Plan(Loggable):
         except Exception as e:
             self.logger.warning("Aborted plan with exception!", exc_info=True)
             self.generator = None
-            self.current_plugs = None
+            self.resume_plugs = None
             
             self.finished(e)
-        else:
-            self.current_plugs = [ slot.plug(self.zapped, slot_index=i).sync() for i, slot in enumerate(slots) ]
 
 
     def plan(self):

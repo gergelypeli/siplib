@@ -115,7 +115,7 @@ class TransportManager(Loggable):
         transport = self.transports[0]
         slot.zap(Hop(transport.local_addr, Addr(address, port), transport.interface))
         
-
+        
     def send_message(self, msg):
         sip = print_structured_message(msg)
         packet = sip.encode()
