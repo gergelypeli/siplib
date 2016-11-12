@@ -110,8 +110,11 @@ class InviteState(Loggable):
             self.logger.debug("Not sending message: %s" % log)
 
 
-    def recv(self, log, state, msg, sdp=None, is_answer=False):
+    def recv(self, log, state, msg, sdp=None, is_answer=None):
         self.logger.debug("Received message: %s" % log)
+    
+        if sdp is not None and is_answer is None:
+            raise Exception("Please tell explicitly if the SDP is an answer or not!")
     
         if state:
             self.logger.debug("Changing state %s => %s" % (self.state, state))
@@ -431,7 +434,7 @@ class InviteServerState(InviteState):
                     self.set_rpr_supported()
         
                 if sdp:
-                    return self.recv("request with offer", REQUEST_OFFER, msg, sdp)
+                    return self.recv("request with offer", REQUEST_OFFER, msg, sdp, False)
                 else:
                     return self.recv("request without offer", REQUEST_EMPTY, msg, None)
             else:
@@ -462,7 +465,7 @@ class InviteServerState(InviteState):
                 if sdp:
                     prr = dict(status=Status(200))
                     self.send_message(prr, msg)
-                    return self.recv("PRACK with answer", EARLY_SESSION, None, sdp)
+                    return self.recv("PRACK with answer", EARLY_SESSION, None, sdp, True)
                 else:
                     return self.abort("Missing answer in PRACK request!")
             elif s in (RELIABLE_ANSWER,):
@@ -470,7 +473,7 @@ class InviteServerState(InviteState):
                     # Bleh
                     self.unanswered_prack = msg
                     self.pending_sdp = None  # This is needed to let us answer again
-                    return self.recv("PRACK with offer", PRACK_OFFER, None, sdp)
+                    return self.recv("PRACK with offer", PRACK_OFFER, None, sdp, False)
                 else:
                     prr = dict(status=Status(200))
                     self.send_message(prr, msg)
@@ -500,7 +503,7 @@ class InviteServerState(InviteState):
                     return self.recv("ACK", FINISH, msg, None)
             elif s in (FINAL_OFFER,):
                 if sdp:
-                    return self.recv("ACK with answer", FINISH, msg, sdp)
+                    return self.recv("ACK with answer", FINISH, msg, sdp, True)
                 else:
                     return self.recv("ACK without SDP", FINISH, msg, None)
 
