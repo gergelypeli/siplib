@@ -75,8 +75,8 @@ class Switch(Loggable):
         self.mgc.set_name(name)
         
         
-    def select_hop_slot(self, uri, routes):
-        return self.transport_manager.select_hop_slot(uri, routes)
+    def select_hop_slot(self, next_uri):
+        return self.transport_manager.select_hop_slot(next_uri)
         
 
     def provide_auth(self, response, request):

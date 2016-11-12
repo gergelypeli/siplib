@@ -103,17 +103,19 @@ class TransportManager(Loggable):
         self.transports.append(transport)
 
 
-    def select_hop_slot(self, uri, routes):
-        next_addr = routes[0].uri.addr if routes else uri.addr
+    def select_hop_slot(self, next_uri):
+        next_host = next_uri.addr.host
+        next_port = next_uri.addr.port
         slot = zap.EventSlot()
         
-        resolver.resolve_slot(next_addr.host).plug(self.select_hop_finish, port=next_addr.port, slot=slot)
+        resolver.resolve_slot(next_host).plug(self.select_hop_finish, port=next_port, slot=slot)
         return slot
 
 
     def select_hop_finish(self, address, port, slot):
         transport = self.transports[0]
-        slot.zap(Hop(transport.local_addr, Addr(address, port), transport.interface))
+        hop = Hop(transport.local_addr, Addr(address, port), transport.interface)
+        slot.zap(hop)
         
         
     def send_message(self, msg):

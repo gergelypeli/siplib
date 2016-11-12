@@ -76,8 +76,7 @@ class Dialog(Loggable):
         self.dialog_manager.register(self)
         
         
-    # TODO: maybe use a params here, too?
-    def setup_outgoing(self, request_uri, from_nameaddr, to_nameaddr, route=None, hop=None):
+    def setup_outgoing(self, request_uri, from_nameaddr, to_nameaddr, route, hop):
         self.local_nameaddr = from_nameaddr.tagged(generate_tag())
         self.remote_nameaddr = to_nameaddr
         self.my_contact = Nameaddr(Uri(hop.local_addr))

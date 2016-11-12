@@ -115,7 +115,7 @@ class Hop(collections.namedtuple("Hop", [ "local_addr", "remote_addr", "interfac
         
         
     def __str__(self):
-        return "%s:%d >-(%s)-> %s:%d" % (self.local_addr + (self.interface,) + self.remote_addr)
+        return "%s/%s/%s" % (self.interface, self.local_addr, self.remote_addr)
 
 
 def must_match(pattern, s):
@@ -392,7 +392,9 @@ def print_structured_message(params):
             p[field] = "%d %s" % (params[field], params["method"])
         elif field == "rseq":
             p[field] = "%d" % params[field]
-        elif field in ("contact", "via"):
+        elif field in ("contact", "route"):
+            p[field] = [ f.print() for f in params[field] ]
+        elif field in ("via",):
             p[field] = [ f.print() for f in params[field] ]
         elif field in ("supported", "require"):
             p[field] = ", ".join(sorted(params[field]))
@@ -432,7 +434,7 @@ def parse_structured_message(msg):
         # TODO: refactor a bit!
         if field in ("from", "to"):
             p[field] = Nameaddr.parse(params[field])
-        elif field in ("contact",):
+        elif field in ("contact", "route"):
             p[field] = [ Nameaddr.parse(s) for s in params[field] ]
         elif field in ("www_authenticate"):
             p[field] = WwwAuth.parse(params[field])

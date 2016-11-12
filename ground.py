@@ -264,7 +264,11 @@ class Call(Loggable):
     
     def make_media_leg(self, type):
         return self.switch.make_media_leg(type)
-            
+
+
+    def select_hop_slot(self, next_uri):
+        return self.switch.select_hop_slot(next_uri)
+                    
 
     def media_leg_changed(self, leg_index, channel_index, is_added):
         if is_added:

@@ -7,6 +7,7 @@ from leg_sip_invite import InviteClientState, InviteServerState
 
 class SipLeg(Leg):
     DOWN = "DOWN"
+    SELECTING_HOP = "SELECTING_HOP"
     DIALING_IN = "DIALING_IN"
     DIALING_OUT = "DIALING_OUT"
     DIALING_IN_RINGING = "DIALING_IN_RINGING"
@@ -201,7 +202,7 @@ class SipLeg(Leg):
 
 
     def hop_selected(self, hop, action):
-        action["ctx"]["hop"] = hop
+        action["auto_hop"] = hop  # don't alter the ctx, just to be sure
         self.logger.debug("Retrying dial with resolved hop")
         self.do(action)
         
@@ -215,27 +216,33 @@ class SipLeg(Leg):
         type = action["type"]
         session = action.get("session")
         
-        if self.state == self.DOWN:
+        if self.state in (self.DOWN, self.SELECTING_HOP):
             if type == "dial":
                 ctx = action["ctx"]
+                fr = ctx.get("from")
+                to = ctx.get("to")
                 
-                if not ctx.get("hop"):
-                    uri = ctx["uri"]
-                    routes = ctx.get("route")
-                    self.call.switch.select_hop_slot(uri, routes).plug(self.hop_selected, action=action)
-                    return  # Don't change state, we'd have to handle it everywhere...
+                # These are mandatory
+                if not fr:
+                    self.logger.error("No From field for outgoing SIP leg!")
+                elif not to:
+                    self.logger.error("No To field for outgoing SIP leg!")
+                    
+                # Explicit URI is not needed if the To is fine
+                uri = ctx.get("uri") or to.uri
+                route = ctx.get("route")
+                hop = ctx.get("hop") or action.get("auto_hop")
+                
+                # Hop may be calculated here, but it takes another round
+                if not hop:
+                    next_uri = route[0].uri if route else uri
+                    self.call.select_hop_slot(next_uri).plug(self.hop_selected, action=action)
+                    self.change_state(self.SELECTING_HOP)
+                    return
             
-                # TODO: uri and hop should be set in the constructor, route is
-                # empty, others may come from the ctx (currently from and to only).
-                
-                self.dialog.setup_outgoing(
-                    ctx["uri"],
-                    ctx["from"],
-                    ctx["to"],
-                    ctx.get("route"),
-                    ctx["hop"]  # Kinda mandatory now
-                )
-                
+                # These parameters can't go into the user_params, because it
+                # won't be there for future requests, and we should be consistent.
+                self.dialog.setup_outgoing(uri, fr, to, route, hop)
                 self.make_invite(True)
                 
                 if "100rel" in action.get("options", set()):

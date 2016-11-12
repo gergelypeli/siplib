@@ -20,6 +20,10 @@ from mgc import Controller  #, PlayerMediaLeg  #, EchoMediaLeg
 from switch import Switch
 import zap
 
+TEST_DIALIN = 1
+TEST_DIALOUT = 2
+TEST = TEST_DIALOUT
+
 HOST = "otthon"
 A_ADDR = Addr(HOST, 5060)
 B_ADDR = Addr(HOST, 5062)
@@ -164,13 +168,13 @@ class CallerLegPlan(TestLegPlan):
         
         yield from self.sleep(0)  # Hm?
         
-        uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
-        self.ctx["from"] = CALLER_NAMEADDR
-        self.ctx["to"] = Nameaddr(uri, "Snom")
-        self.ctx["uri"] = uri
+        ctx = {
+            'from': CALLER_NAMEADDR,
+            'to': Nameaddr(Uri(Addr(A_DOMAIN, None), SNOM_NUMBER))
+        }
         
         offer = None  # FIXME: make one from CALLER_SDP!
-        self.leg.report(dict(type="dial", ctx=self.ctx, session=offer))
+        self.leg.report(dict(type="dial", ctx=ctx, session=offer))
 
         while True:
             action = yield from self.wait_action()
@@ -231,7 +235,7 @@ class TestRouting(SimpleRouting):
             uri, hop = contacts[0]
             
             out_ctx = {
-                'uri': uri,  # Only update the RURI for forwarding
+                'uri': uri,  # Only update the RURI for dialing out
                 'hop': hop,
                 'from': ctx["from"],
                 'to': ctx["to"]
@@ -249,36 +253,18 @@ class TestSwitch(Switch):
         local_addr.assert_resolved()
         mgw_addr.assert_resolved()
         
-        #transport_manager = UdpTransport(local_addr)
-        #transaction_manager = TransactionManager(local_addr, proxy(transport))
         record_manager = TestRecordManager(proxy(self))
         authority = TestAuthority()
-        #self.registration_manager = RegistrationManager(
-        #    WeakMethod(self.transaction_manager.send_message),
-        #    WeakMethod(self.transport.get_hop),
-        #    WeakMethod(self.authing)
-        #)
-        #self.dialog_manager = DialogManager(
-        #    local_addr,
-        #    WeakMethod(self.transaction_manager.send_message),
-        #    WeakMethod(self.transport.get_hop),
-        #    WeakMethod(self.authing)
-        #)
         mgc = TestController(media_ports)
         mgc.add_mgw_addr(mgw_addr)
-        #self.account_manager = AccountManager()
 
         Switch.__init__(
             self,
-            #transport=transport, transaction_manager=transaction_manager,
             record_manager=record_manager, authority=authority, registration_manager=None,
             dialog_manager=None, mgc=mgc, account_manager=None
         )
 
         self.transport_manager.add_udp_transport(local_addr, "eth0")
-
-        #metapoll.register_timeout(timedelta(seconds=0.2), WeakMethod(self.transaction_manager.maintenance), repeat=True)
-        zap.time_slot(0.2, repeat=True).plug(self.transaction_manager.maintenance)
 
 
     def make_thing(self, type):
@@ -298,34 +284,24 @@ class SwitchA(TestSwitch):
     def __init__(self, *args):
         super().__init__(*args)
         
-        # This can register to accept calls
+        # CALLEE lives on switch-b, but registers here to take calls from here
         callee_uri = Uri(Addr(A_DOMAIN, None), CALLEE_NUMBER)
         self.account_manager.add_account(callee_uri, "Callee", Account.AUTH_IF_UNREGISTERED, B_CRED[0], B_CRED[1])
         
-        # The Snom, too
+        # SNOM lives on its own device, but also registers here
         snom_uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
         self.account_manager.add_account(snom_uri, "Snom", Account.AUTH_IF_UNREGISTERED, SNOM_CRED[0], SNOM_CRED[1])
         
-        # This is to accept calls from it TODO: compute hop nicely!
+        # Allow calls from anyone on switch-b as long as they use this hop
         b_uri = Uri(Addr(B_DOMAIN, None), None)
-        #hop = Hop(local_addr=resolve(A_ADDR), remote_addr=resolve(B_ADDR), interface='eth0')
         hop = Hop(A_ADDR.resolved(), B_ADDR.resolved(), 'eth0')
         self.account_manager.add_account(b_uri, "B", Account.AUTH_BY_HOP, None, None, hops=[ hop ])
         
+        # Allow us to register at other places
         self.account_manager.set_our_credentials(*A_CRED)
-        
-        #metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_dialing))
-        #metapoll.register_timeout(timedelta(seconds=2), WeakMethod(self.test_snoming))
-        zap.time_slot(2).plug(self.test_snoming)
-        
-        
-    def test_dialing(self):
-        self.logger.debug("Dialing begins.")
 
-        #incoming_leg = CallerLeg()
-        #self.start_call(incoming_leg)
-        
-        #incoming_leg.dial()
+        if TEST == TEST_DIALOUT:
+            zap.time_slot(2).plug(self.test_snoming)
         
         
     def test_snoming(self):
@@ -356,35 +332,11 @@ class SwitchB(TestSwitch):
                 self.routing.dial("unreachable", action)
                 self.routing.dial("ringing", action)
                 self.routing.dial("callee", action)
-                #self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:unreachable"))))
-                #self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:ringing"))))
-                #self.dial(dict(action, ctx=dict(action["ctx"], uri=Uri.parse("builtin:callee"))))
             elif to.uri.user == SNOM_NUMBER:
                 action2 = dict(action, ctx=dict(ctx, uri=Uri(A_ADDR, SNOM_NUMBER)))
                 self.routing.dial("sip", action2)
-                
-            #li, action = yield from self.wait_action()
-            #self.forward(li, action)
             
             
-    class XRoutingClass(TestRouting):
-        def route(self, action):
-            ctx = action["ctx"]
-            uri = ctx["uri"]
-            
-            # For the phone call only
-            if uri.user == CALLEE_NUMBER:
-                self.logger.debug("Routing to CalleeLeg for %s" % CALLEE_NUMBER)
-                ctx["uri"] = Uri.parse("builtin:callee")
-                #return CalleeLeg(self.call, self.switch.metapoll)
-                #self.logger.debug("Returning UnreachableLeg for %s" % CALLEE_NUMBER)
-                #return UnreachableLeg(self.call, self.switch.metapoll)
-                #self.logger.debug("Returning RejectingLeg for %s" % CALLEE_NUMBER)
-                #return RejectingLeg(self.call, self.switch.metapoll)
-            else:
-                TestRouting.route(self, action)
-
-
     def __init__(self, *args):
         super().__init__(*args)
         
@@ -394,9 +346,11 @@ class SwitchB(TestSwitch):
         
         self.account_manager.set_our_credentials(*B_CRED)
 
-        #metapoll.register_timeout(timedelta(seconds=10), WeakMethod(self.test_dialing))
-        #metapoll.register_timeout(timedelta(seconds=1), WeakMethod(self.test_registering))
-        zap.time_slot(1).plug(self.test_registering)
+        if TEST == TEST_DIALOUT:
+            zap.time_slot(10).plug(self.test_dialing)
+            
+        if TEST == TEST_DIALIN:
+            zap.time_slot(1).plug(self.test_registering)
 
 
     def make_thing(self, type):
@@ -411,9 +365,7 @@ class SwitchB(TestSwitch):
 
         self.registration_manager.start_registration(
             registrar_uri=Uri(A_ADDR),
-            record_uri=Uri(Addr(A_DOMAIN, None), CALLEE_NUMBER)#,
-            #contact_uri=Uri(B_ADDR, CALLEE_NUMBER),
-            #hop=Hop(B_ADDR.resolved(), A_ADDR.resolved(), 'eth0')  # TODO: ugly
+            record_uri=Uri(Addr(A_DOMAIN, None), CALLEE_NUMBER)
         )
         
         
@@ -429,12 +381,8 @@ def main():
     # so various __del__ methods will run before interpreter shutdown, when even
     # logging is disfunctional.
     
-    #setup_exchandler()
     setup_logging()
-    
     logging.debug("Hello!")
-
-    #metapoll = Metapoll()
 
     mgw = MediaGateway(MGW_ADDR.resolved())
     mgw.set_oid("mgw")
@@ -464,7 +412,6 @@ def main():
         del switch_b
         del switch_a
         del mgw
-        #del metapoll
     
         logging.debug("Bye!")
 

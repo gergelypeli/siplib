@@ -373,8 +373,8 @@ class TransactionManager(Loggable):
         self.request_slot = zap.EventSlot()
         self.response_slot = zap.EventSlot()
         
-        # TODO: add this slot
         self.transport_plug = self.transport.process_slot.plug(self.process_message)
+        zap.time_slot(0.2, repeat=True).plug(self.maintenance)
 
         
     def transmit(self, msg):

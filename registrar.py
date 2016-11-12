@@ -328,7 +328,10 @@ class RegistrationManager(Loggable):
 
 
     def start_registration(self, registrar_uri, record_uri):
-        self.switch.select_hop_slot(registrar_uri, None).plug(
+        route = None  # TODO: do we want to register using a Route?
+        next_uri = route[0].uri if route else registrar_uri
+        
+        self.switch.select_hop_slot(next_uri).plug(
             self.start_registration_with_hop,
             registrar_uri=registrar_uri,
             record_uri=record_uri
@@ -336,7 +339,8 @@ class RegistrationManager(Loggable):
         
         
     def start_registration_with_hop(self, hop, registrar_uri, record_uri):
-        id = (registrar_uri.print(), record_uri.print())
+        self.logger.info("Registration hop resolved to %s" % (hop,))
+        id = (registrar_uri, record_uri)
         registration = Registration(proxy(self), registrar_uri, record_uri, hop)
         self.registrations_by_id[id] = registration
         registration.update()
@@ -345,7 +349,7 @@ class RegistrationManager(Loggable):
     def process_response(self, params, related_request):
         registrar_uri = related_request['uri']
         record_uri = related_request['to'].uri
-        id = (registrar_uri.print(), record_uri.print())
+        id = (registrar_uri, record_uri)
         registration = self.registrations_by_id.get(id)
         
         if registration:

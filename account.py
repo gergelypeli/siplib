@@ -58,6 +58,7 @@ class AccountManager(Loggable):
 
 
     def set_our_credentials(self, authname, ha1):
+        # TODO: eventually we'd need multiple accounts for different places
         self.our_credentials = (authname, ha1)
         
         
