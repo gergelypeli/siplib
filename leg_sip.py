@@ -1,6 +1,7 @@
 from format import Status
 from util import build_oid
-from leg import Leg, SessionState, Error
+from leg import Leg, Error
+from session import SessionState
 from sdp import SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES
 from leg_sip_invite import InviteClientState, InviteServerState
 
