@@ -4,7 +4,7 @@ import heapq
 import datetime
 import collections
 
-from util import Loggable
+from util import Loggable, build_oid
 
 
 class Plug:
@@ -366,6 +366,48 @@ class Plan(Loggable):
             
             self.finished_slot.zap(e)
 
+
+class Planned(Loggable):  # Oops, we may call base class methods twice
+    def __init__(self):
+        Loggable.__init__(self)
+    
+        self.planner = Plan()
+        self.planner.finished_slot.plug(self.plan_finished)
+        self.event_slot = EventSlot()
+
+
+    def __del__(self):
+        if self.planner:
+            self.planner.abort()
+
+
+    def set_oid(self, oid):
+        Loggable.set_oid(self, oid)
+        
+        self.planner.set_oid(build_oid(self.oid, "planner"))
+        
+        
+    def start(self):
+        self.planner.start(self.plan())
+
+
+    def sleep(self, timeout):
+        yield time_slot(timeout)
+        
+
+    def wait_event(self, timeout=None):  # TODO
+        slot_index, args = yield time_slot(timeout), self.event_slot
+        
+        return args if slot_index == 1 else None
+            
+        
+    def plan_finished(self, error):
+        raise NotImplementedError()
+        
+        
+    def plan(self):
+        raise NotImplementedError()
+        
 
 kernel = Kernel()
 kernel.set_oid("kernel")

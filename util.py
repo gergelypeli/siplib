@@ -66,6 +66,10 @@ def build_oid(parent, *args):
 
 
 class Loggable(object):
+    # NOTE: both methods are idempotent, so if that ugliness happens that
+    # they're called multiple times due to multiple inheritance, it won't
+    # be a problem.
+    
     def __init__(self):
         self.logger = None
         self.oid = None

@@ -64,7 +64,7 @@ MEDIA_HOST = "otthon"
 
 
 class UnreachableLeg(PlannedLeg):
-    def leg_plan(self):
+    def plan(self):
         self.logger.debug("Unreachable leg created.")
         
         yield from self.wait_action("dial")
@@ -76,7 +76,7 @@ class UnreachableLeg(PlannedLeg):
 
 
 class RejectingLeg(PlannedLeg):
-    def leg_plan(self):
+    def plan(self):
         self.logger.debug("Rejecting leg created.")
         
         yield from self.wait_action("dial")
@@ -88,7 +88,7 @@ class RejectingLeg(PlannedLeg):
 
 
 class RingingLeg(PlannedLeg):
-    def leg_plan(self):
+    def plan(self):
         self.logger.debug("Ringing leg created.")
         
         yield from self.wait_action("dial")
@@ -139,7 +139,7 @@ class TestLeg(PlannedLeg):
 
 
 class CalleeLeg(TestLeg):
-    def leg_plan(self):
+    def plan(self):
         self.logger.debug("Callee created.")
         
         action = yield from self.wait_action("dial")
@@ -162,7 +162,7 @@ class CalleeLeg(TestLeg):
 class CallerLeg(TestLeg):
     # TODO: call the phone without SDP!
     
-    def leg_plan(self):
+    def plan(self):
         self.logger.debug("Caller created")
         
         slot_index, slot_args = yield resolver.resolve_slot("index.hu")
@@ -319,7 +319,7 @@ class SwitchA(TestSwitch):
 
 class SwitchB(TestSwitch):
     class Routing(PlannedRouting):
-        def routing_plan(self):
+        def plan(self):
             self.logger.debug("Routing plan started.")
             
             li, action = yield from self.wait_action()

@@ -123,40 +123,12 @@ class SlotLeg(Leg):
 
 
 
-class PlannedLeg(Leg):
+class PlannedLeg(zap.Planned, Leg):
     def __init__(self):
+        zap.Planned.__init__(self)
         Leg.__init__(self)
         
-        self.plan = zap.Plan()
-        self.plan.finished_slot.plug(self.plan_finished)
-        self.event_slot = zap.EventSlot()
 
-
-    def __del__(self):
-        if self.plan:
-            self.plan.abort()
-
-
-    def set_oid(self, oid):
-        Leg.set_oid(self, oid)
-        
-        self.plan.set_oid(build_oid(self.oid, "plan"))
-        
-        
-    def start(self):
-        self.plan.start(self.leg_plan())
-
-
-    def sleep(self, timeout):
-        yield zap.time_slot(timeout)
-        
-
-    def wait_event(self, timeout=None):  # TODO
-        slot_index, args = yield zap.time_slot(timeout), self.event_slot
-        
-        return args if slot_index == 1 else None
-            
-        
     def wait_action(self, action_type=None, timeout=None):
         event = yield from self.wait_event(timeout=timeout)
         if not event:
@@ -335,49 +307,17 @@ class SimpleRouting(Routing):
 
 
 
-class PlannedRouting(Routing):
+class PlannedRouting(zap.Planned, Routing):
     def __init__(self):
+        zap.Planned.__init__(self)
         Routing.__init__(self)
 
-        self.plan = zap.Plan()
-        self.plan.finished_slot.plug(self.plan_finished)
-        self.event_slot = zap.EventSlot()
 
-
-    def __del__(self):
-        if self.plan:
-            self.plan.abort()
-            
-
-    def set_oid(self, oid):
-        Routing.set_oid(self, oid)
-        
-        self.plan.set_oid(build_oid(self.oid, "plan"))
-        
-        
-    def routing_plan(self):  # TODO: make it external?
-        raise NotImplementedError()
-        
-        
-    def start(self):
-        self.plan.start(self.routing_plan())
-        
-        
     def may_finish(self):
-        if self.plan:
+        if self.planner:
             return
             
         Routing.may_finish(self)
-            
-
-    def sleep(self, timeout):
-        yield zap.time_slot(timeout)
-        
-
-    def wait_event(self, timeout=None):  # TODO
-        slot_index, args = yield zap.time_slot(timeout), self.event_slot
-        
-        return args if slot_index == 1 else None
             
 
     def wait_action(self, leg_index=None, action_type=None, timeout=None):
