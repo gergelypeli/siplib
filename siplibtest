@@ -7,9 +7,7 @@ import sys
 from weakref import proxy
 
 from format import Addr, Uri, Nameaddr, Status, SipError, Hop
-#from transport import UdpTransport
-#from transactions import TransactionManager
-from leg import PlannedLeg, LegPlan, SimpleRouting, PlannedRouting, RoutingPlan
+from leg import PlannedLeg, SimpleRouting, PlannedRouting
 from sdp import Sdp
 from authority import Authority
 from registrar import RecordManager
@@ -65,8 +63,8 @@ MGW_ADDR = Addr(MGW_HOST, 20000)
 MEDIA_HOST = "otthon"
 
 
-class UnreachableLegPlan(LegPlan):
-    def plan(self):
+class UnreachableLeg(PlannedLeg):
+    def leg_plan(self):
         self.logger.debug("Unreachable leg created.")
         
         yield from self.wait_action("dial")
@@ -77,37 +75,37 @@ class UnreachableLegPlan(LegPlan):
         self.logger.debug("And now the caller hung up.")
 
 
-class RejectingLegPlan(LegPlan):
-    def plan(self):
+class RejectingLeg(PlannedLeg):
+    def leg_plan(self):
         self.logger.debug("Rejecting leg created.")
         
         yield from self.wait_action("dial")
         self.logger.debug("Got dial, but not now rejecting it.")
         #self.anchor()
 
-        self.leg.report(dict(type="reject", status=Status(603)))
+        self.report(dict(type="reject", status=Status(603)))
         self.logger.debug("And now done.")
 
 
-class RingingLegPlan(LegPlan):
-    def plan(self):
+class RingingLeg(PlannedLeg):
+    def leg_plan(self):
         self.logger.debug("Ringing leg created.")
         
         yield from self.wait_action("dial")
         self.logger.debug("Got dial, now ringing forever.")
         #self.anchor()
 
-        self.leg.report(dict(type="ring"))
+        self.report(dict(type="ring"))
 
         yield from self.wait_action("hangup")
         self.logger.debug("And now the caller hung up.")
 
 
-class TestLegPlan(LegPlan):
+class TestLeg(PlannedLeg):
     def update_session(self, offer):
-        if not self.leg.media_legs:
-            media_leg = self.leg.make_media_leg("player")
-            self.leg.set_media_leg(0, media_leg)
+        if not self.media_legs:
+            media_leg = self.make_media_leg("player")
+            self.set_media_leg(0, media_leg)
             media_leg.play("playback.wav", ("PCMA", 8000, 1, None), volume=0.2, fade=3)
 
         answer = deepcopy(offer)
@@ -125,23 +123,23 @@ class TestLegPlan(LegPlan):
             
             if action["type"] == "session":
                 answer = self.update_session(action["session"])
-                self.leg.report(dict(type="session", session=answer))
+                self.report(dict(type="session", session=answer))
             elif action["type"] == "tone":
                 self.logger.debug("Okay, got a tone %s, fading out..." % action["name"])
                 break
             else:
                 self.logger.debug("Don't know what to do with %s, continuing..." % action["type"])
         
-        if self.leg.media_legs:
-            self.leg.media_legs[0].play(volume=0, fade=3)
+        if self.media_legs:
+            self.media_legs[0].play(volume=0, fade=3)
             yield from self.sleep(3)
             
-        self.leg.report(dict(type="hangup"))
+        self.report(dict(type="hangup"))
         
 
 
-class CalleeLegPlan(TestLegPlan):
-    def plan(self):
+class CalleeLeg(TestLeg):
+    def leg_plan(self):
         self.logger.debug("Callee created.")
         
         action = yield from self.wait_action("dial")
@@ -149,22 +147,22 @@ class CalleeLegPlan(TestLegPlan):
         self.logger.debug("Got offer:\n%s" % repr(offer))
         
         yield from self.sleep(1)
-        self.leg.report(dict(type="ring"))
+        self.report(dict(type="ring"))
         
         yield from self.sleep(1)
         
         answer = self.update_session(offer)
-        self.leg.report(dict(type="accept", session=answer))
+        self.report(dict(type="accept", session=answer))
 
         yield from self.idle()
         
         self.logger.debug("Callee done.")
 
 
-class CallerLegPlan(TestLegPlan):
+class CallerLeg(TestLeg):
     # TODO: call the phone without SDP!
     
-    def plan(self):
+    def leg_plan(self):
         self.logger.debug("Caller created")
         
         slot_index, slot_args = yield resolver.resolve_slot("index.hu")
@@ -178,7 +176,7 @@ class CallerLegPlan(TestLegPlan):
         }
         
         offer = None  # FIXME: make one from CALLER_SDP!
-        self.leg.report(dict(type="dial", ctx=ctx, session=offer))
+        self.report(dict(type="dial", ctx=ctx, session=offer))
 
         while True:
             action = yield from self.wait_action()
@@ -195,7 +193,7 @@ class CallerLegPlan(TestLegPlan):
         offer = action.get("session")
         answer = self.update_session(offer)
         
-        self.leg.report(dict(type="session", session=answer))
+        self.report(dict(type="session", session=answer))
 
         # Be more flexible here!
         yield from self.idle()
@@ -275,11 +273,11 @@ class TestSwitch(Switch):
         if type == "routing":
             return TestRouting()
         elif type == "callee":
-            return PlannedLeg(CalleeLegPlan())
+            return CalleeLeg()
         elif type == "unreachable":
-            return PlannedLeg(UnreachableLegPlan())
+            return UnreachableLeg()
         elif type == "ringing":
-            return PlannedLeg(RingingLegPlan())
+            return RingingLeg()
         else:
             return Switch.make_thing(self, type)
 
@@ -320,10 +318,11 @@ class SwitchA(TestSwitch):
 
 
 class SwitchB(TestSwitch):
-    class RoutingPlan(RoutingPlan):
-        def plan(self, action):
+    class Routing(PlannedRouting):
+        def routing_plan(self):
             self.logger.debug("Routing plan started.")
-            yield from self.sleep(0)  # yield necessary in a generator
+            
+            li, action = yield from self.wait_action()
             ctx = action["ctx"]
             to = ctx["to"]
             
@@ -331,14 +330,14 @@ class SwitchB(TestSwitch):
                 #self.bridge("record")
                 to2 = to._replace(uri=to.uri._replace(user="444"))
                 action2 = dict(action, ctx=dict(ctx, to=to2))
-                self.routing.dial("record", action2)
+                self.dial("record", action2)
             elif to.uri.user == "444":
-                self.routing.dial("unreachable", action)
-                self.routing.dial("ringing", action)
-                self.routing.dial("callee", action)
+                self.dial("unreachable", action)
+                self.dial("ringing", action)
+                self.dial("callee", action)
             elif to.uri.user == SNOM_NUMBER:
                 action2 = dict(action, ctx=dict(ctx, uri=Uri(A_ADDR, SNOM_NUMBER)))
-                self.routing.dial("sip", action2)
+                self.dial("sip", action2)
             
             
     def __init__(self, *args):
@@ -351,7 +350,7 @@ class SwitchB(TestSwitch):
         self.account_manager.set_our_credentials(*B_CRED)
 
         if TEST == TEST_DIALOUT:
-            zap.time_slot(10).plug(self.test_dialing)
+            zap.time_slot(5).plug(self.test_dialing)
             
         if TEST == TEST_DIALIN:
             zap.time_slot(1).plug(self.test_registering)
@@ -359,7 +358,7 @@ class SwitchB(TestSwitch):
 
     def make_thing(self, type):
         if type == "routing":
-            return PlannedRouting(self.RoutingPlan())
+            return self.Routing()
         else:
             return TestSwitch.make_thing(self, type)
 
@@ -376,7 +375,7 @@ class SwitchB(TestSwitch):
     def test_dialing(self):
         self.logger.debug("Dialing begins.")
 
-        incoming_leg = PlannedLeg(CallerLegPlan())
+        incoming_leg = CallerLeg()
         self.start_call(incoming_leg)
 
 

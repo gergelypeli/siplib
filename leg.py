@@ -123,43 +123,18 @@ class SlotLeg(Leg):
 
 
 
-class LegPlan(zap.Plan):
-    def __init__(self):
-        zap.Plan.__init__(self)
-        
-        self.leg = None
-        
-
-    def set_leg(self, leg):
-        self.leg = leg
-        
-        
-    def wait_action(self, action_type=None, timeout=None):
-        action = yield from self.wait_event(timeout=timeout)
-        
-        if action_type and action["type"] != action_type:
-            raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
-            
-        return action
-            
-        
-    def finished(self, error):
-        if self.leg:
-            self.leg.plan_finished(error)
-            
-            
-
-
 class PlannedLeg(Leg):
-    def __init__(self, plan):
+    def __init__(self):
         Leg.__init__(self)
         
-        self.plan = plan
-        self.plan.set_leg(proxy(self))
+        self.plan = zap.Plan()
+        self.plan.finished_slot.plug(self.plan_finished)
+        self.event_slot = zap.EventSlot()
 
 
     def __del__(self):
-        self.plan.abort()
+        if self.plan:
+            self.plan.abort()
 
 
     def set_oid(self, oid):
@@ -169,11 +144,34 @@ class PlannedLeg(Leg):
         
         
     def start(self):
-        self.plan.start()
+        self.plan.start(self.leg_plan())
 
+
+    def sleep(self, timeout):
+        yield zap.time_slot(timeout)
+        
+
+    def wait_event(self, timeout=None):  # TODO
+        slot_index, args = yield zap.time_slot(timeout), self.event_slot
+        
+        return args if slot_index == 1 else None
+            
+        
+    def wait_action(self, action_type=None, timeout=None):
+        event = yield from self.wait_event(timeout=timeout)
+        if not event:
+            return None
+            
+        action, = event
+        
+        if action_type and action["type"] != action_type:
+            raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
+            
+        return action
+            
 
     def do(self, action):
-        self.plan.queue(action)
+        self.event_slot.zap(action)
 
 
     def plan_finished(self, error):
@@ -337,42 +335,13 @@ class SimpleRouting(Routing):
 
 
 
-class RoutingPlan(zap.Plan):
-    def __init__(self):
-        zap.Plan.__init__(self)
-        
-        self.routing = None
-        
-        
-    def set_routing(self, routing):
-        self.routing = routing
-        
-        
-    def finished(self, error):
-        if self.routing:
-            self.routing.plan_finished(error)
-        
-        
-    def wait_action(self, leg_index=None, action_type=None, timeout=None):
-        li, action = yield from self.wait_event(timeout=timeout)
-
-        if leg_index is not None and li != leg_index:
-            raise Exception("Expected action from %s, got from %s!" % (leg_index, li))
-
-        if action_type and action["type"] != action_type:
-            raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
-        
-        return li, action
-
-
-
-
 class PlannedRouting(Routing):
-    def __init__(self, plan):
+    def __init__(self):
         Routing.__init__(self)
 
-        self.plan = plan
-        self.plan.set_routing(proxy(self))
+        self.plan = zap.Plan()
+        self.plan.finished_slot.plug(self.plan_finished)
+        self.event_slot = zap.EventSlot()
 
 
     def __del__(self):
@@ -386,6 +355,14 @@ class PlannedRouting(Routing):
         self.plan.set_oid(build_oid(self.oid, "plan"))
         
         
+    def routing_plan(self):  # TODO: make it external?
+        raise NotImplementedError()
+        
+        
+    def start(self):
+        self.plan.start(self.routing_plan())
+        
+        
     def may_finish(self):
         if self.plan:
             return
@@ -393,11 +370,43 @@ class PlannedRouting(Routing):
         Routing.may_finish(self)
             
 
+    def sleep(self, timeout):
+        yield zap.time_slot(timeout)
+        
+
+    def wait_event(self, timeout=None):  # TODO
+        slot_index, args = yield zap.time_slot(timeout), self.event_slot
+        
+        return args if slot_index == 1 else None
+            
+
+    def wait_action(self, leg_index=None, action_type=None, timeout=None):
+        event = yield from self.wait_event(timeout=timeout)
+        if not event:
+            return None, None
+            
+        li, action = event
+
+        if leg_index is not None and li != leg_index:
+            raise Exception("Expected action from %s, got from %s!" % (leg_index, li))
+
+        if action_type and action["type"] != action_type:
+            raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
+        
+        return li, action
+        
+            
+    def process_event(self, li, action):
+        # Take control after the plan finished. Even then the evens must be queued,
+        # so that they don't overtake the once queued, but not yet processed ones.
+        Routing.do_slot(self, li, action)
+        # TODO: how could we plug it directly to event_slot?
+        
+
     def plan_finished(self, exception):
-        for event in self.plan.event_queue:  # FIXME: don't peek into Plan!
-            li, action = event
-            Routing.do_slot(self, li, action)
-                
+        # Take control from here
+        self.event_slot.plug(self.process_event)
+        
         self.plan = None
         status = None
         
@@ -405,9 +414,6 @@ class PlannedRouting(Routing):
             if exception:
                 self.logger.debug("Routing plan finished with: %s" % exception)
                 raise exception
-            
-            #if len(self.legs) < 2:
-            #    raise Exception("Routing plan completed without creating outgoing legs!")
         except SipError as e:
             self.logger.error("Routing plan aborted with SIP error: %s" % e)
             status = e.status
@@ -417,21 +423,16 @@ class PlannedRouting(Routing):
             
         if status:
             # TODO: must handle double events for this to work well!
-            self.hangup_all_outgoing(None)
+            # TODO: Hm?
             self.reject(status)
-            
-        self.may_finish()
+            self.hangup_all_outgoing(None)
+        else:
+            self.may_finish()
         
         
     def do_slot(self, li, action):
         self.logger.debug("Planned routing processing a %s" % action["type"])
-        
-        if action["type"] == "dial":
-            self.plan.start(action)
-        elif self.plan:
-            self.plan.queue((li, action))
-        else:
-            Routing.do_slot(self, li, action)
+        self.event_slot.zap(li, action)
         
 
 

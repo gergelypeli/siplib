@@ -295,27 +295,17 @@ class Plan(Loggable):
         Loggable.__init__(self)
 
         self.generator = None
-        self.event_queue = []
-        self.event_slot = Slot()
         self.resume_plugs = None
         self.resume_value = None
+        self.finished_slot = EventSlot()
 
 
-    def finished(self, error):
-        pass
-        
-
-    def start(self, *args, **kwargs):
+    def start(self, generator):
         if self.generator:
             raise Exception("Plan already started!")
         
-        # Storing the generator while it also has a strong reference to us is
-        # a reference loop, but it can be broken by our owner.
         self.logger.debug("Starting plan.")
-        self.generator = self.plan(*args, **kwargs)
-        if not self.generator:
-            raise Exception("Couldn't create plan generator!")
-            
+        self.generator = generator
         self.resume()
 
 
@@ -325,27 +315,12 @@ class Plan(Loggable):
                 self.generator.close()
             except Exception as e:
                 self.logger.warning("Plan aborted with %s." % e)
-                self.finished(e)
+                self.finished_slot.zap(e)
             else:
                 self.logger.warning("Plan aborted.")
-                self.finished(None)
+                self.finished_slot.zap(None)
 
 
-    def queue(self, event):
-        self.event_queue.append(event)
-        self.event_slot.zap()
-
-
-    def wait_event(self, timeout=None):
-        slot_index, args = yield time_slot(timeout), self.event_slot
-        
-        return self.event_queue.pop(0) if slot_index == 1 else None
-
-
-    def sleep(self, timeout):
-        yield time_slot(timeout)
-        
-        
     def zapped(self, *args, slot_index):
         for plug in self.resume_plugs:
             plug.unplug()
@@ -356,9 +331,6 @@ class Plan(Loggable):
         
         
     def resume(self):
-        # TODO: seems like this value is not used anymore, so it can be
-        # renamed to exception, and use it to abort the plan with it
-        
         if not self.generator:
             raise Exception("Plan already finished!")
     
@@ -386,17 +358,13 @@ class Plan(Loggable):
             if e.value:
                 self.logger.debug("Plan return value ignored!")
             
-            self.finished(None)
+            self.finished_slot.zap(None)
         except Exception as e:
             self.logger.warning("Aborted plan with exception!", exc_info=True)
             self.generator = None
             self.resume_plugs = None
             
-            self.finished(e)
-
-
-    def plan(self):
-        raise NotImplementedError()
+            self.finished_slot.zap(e)
 
 
 kernel = Kernel()
