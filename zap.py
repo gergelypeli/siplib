@@ -372,7 +372,7 @@ class Planned(Loggable):  # Oops, we may call base class methods twice
         Loggable.__init__(self)
     
         self.planner = Plan()
-        self.planner.finished_slot.plug(self.plan_finished)
+        self.planner.finished_slot.plug(self.plan_almost_finished)
         self.event_slot = EventSlot()
 
 
@@ -399,11 +399,20 @@ class Planned(Loggable):  # Oops, we may call base class methods twice
         slot_index, args = yield time_slot(timeout), self.event_slot
         
         return args if slot_index == 1 else None
-            
+
+
+    def is_plan_running(self):
+        return self.planner is not None
+    
+    
+    def plan_almost_finished(self, error):
+        self.planner = None
+        self.plan_finished(error)
+        
         
     def plan_finished(self, error):
         raise NotImplementedError()
-        
+
         
     def plan(self):
         raise NotImplementedError()

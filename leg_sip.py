@@ -197,9 +197,9 @@ class SipLeg(Leg):
             return self.process_outgoing_offer(session)
         
 
-    def finish_media(self, error=None):
+    def may_finish(self):
         self.deallocate_local_media(None, self.session.local_session)
-        Leg.finish_media(self, error)
+        Leg.may_finish(self)
 
 
     def hop_selected(self, hop, action):
@@ -310,7 +310,7 @@ class SipLeg(Leg):
                 self.invite.outgoing(msg, None)
                 # The transactions will catch the ACK
                 self.change_state(self.DOWN)
-                self.finish_media()
+                self.may_finish()
                 return
 
         elif self.state == self.UP:
@@ -381,7 +381,7 @@ class SipLeg(Leg):
                 if method == "CANCEL":
                     self.change_state(self.DOWN)
                     self.report(dict(type="hangup"))
-                    self.finish_media()
+                    self.may_finish()
                 elif method == "ACK":
                     session = self.process_incoming_sdp(sdp, is_answer)
                     self.change_state(self.UP)
@@ -424,7 +424,7 @@ class SipLeg(Leg):
                         self.invite = None
                         self.change_state(self.DOWN)
                         self.report(dict(type="reject", status=status))
-                        self.finish_media()
+                        self.may_finish()
                         
                     return
 
@@ -459,7 +459,7 @@ class SipLeg(Leg):
                     self.send_response(dict(status=Status(200, "OK")), msg)
                     self.change_state(self.DOWN)
                     self.report(dict(type="hangup"))
-                    self.finish_media()
+                    self.may_finish()
                     return
                     
             else:
@@ -479,14 +479,14 @@ class SipLeg(Leg):
         elif self.state == self.DISCONNECTING_OUT:
             if is_response and method == "BYE":
                 self.change_state(self.DOWN)
-                self.finish_media()
+                self.may_finish()
                 return
                 
             elif is_response and method == "INVITE":
                 self.logger.debug("Got cancelled invite response: %s" % (status,))
                 # This was ACKed by the transaction layer
                 self.change_state(self.DOWN)
-                self.finish_media()
+                self.may_finish()
                 return
                 
             elif is_response and method == "CANCEL":

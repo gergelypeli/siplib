@@ -182,11 +182,12 @@ class Call(Loggable):
         
         self.leg_oids.add(leg.oid)
         self.ground.add_leg(leg)
+        leg.finished_slot.plug(self.leg_finished, leg_oid=leg.oid)
 
 
-    def remove_leg(self, leg):
-        self.leg_oids.remove(leg.oid)
-        self.ground.remove_leg(leg.oid)
+    def leg_finished(self, leg_oid):
+        self.leg_oids.remove(leg_oid)
+        self.ground.remove_leg(leg_oid)
         self.may_finish()
         
 
@@ -200,7 +201,7 @@ class Call(Loggable):
             
         if suffix:
             oid = build_oid(oid, suffix)
-            
+
         thing.set_oid(oid)
         
 
@@ -231,10 +232,6 @@ class Call(Loggable):
         thing.start()
 
 
-    def leg_finished(self, leg):
-        self.remove_leg(leg)
-        
-        
     def start(self, incoming_leg):
         self.setup_thing(incoming_leg, [ 0 ], None)
         

@@ -29,10 +29,13 @@ class CallComponent(Loggable):
         raise NotImplementedError()
         
         
-class BareLeg(CallComponent):  # FIXME: merge with Leg now
+class Leg(CallComponent):
     def __init__(self):
         CallComponent.__init__(self)
         
+        self.media_legs = []
+        self.finished_slot = zap.Slot()
+
     
     def do(self, action):
         raise NotImplementedError()
@@ -42,33 +45,18 @@ class BareLeg(CallComponent):  # FIXME: merge with Leg now
         self.call.forward(self, action)
         
         
-    def finished(self):
-        self.logger.debug("Leg is finished.")
-        self.call.leg_finished(self)
-        
-        
-    def get_media_leg(self, channel_index):
-        return None
-        
-        
     def stand(self):
         self.call.add_leg(self)
         
         return self
 
-
-class Leg(BareLeg):
-    def __init__(self):
-        BareLeg.__init__(self)
-        
-        self.media_legs = []
-
     
-    def may_finish(self, error=None):
-        if any(self.media_legs):
-            return
-        
-        self.finished()
+    def may_finish(self):
+        for ci in range(len(self.media_legs)):
+            self.set_media_leg(ci, None)
+
+        self.logger.debug("Leg is finished.")
+        self.finished_slot.zap()
 
 
     def make_media_leg(self, type):
@@ -96,18 +84,11 @@ class Leg(BareLeg):
             self.call.media_leg_changed(self.oid, channel_index, True)
         
 
-    def finish_media(self, error=None):
-        for ci in range(len(self.media_legs)):
-            self.set_media_leg(ci, None)
-            
-        self.may_finish(error)
-
-
     def get_media_leg(self, ci):
         return self.media_legs[ci] if ci < len(self.media_legs) else None
-            
-            
-            
+
+
+
 
 class SlotLeg(Leg):
     def __init__(self, owner, number):
@@ -150,8 +131,7 @@ class PlannedLeg(zap.Planned, Leg):
         if error:
             self.logger.error("Leg plan aborted with: %s!" % error)
         
-        # Unconditional cleanup
-        self.finish_media(error=error)
+        self.may_finish()
 
 
 
@@ -168,6 +148,9 @@ class Routing(CallComponent):
     
     
     def stand(self):
+        if self.legs:
+            raise Exception("Already standing!")
+            
         slot_leg = self.add_leg()
         
         return slot_leg.stand()
@@ -187,8 +170,7 @@ class Routing(CallComponent):
 
     def remove_leg(self, li):
         leg = self.legs.pop(li)
-        leg.finished()
-        self.may_finish()
+        leg.may_finish()
 
 
     def may_finish(self):
@@ -198,7 +180,9 @@ class Routing(CallComponent):
         # slot, and this method is called, then remove it here.
         if len(self.legs) == 1:
             self.remove_leg(0)
-            #self.finished()
+            self.logger.info("Routing finished.")
+        else:
+            self.logger.debug("Not finishing yet, we have %d legs." % len(self.legs))
 
 
     def queue(self, li, action):
@@ -256,6 +240,7 @@ class Routing(CallComponent):
                 raise Exception("Should have handled dial in a subclass!")
             elif type == "hangup":
                 self.hangup_all_outgoing(None)
+                self.may_finish()
             else:
                 raise Exception("Invalid action from incoming leg: %s" % type)
             
@@ -263,6 +248,7 @@ class Routing(CallComponent):
 
         if type == "reject":
             # FIXME: of course don't reject the incoming leg immediately
+            # FIXME: shouldn't we finish here?
             self.reject(action["status"])
         elif type == "ring":
             if action.get("session"):
@@ -275,6 +261,7 @@ class Routing(CallComponent):
         elif type == "accept":
             self.queue(li, action)
             self.anchor(li)
+            self.may_finish()
         elif type == "hangup":
             # Oops, we anchored this leg because it accepted, but now hangs up
             # FIXME: is this still true?
@@ -314,7 +301,7 @@ class PlannedRouting(zap.Planned, Routing):
 
 
     def may_finish(self):
-        if self.planner:
+        if self.is_plan_running():
             return
             
         Routing.may_finish(self)
@@ -345,9 +332,9 @@ class PlannedRouting(zap.Planned, Routing):
 
     def plan_finished(self, exception):
         # Take control from here
+        self.logger.debug("Routing plan finished.")
         self.event_slot.plug(self.process_event)
         
-        self.plan = None
         status = None
         
         try:
@@ -366,14 +353,14 @@ class PlannedRouting(zap.Planned, Routing):
             # TODO: Hm?
             self.reject(status)
             self.hangup_all_outgoing(None)
-        else:
-            self.may_finish()
+
+        self.may_finish()
         
         
     def do_slot(self, li, action):
         self.logger.debug("Planned routing processing a %s" % action["type"])
         self.event_slot.zap(li, action)
-        
+
 
 
 
@@ -398,15 +385,15 @@ class Bridge(CallComponent):
         return incoming_leg.stand()
         
 
-    def may_finish(self):  # TODO: this is probably screwed up now
+    def may_finish(self):
         if self.outgoing_leg:
             self.logger.debug("Releasing outgoing leg.")
-            self.outgoing_leg.finish_media()
+            self.outgoing_leg.may_finish()
             self.outgoing_leg = None
 
         if self.incoming_leg:
             self.logger.debug("Releasing incoming leg.")
-            self.incoming_leg.finish_media()
+            self.incoming_leg.may_finish()
             self.incoming_leg = None
             
         self.logger.debug("Bridge finished.")
