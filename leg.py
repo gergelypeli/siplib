@@ -13,44 +13,29 @@ class CallComponent(Loggable):
         Loggable.__init__(self)
         
         self.call = None
-        self.path = None  # To prettify oids
         
     
-    def set_call(self, call, path):
+    def set_call(self, call):
         self.call = call
-        self.path = path
-        
-        
-    def start(self):
-        pass  # Useful for Leg types that do something by themselves
 
 
-    def stand(self):
-        raise NotImplementedError()
         
         
 class Leg(CallComponent):
-    def __init__(self):
+    def __init__(self, owner, number):
         CallComponent.__init__(self)
+
+        self.owner = owner
+        self.number = number
         
         self.media_legs = []
-        self.finished_slot = zap.Slot()
+        self.finished_slot = zap.Slot()  # TODO: is this better than a direct call?
 
     
-    def do(self, action):
-        raise NotImplementedError()
-        
-        
-    def report(self, action):
+    def report(self, action):  # TODO: rename to forward
         self.call.forward(self, action)
         
         
-    def stand(self):
-        self.call.add_leg(self)
-        
-        return self
-
-    
     def may_finish(self):
         for ci in range(len(self.media_legs)):
             self.set_media_leg(ci, None)
@@ -88,84 +73,46 @@ class Leg(CallComponent):
         return self.media_legs[ci] if ci < len(self.media_legs) else None
 
 
-
-
-class SlotLeg(Leg):
-    def __init__(self, owner, number):
-        Leg.__init__(self)
-        
-        self.owner = owner
-        self.number = number
-        
-        
     def do(self, action):
         self.owner.do_slot(self.number, action)
 
 
 
 
-class PlannedLeg(zap.Planned, Leg):
-    def __init__(self):
-        zap.Planned.__init__(self)
-        Leg.__init__(self)
-        
-
-    def wait_action(self, action_type=None, timeout=None):
-        event = yield from self.wait_event(timeout=timeout)
-        if not event:
-            return None
-            
-        action, = event
-        
-        if action_type and action["type"] != action_type:
-            raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
-            
-        return action
-            
-
-    def do(self, action):
-        self.event_slot.zap(action)
-
-
-    def plan_finished(self, error):
-        if error:
-            self.logger.error("Leg plan aborted with: %s!" % error)
-        
-        self.may_finish()
-
-
-
-
-class Routing(CallComponent):
+class Party(CallComponent):
     def __init__(self):
         CallComponent.__init__(self)
-
+        
+        self.path = None
         self.leg_count = 0
         self.legs = {}
-        self.sent_ringback = False
-        self.queued_actions = {}
-        self.bridge_count = 0
-    
-    
-    def stand(self):
-        if self.legs:
-            raise Exception("Already standing!")
+        
             
-        slot_leg = self.add_leg()
+    def set_path(self, path):
+        self.path = path
         
-        return slot_leg.stand()
         
+    def start(self):
+        if self.legs:
+            raise Exception("Already started!")
+            
+        leg = self.add_leg()
+        
+        return leg
+
     
     def add_leg(self):
         li = self.leg_count  # outgoing legs are numbered from 1
         self.leg_count += 1
 
-        slot_leg = self.call.make_slot(self, li)
-        self.legs[li] = proxy(slot_leg)
+        leg = Leg(self, li)
+        leg.set_call(self.call)
+        leg.set_oid(build_oid(self.oid, "leg", li))
+        self.call.add_leg(leg)
+
+        self.legs[li] = proxy(leg)
         
-        self.queued_actions[li] = []
-        
-        return slot_leg
+        return leg
 
 
     def remove_leg(self, li):
@@ -180,10 +127,82 @@ class Routing(CallComponent):
         # slot, and this method is called, then remove it here.
         if len(self.legs) == 1:
             self.remove_leg(0)
-            self.logger.info("Routing finished.")
+            self.logger.info("Finished.")
         else:
             self.logger.debug("Not finishing yet, we have %d legs." % len(self.legs))
 
+
+    def dial(self, type, action):
+        if action["type"] != "dial":
+            raise Exception("Dial action is not a dial: %s" % action["type"])
+
+        self.logger.debug("Dialing out to: %s" % (type,))
+        
+        leg = self.add_leg()
+        li = leg.number
+        
+        thing = self.call.make_thing(type, self.path + [ li ], None)
+        self.call.link_leg_to_thing(leg, thing)
+        leg.report(action)
+
+
+    def do_slot(self, li, action):
+        raise NotImplementedError()
+
+
+
+
+class PlannedParty(zap.Planned, Party):
+    def __init__(self):
+        zap.Planned.__init__(self)
+        Party.__init__(self)
+
+
+    def start(self):
+        self.start_plan()
+        
+        return Party.start(self)
+        
+
+    def wait_action(self, action_type=None, timeout=None):  # TODO: merge with routing's
+        event = yield from self.wait_event(timeout=timeout)
+        if not event:
+            return None, None
+            
+        li, action = event
+        
+        if action_type and action["type"] != action_type:
+            raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
+            
+        return li, action
+            
+
+    def do_slot(self, li, action):
+        self.queue_event(li, action)
+
+
+    def plan_finished(self, error):
+        if error:
+            self.logger.error("Leg plan aborted with: %s!" % error)
+        
+        self.may_finish()
+
+
+
+
+class Routing(Party):
+    def __init__(self):
+        Party.__init__(self)
+
+        self.sent_ringback = False
+        self.queued_actions = {}
+
+
+    def add_leg(self):
+        leg = Party.add_leg(self)
+        self.queued_actions[leg.number] = []
+        return leg
+        
 
     def queue(self, li, action):
         self.logger.debug("Queueing %s from leg %s." % (action["type"], li))
@@ -215,20 +234,6 @@ class Routing(CallComponent):
         self.hangup_all_outgoing(li)
         self.call.collapse_legs(self.legs[0], self.legs[li], self.queued_actions[li])
         self.remove_leg(li)
-
-
-    def dial(self, type, action):
-        if action["type"] != "dial":
-            raise Exception("Dial action is not a dial: %s" % action["type"])
-
-        self.logger.debug("Dialing out to: %s" % (type,))
-        
-        slot_leg = self.add_leg()
-        li = slot_leg.number
-        
-        thing = self.call.make_thing(type, self.path + [ li ], None)
-        self.call.link_leg_to_thing(slot_leg, thing)
-        slot_leg.report(action)
 
 
     def do_slot(self, li, action):
@@ -270,6 +275,8 @@ class Routing(CallComponent):
             raise Exception("Invalid action from outgoing leg %d: %s" % (li, type))
 
 
+
+
 class SimpleRouting(Routing):
     def route(self, action):
         raise NotImplementedError()
@@ -298,6 +305,12 @@ class PlannedRouting(zap.Planned, Routing):
     def __init__(self):
         zap.Planned.__init__(self)
         Routing.__init__(self)
+
+
+    def start(self):
+        self.start_plan()
+        
+        return Routing.start(self)
 
 
     def may_finish(self):
@@ -359,42 +372,24 @@ class PlannedRouting(zap.Planned, Routing):
         
     def do_slot(self, li, action):
         self.logger.debug("Planned routing processing a %s" % action["type"])
-        self.event_slot.zap(li, action)
+        self.queue_event(li, action)
 
 
 
 
-class Bridge(CallComponent):
+class Bridge(Party):
     def __init__(self):
-        CallComponent.__init__(self)
+        Party.__init__(self)
 
-        self.incoming_leg = None
-        self.outgoing_leg = None
         
-        
-    def stand(self):
-        incoming_leg = self.call.make_slot(self, 0)
-        self.incoming_leg = proxy(incoming_leg)
-
-        outgoing_leg = self.call.make_slot(self, 1)
-        self.outgoing_leg = proxy(outgoing_leg)
-        
-        routing = self.call.make_thing("routing", self.path, "routing")
-        self.call.link_leg_to_thing(outgoing_leg, routing)
-        
-        return incoming_leg.stand()
-        
-
     def may_finish(self):
-        if self.outgoing_leg:
+        if 1 in self.legs:
             self.logger.debug("Releasing outgoing leg.")
-            self.outgoing_leg.may_finish()
-            self.outgoing_leg = None
+            self.remove_leg(1)
 
-        if self.incoming_leg:
+        if 0 in self.legs:
             self.logger.debug("Releasing incoming leg.")
-            self.incoming_leg.may_finish()
-            self.incoming_leg = None
+            self.remove_leg(0)
             
         self.logger.debug("Bridge finished.")
         # Since only the legs held a reference to self, we may be destroyed
@@ -403,12 +398,16 @@ class Bridge(CallComponent):
 
     def do_slot(self, li, action):
         type = action["type"]
+
+        if li == 0 and type == "dial":
+            self.dial("routing", action)  # TODO: this used to make thing with (... self.path, "routing")
+            return
         
         if li == 0:
-            leg = self.outgoing_leg
+            leg = self.legs[1]
             direction = "forward"
         else:
-            leg = self.incoming_leg
+            leg = self.legs[0]
             direction = "backward"
         
         self.logger.debug("Bridging %s %s" % (type, direction))
@@ -420,19 +419,19 @@ class Bridge(CallComponent):
     
 class RecordingBridge(Bridge):
     def hack_media(self, li, answer):
-        old = len(self.incoming_leg.media_legs)
+        old = len(self.legs[0].media_legs)
         new = len(answer["channels"])
         
         for i in range(old, new):
-            this = self.incoming_leg.make_media_leg("pass")
-            that = self.outgoing_leg.make_media_leg("pass")
+            this = self.legs[0].make_media_leg("pass")
+            that = self.legs[1].make_media_leg("pass")
 
             # Pairing must happen before setting it, because realizing needs it
             this.pair(proxy(that))
             that.pair(proxy(this))
             
-            self.incoming_leg.set_media_leg(i, this)
-            self.outgoing_leg.set_media_leg(i, that)
+            self.legs[0].set_media_leg(i, this)
+            self.legs[1].set_media_leg(i, that)
             
             format = ("L16", 8000, 1, None)
             this.refresh(dict(filename="recorded.wav", format=format, record=True))

@@ -1,12 +1,12 @@
 from format import Status
 from util import build_oid
-from leg import Leg, Error
+from leg import Party, Error
 from session import SessionState
 from sdp import SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES
 from leg_sip_invite import InviteClientState, InviteServerState
 
 
-class SipLeg(Leg):
+class SipParty(Party):
     DOWN = "DOWN"
     SELECTING_HOP = "SELECTING_HOP"
     DIALING_IN = "DIALING_IN"
@@ -33,7 +33,7 @@ class SipLeg(Leg):
 
 
     def set_oid(self, oid):
-        Leg.set_oid(self, oid)
+        Party.set_oid(self, oid)
         self.dialog.set_oid(build_oid(oid, "dialog"))
 
 
@@ -52,6 +52,10 @@ class SipLeg(Leg):
         else:
             raise Error("Respond to what?")
 
+
+    def report(self, action):
+        self.legs[0].report(action)
+        
 
     def make_invite(self, is_outgoing):
         if self.invite:
@@ -116,12 +120,16 @@ class SipLeg(Leg):
         
         if len(local_channels) != len(remote_channels):
             raise Exception("Channel count mismatch!")
+
+        leg = self.legs[0]
         
         for i in range(len(local_channels)):
-            if i >= len(self.media_legs):
+            ml = leg.get_media_leg(i)
+            
+            if not ml:
                 self.logger.debug("Making media leg for channel %d" % i)
-                ml = self.make_media_leg("net")
-                self.set_media_leg(i, ml)
+                ml = leg.make_media_leg("net")
+                leg.set_media_leg(i, ml)
                 ml.event_slot.plug(self.notified)
                 
             lc = local_channels[i]
@@ -135,7 +143,7 @@ class SipLeg(Leg):
             }
             
             self.logger.debug("Refreshing media leg %d: %s" % (i, params))
-            self.media_legs[i].update(**params)
+            ml.update(**params)
             
 
     def process_incoming_offer(self, sdp):
@@ -199,16 +207,16 @@ class SipLeg(Leg):
 
     def may_finish(self):
         self.deallocate_local_media(None, self.session.local_session)
-        Leg.may_finish(self)
+        Party.may_finish(self)
 
 
     def hop_selected(self, hop, action):
         action["auto_hop"] = hop  # don't alter the ctx, just to be sure
         self.logger.debug("Retrying dial with resolved hop")
-        self.do(action)
+        self.do_slot(0, action)
         
 
-    def do(self, action):
+    def do_slot(self, li, action):
         # TODO: we probably need an inner do method, to retry pending actions,
         # because we should update self.session once, not on retries.
         # Or we should update it in each case, below. Hm. In the helper methods?
@@ -329,8 +337,8 @@ class SipLeg(Leg):
                 return
         
             elif type == "tone":
-                if self.media_legs and action.get("name"):
-                    self.media_legs[0].notify("tone", dict(name=action["name"]))
+                if self.legs[0].media_legs and action.get("name"):
+                    self.legs[0].media_legs[0].notify("tone", dict(name=action["name"]))
                     
                 return
 

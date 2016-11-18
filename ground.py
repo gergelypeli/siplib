@@ -2,7 +2,6 @@ from weakref import proxy
 
 from mgc import MediaContext
 from util import build_oid, Loggable
-from leg import SlotLeg
 
 
 class Ground(Loggable):
@@ -192,12 +191,13 @@ class Call(Loggable):
         
 
     def setup_thing(self, thing, path, suffix):
-        thing.set_call(proxy(self), path)
+        thing.set_call(proxy(self))
+        thing.set_path(path)
         
         oid = self.oid
         
         if path:
-            oid = build_oid(oid, "leg", path)
+            oid = build_oid(oid, "party", path)
             
         if suffix:
             oid = build_oid(oid, suffix)
@@ -213,32 +213,23 @@ class Call(Loggable):
         return thing
 
 
-    def make_slot(self, owner, li):
-        slot_leg = SlotLeg(owner, li)
-        
-        slot_leg.set_call(proxy(self), None)
-        slot_leg.set_oid(build_oid(owner.oid, "slot", li))
-        
-        return slot_leg
-
-
     def link_leg_to_thing(self, leg, thing):
-        leg = leg.stand()
-        thing_leg = thing.stand()
+        thing_leg = thing.start()
         
         self.logger.debug("Linking %s to %s" % (leg.oid, thing_leg.oid))
         self.ground.link_legs(leg.oid, thing_leg.oid)
 
-        thing.start()
+        #thing.start()
 
 
-    def start(self, incoming_leg):
-        self.setup_thing(incoming_leg, [ 0 ], None)
+    def start(self, incoming_thing):  # TODO: update switch!
+        self.setup_thing(incoming_thing, [ 0 ], None)
+        incoming_leg = incoming_thing.start()
         
         routing = self.make_thing("routing", [], "reception")
         self.link_leg_to_thing(incoming_leg, routing)
 
-        incoming_leg.start()
+        #incoming_thing.start()
 
 
     def may_finish(self):

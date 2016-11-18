@@ -5,7 +5,7 @@ from transport import TransportManager
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
 from leg import Routing, Bridge, RecordingBridge
-from leg_sip import SipLeg
+from leg_sip import SipParty
 from ground import Ground, Call
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
@@ -107,7 +107,7 @@ class Switch(Loggable):
         if type == "routing":
             return Routing()
         elif type == "sip":
-            return SipLeg(Dialog(proxy(self.dialog_manager)))
+            return SipParty(Dialog(proxy(self.dialog_manager)))
         elif type == "bridge":
             return Bridge()
         elif type == "record":
@@ -120,7 +120,7 @@ class Switch(Loggable):
         return Call(proxy(self), proxy(self.ground))
         
         
-    def start_call(self, incoming_leg):
+    def start_call(self, incoming_thing):
         call = self.make_call()
         
         oid = build_oid(self.oid, "call", self.call_count)
@@ -129,13 +129,13 @@ class Switch(Loggable):
         
         self.calls_by_oid[oid] = call
 
-        call.start(incoming_leg)
+        call.start(incoming_thing)
 
 
     def start_sip_call(self, params):
         incoming_dialog = Dialog(proxy(self.dialog_manager))
-        incoming_leg = SipLeg(incoming_dialog)
-        self.start_call(incoming_leg)
+        incoming_thing = SipParty(incoming_dialog)
+        self.start_call(incoming_thing)
         
         # The dialog must be fed directly, since the request contains no local tag yet.
         incoming_dialog.recv_request(params)

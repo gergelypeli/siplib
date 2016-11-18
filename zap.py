@@ -306,7 +306,7 @@ class Plan(Loggable):
         
         self.logger.debug("Starting plan.")
         self.generator = generator
-        self.resume()
+        schedule(self.resume)
 
 
     def abort(self):
@@ -387,8 +387,12 @@ class Planned(Loggable):  # Oops, we may call base class methods twice
         self.planner.set_oid(build_oid(self.oid, "planner"))
         
         
-    def start(self):
+    def start_plan(self):
         self.planner.start(self.plan())
+
+
+    def queue_event(self, *args):
+        self.event_slot.zap(*args)
 
 
     def sleep(self, timeout):

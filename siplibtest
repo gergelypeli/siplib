@@ -7,7 +7,7 @@ import sys
 from weakref import proxy
 
 from format import Addr, Uri, Nameaddr, Status, SipError, Hop
-from leg import PlannedLeg, SimpleRouting, PlannedRouting
+from leg import PlannedParty, SimpleRouting, PlannedRouting
 from sdp import Sdp
 from authority import Authority
 from registrar import RecordManager
@@ -63,49 +63,48 @@ MGW_ADDR = Addr(MGW_HOST, 20000)
 MEDIA_HOST = "otthon"
 
 
-class UnreachableLeg(PlannedLeg):
+class UnreachableParty(PlannedParty):
     def plan(self):
-        self.logger.debug("Unreachable leg created.")
+        self.logger.debug("Unreachable party created.")
         
         yield from self.wait_action("dial")
         self.logger.debug("Got dial, but not answering anything.")
-        #self.anchor()
 
         yield from self.wait_action("hangup")
         self.logger.debug("And now the caller hung up.")
 
 
-class RejectingLeg(PlannedLeg):
+class RejectingParty(PlannedParty):
     def plan(self):
-        self.logger.debug("Rejecting leg created.")
+        self.logger.debug("Rejecting party created.")
         
         yield from self.wait_action("dial")
         self.logger.debug("Got dial, but not now rejecting it.")
-        #self.anchor()
 
-        self.report(dict(type="reject", status=Status(603)))
+        self.legs[0].report(dict(type="reject", status=Status(603)))
         self.logger.debug("And now done.")
 
 
-class RingingLeg(PlannedLeg):
+class RingingParty(PlannedParty):
     def plan(self):
-        self.logger.debug("Ringing leg created.")
+        self.logger.debug("Ringing party created.")
         
         yield from self.wait_action("dial")
         self.logger.debug("Got dial, now ringing forever.")
-        #self.anchor()
 
-        self.report(dict(type="ring"))
+        self.legs[0].report(dict(type="ring"))
 
         yield from self.wait_action("hangup")
         self.logger.debug("And now the caller hung up.")
 
 
-class TestLeg(PlannedLeg):
+class TestParty(PlannedParty):
     def update_session(self, offer):
-        if not self.media_legs:
-            media_leg = self.make_media_leg("player")
-            self.set_media_leg(0, media_leg)
+        leg = self.legs[0]
+        
+        if not leg.media_legs:
+            media_leg = leg.make_media_leg("player")
+            leg.set_media_leg(0, media_leg)
             media_leg.play("playback.wav", ("PCMA", 8000, 1, None), volume=0.2, fade=3)
 
         answer = deepcopy(offer)
@@ -118,48 +117,49 @@ class TestLeg(PlannedLeg):
         
         
     def idle(self):
+        leg = self.legs[0]
+        
         while True:
-            action = yield from self.wait_action()
+            li, action = yield from self.wait_action()
             
             if action["type"] == "session":
                 answer = self.update_session(action["session"])
-                self.report(dict(type="session", session=answer))
+                leg.report(dict(type="session", session=answer))
             elif action["type"] == "tone":
                 self.logger.debug("Okay, got a tone %s, fading out..." % action["name"])
                 break
             else:
                 self.logger.debug("Don't know what to do with %s, continuing..." % action["type"])
         
-        if self.media_legs:
-            self.media_legs[0].play(volume=0, fade=3)
+        if leg.media_legs:
+            leg.media_legs[0].play(volume=0, fade=3)
             yield from self.sleep(3)
             
-        self.report(dict(type="hangup"))
-        
+        leg.report(dict(type="hangup"))
 
 
-class CalleeLeg(TestLeg):
+class CalleeParty(TestParty):
     def plan(self):
         self.logger.debug("Callee created.")
         
-        action = yield from self.wait_action("dial")
+        li, action = yield from self.wait_action("dial")
         offer = action.get("session")
         self.logger.debug("Got offer:\n%s" % repr(offer))
         
         yield from self.sleep(1)
-        self.report(dict(type="ring"))
+        self.legs[0].report(dict(type="ring"))
         
         yield from self.sleep(1)
         
         answer = self.update_session(offer)
-        self.report(dict(type="accept", session=answer))
+        self.legs[0].report(dict(type="accept", session=answer))
 
         yield from self.idle()
         
         self.logger.debug("Callee done.")
 
 
-class CallerLeg(TestLeg):
+class CallerParty(TestParty):
     # TODO: call the phone without SDP!
     
     def plan(self):
@@ -168,18 +168,16 @@ class CallerLeg(TestLeg):
         slot_index, slot_args = yield resolver.resolve_slot("index.hu")
         self.logger.debug("Resolved in plan index.hu to: %s" % slot_args)
         
-        yield from self.sleep(0)  # Hm?
-        
         ctx = {
             'from': CALLER_NAMEADDR,
             'to': Nameaddr(Uri(Addr(A_DOMAIN, None), SNOM_NUMBER))
         }
         
         offer = None  # FIXME: make one from CALLER_SDP!
-        self.report(dict(type="dial", ctx=ctx, session=offer))
+        self.legs[0].report(dict(type="dial", ctx=ctx, session=offer))
 
         while True:
-            action = yield from self.wait_action()
+            li, action = yield from self.wait_action()
         
             if action["type"] == "reject":
                 self.logger.error("Oops, we got rejected!")
@@ -193,7 +191,7 @@ class CallerLeg(TestLeg):
         offer = action.get("session")
         answer = self.update_session(offer)
         
-        self.report(dict(type="session", session=answer))
+        self.legs[0].report(dict(type="session", session=answer))
 
         # Be more flexible here!
         yield from self.idle()
@@ -273,11 +271,11 @@ class TestSwitch(Switch):
         if type == "routing":
             return TestRouting()
         elif type == "callee":
-            return CalleeLeg()
+            return CalleeParty()
         elif type == "unreachable":
-            return UnreachableLeg()
+            return UnreachableParty()
         elif type == "ringing":
-            return RingingLeg()
+            return RingingParty()
         else:
             return Switch.make_thing(self, type)
 
@@ -350,7 +348,7 @@ class SwitchB(TestSwitch):
         self.account_manager.set_our_credentials(*B_CRED)
 
         if TEST == TEST_DIALOUT:
-            zap.time_slot(5).plug(self.test_dialing)
+            zap.time_slot(3).plug(self.test_dialing)
             
         if TEST == TEST_DIALIN:
             zap.time_slot(1).plug(self.test_registering)
@@ -375,7 +373,7 @@ class SwitchB(TestSwitch):
     def test_dialing(self):
         self.logger.debug("Dialing begins.")
 
-        incoming_leg = CallerLeg()
+        incoming_leg = CallerParty()
         self.start_call(incoming_leg)
 
 
