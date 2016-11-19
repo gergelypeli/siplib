@@ -81,7 +81,7 @@ class RejectingParty(PlannedParty):
         yield from self.wait_action("dial")
         self.logger.debug("Got dial, but not now rejecting it.")
 
-        self.legs[0].report(dict(type="reject", status=Status(603)))
+        self.legs[0].forward(dict(type="reject", status=Status(603)))
         self.logger.debug("And now done.")
 
 
@@ -92,7 +92,7 @@ class RingingParty(PlannedParty):
         yield from self.wait_action("dial")
         self.logger.debug("Got dial, now ringing forever.")
 
-        self.legs[0].report(dict(type="ring"))
+        self.legs[0].forward(dict(type="ring"))
 
         yield from self.wait_action("hangup")
         self.logger.debug("And now the caller hung up.")
@@ -124,7 +124,7 @@ class TestParty(PlannedParty):
             
             if action["type"] == "session":
                 answer = self.update_session(action["session"])
-                leg.report(dict(type="session", session=answer))
+                leg.forward(dict(type="session", session=answer))
             elif action["type"] == "tone":
                 self.logger.debug("Okay, got a tone %s, fading out..." % action["name"])
                 break
@@ -135,7 +135,7 @@ class TestParty(PlannedParty):
             leg.media_legs[0].play(volume=0, fade=3)
             yield from self.sleep(3)
             
-        leg.report(dict(type="hangup"))
+        leg.forward(dict(type="hangup"))
 
 
 class CalleeParty(TestParty):
@@ -147,12 +147,12 @@ class CalleeParty(TestParty):
         self.logger.debug("Got offer:\n%s" % repr(offer))
         
         yield from self.sleep(1)
-        self.legs[0].report(dict(type="ring"))
+        self.legs[0].forward(dict(type="ring"))
         
         yield from self.sleep(1)
         
         answer = self.update_session(offer)
-        self.legs[0].report(dict(type="accept", session=answer))
+        self.legs[0].forward(dict(type="accept", session=answer))
 
         yield from self.idle()
         
@@ -174,7 +174,7 @@ class CallerParty(TestParty):
         }
         
         offer = None  # FIXME: make one from CALLER_SDP!
-        self.legs[0].report(dict(type="dial", ctx=ctx, session=offer))
+        self.legs[0].forward(dict(type="dial", ctx=ctx, session=offer))
 
         while True:
             li, action = yield from self.wait_action()
@@ -191,7 +191,7 @@ class CallerParty(TestParty):
         offer = action.get("session")
         answer = self.update_session(offer)
         
-        self.legs[0].report(dict(type="session", session=answer))
+        self.legs[0].forward(dict(type="session", session=answer))
 
         # Be more flexible here!
         yield from self.idle()

@@ -32,7 +32,7 @@ class Leg(CallComponent):
         self.finished_slot = zap.Slot()  # TODO: is this better than a direct call?
 
     
-    def report(self, action):  # TODO: rename to forward
+    def forward(self, action):
         self.call.forward(self, action)
         
         
@@ -44,6 +44,8 @@ class Leg(CallComponent):
         self.finished_slot.zap()
 
 
+    # Technically this method has nothing to do with the Leg, but putting
+    # media related things in Party would be worse.
     def make_media_leg(self, type):
         return self.call.make_media_leg(type)
         
@@ -121,7 +123,7 @@ class Party(CallComponent):
 
 
     def may_finish(self):
-        # TODO: we must keep the incoming SlotLeg (when we have one) until
+        # TODO: we must keep the incoming Leg (when we have one) until
         # we can finish, because removing it may instantly kill us.
         # So even after anchoring, keep the SlotLeg until this is the only
         # slot, and this method is called, then remove it here.
@@ -143,7 +145,7 @@ class Party(CallComponent):
         
         thing = self.call.make_thing(type, self.path + [ li ], None)
         self.call.link_leg_to_thing(leg, thing)
-        leg.report(action)
+        leg.forward(action)
 
 
     def do_slot(self, li, action):
@@ -165,7 +167,7 @@ class PlannedParty(zap.Planned, Party):
         
 
     def wait_action(self, action_type=None, timeout=None):  # TODO: merge with routing's
-        event = yield from self.wait_event(timeout=timeout)
+        event = yield from self.suspend_plan(timeout=timeout)
         if not event:
             return None, None
             
@@ -178,12 +180,12 @@ class PlannedParty(zap.Planned, Party):
             
 
     def do_slot(self, li, action):
-        self.queue_event(li, action)
+        self.notify_plan(li, action)
 
 
     def plan_finished(self, error):
         if error:
-            self.logger.error("Leg plan aborted with: %s!" % error)
+            self.logger.error("Party plan aborted with: %s!" % error)
         
         self.may_finish()
 
@@ -211,21 +213,21 @@ class Routing(Party):
 
     def reject(self, status):
         self.logger.warning("Rejecting with status %s" % (status,))
-        self.legs[0].report(dict(type="reject", status=status))
+        self.legs[0].forward(dict(type="reject", status=status))
             
             
     def ringback(self):
         if not self.sent_ringback:
             self.sent_ringback = True
             self.logger.debug("Sending artificial ringback.")
-            self.legs[0].report(dict(type="ring"))
+            self.legs[0].forward(dict(type="ring"))
 
 
     def hangup_all_outgoing(self, except_li):
         for li, leg in list(self.legs.items()):
             if li not in (0, except_li):
                 self.logger.debug("Hanging up leg %s" % li)
-                leg.report(dict(type="hangup"))
+                leg.forward(dict(type="hangup"))
                 self.remove_leg(li)
 
 
@@ -270,7 +272,7 @@ class Routing(Party):
         elif type == "hangup":
             # Oops, we anchored this leg because it accepted, but now hangs up
             # FIXME: is this still true?
-            self.legs[0].report(action)
+            self.legs[0].forward(action)
         else:
             raise Exception("Invalid action from outgoing leg %d: %s" % (li, type))
 
@@ -321,7 +323,7 @@ class PlannedRouting(zap.Planned, Routing):
             
 
     def wait_action(self, leg_index=None, action_type=None, timeout=None):
-        event = yield from self.wait_event(timeout=timeout)
+        event = yield from self.suspend_plan(timeout=timeout)
         if not event:
             return None, None
             
@@ -372,7 +374,7 @@ class PlannedRouting(zap.Planned, Routing):
         
     def do_slot(self, li, action):
         self.logger.debug("Planned routing processing a %s" % action["type"])
-        self.queue_event(li, action)
+        self.notify_plan(li, action)
 
 
 
@@ -411,7 +413,7 @@ class Bridge(Party):
             direction = "backward"
         
         self.logger.debug("Bridging %s %s" % (type, direction))
-        leg.report(action)
+        leg.forward(action)
 
         if type in ("hangup", "reject"):
             self.may_finish()

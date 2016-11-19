@@ -53,8 +53,8 @@ class SipParty(Party):
             raise Error("Respond to what?")
 
 
-    def report(self, action):
-        self.legs[0].report(action)
+    def forward(self, action):
+        self.legs[0].forward(action)
         
 
     def make_invite(self, is_outgoing):
@@ -362,7 +362,7 @@ class SipParty(Party):
 
         #sdp = msg.get("sdp")
         
-        # Note: must change state before report, because that can generate
+        # Note: must change state before forward, because that can generate
         # a reverse action which should only be processed with the new state!
         
         if self.state == self.DOWN:
@@ -379,7 +379,7 @@ class SipParty(Party):
                 options = set("100rel") if self.invite.is_rpr_supported() else set()
                 
                 self.change_state(self.DIALING_IN)
-                self.report(dict(type="dial", ctx=ctx, session=session, options=options))
+                self.forward(dict(type="dial", ctx=ctx, session=session, options=options))
                 return
                 
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
@@ -388,14 +388,14 @@ class SipParty(Party):
             if self.invite.is_finished():
                 if method == "CANCEL":
                     self.change_state(self.DOWN)
-                    self.report(dict(type="hangup"))
+                    self.forward(dict(type="hangup"))
                     self.may_finish()
                 elif method == "ACK":
                     session = self.process_incoming_sdp(sdp, is_answer)
                     self.change_state(self.UP)
                     
                     if session:
-                        self.report(dict(type="session", session=session))
+                        self.forward(dict(type="session", session=session))
                 elif method == "NAK":
                     self.send_request(dict(method="BYE"))  # required behavior
                     self.change_state(self.DISCONNECTING_OUT)
@@ -412,17 +412,17 @@ class SipParty(Party):
                 if status.code == 180:
                     if self.state == self.DIALING_OUT_RINGING:
                         if session:
-                            self.report(dict(type="session", session=session))
+                            self.forward(dict(type="session", session=session))
                         
                     else:
                         self.change_state(self.DIALING_OUT_RINGING)
-                        self.report(dict(type="ring", session=session))
+                        self.forward(dict(type="ring", session=session))
                         
                     return
 
                 elif status.code == 183:
                     if session:
-                        self.report(dict(type="session", session=session))
+                        self.forward(dict(type="session", session=session))
                         
                     return
                     
@@ -431,7 +431,7 @@ class SipParty(Party):
                         # Transaction now acked, invite should be finished now
                         self.invite = None
                         self.change_state(self.DOWN)
-                        self.report(dict(type="reject", status=status))
+                        self.forward(dict(type="reject", status=status))
                         self.may_finish()
                         
                     return
@@ -441,7 +441,7 @@ class SipParty(Party):
                         self.invite = None
                         self.change_state(self.UP)
                         
-                    self.report(dict(type="accept", session=session))
+                    self.forward(dict(type="accept", session=session))
                     return
 
         elif self.state == self.UP:
@@ -459,14 +459,14 @@ class SipParty(Party):
                         self.invite = None
                 
                     if session:
-                        self.report(dict(type="session", session=session))
+                        self.forward(dict(type="session", session=session))
                         
                     return
                     
                 elif method == "BYE":
                     self.send_response(dict(status=Status(200, "OK")), msg)
                     self.change_state(self.DOWN)
-                    self.report(dict(type="hangup"))
+                    self.forward(dict(type="hangup"))
                     self.may_finish()
                     return
                     
@@ -480,7 +480,7 @@ class SipParty(Party):
                         self.invite = None
                 
                     if session:
-                        self.report(dict(type="session", session=session))
+                        self.forward(dict(type="session", session=session))
                         
                     return
 
@@ -506,4 +506,4 @@ class SipParty(Party):
 
 
     def notified(self, type, params):
-        self.report(dict(params, type=type))
+        self.forward(dict(params, type=type))

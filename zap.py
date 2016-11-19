@@ -391,7 +391,7 @@ class Planned(Loggable):  # Oops, we may call base class methods twice
         self.planner.start(self.plan())
 
 
-    def queue_event(self, *args):
+    def notify_plan(self, *args):
         self.event_slot.zap(*args)
 
 
@@ -399,7 +399,7 @@ class Planned(Loggable):  # Oops, we may call base class methods twice
         yield time_slot(timeout)
         
 
-    def wait_event(self, timeout=None):  # TODO
+    def suspend_plan(self, timeout=None):  # TODO
         slot_index, args = yield time_slot(timeout), self.event_slot
         
         return args if slot_index == 1 else None
