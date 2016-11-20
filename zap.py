@@ -397,20 +397,28 @@ class Planned(Loggable):  # Oops, we may call base class methods twice
             self.event_slot = EventSlot()
             
 
-    def abort_plan(self):
-        if self.event_plan and self.event_plan.is_running():
-            self.event_plan.abort()
-
-
     def send_event(self, *args):
         self.event_slot.zap(*args)
 
+
+    def sleep(self, timeout):
+        yield time_slot(timeout)
+        
 
     def wait_event(self, timeout=None):  # TODO
         slot_index, args = yield time_slot(timeout), self.event_slot
         
         return args if slot_index == 1 else None
         
+        
+    def is_plan_running(self):
+        return self.event_plan and self.event_plan.is_running()
+        
+
+    def abort_plan(self):
+        if self.is_plan_running():
+            self.event_plan.abort()
+
 
     def plan_finished(self, error):
         raise NotImplementedError()

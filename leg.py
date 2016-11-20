@@ -86,14 +86,114 @@ class Party(CallComponent):
         CallComponent.__init__(self)
         
         self.path = None
-        self.leg_count = 0
-        self.legs = {}
         
             
     def set_path(self, path):
         self.path = path
+
+
+    def make_leg(self, li):
+        leg = Leg(self, li)
+        leg.set_call(self.call)
+        leg.set_oid(build_oid(self.oid, "leg", li))
+        self.call.add_leg(leg)
+        
+        return leg
         
         
+    def start(self):
+        raise NotImplementedError()
+
+
+    def may_finish(self):
+        raise NotImplementedError()
+
+
+    def do_slot(self, li, action):
+        raise NotImplementedError()
+
+
+
+
+class Endpoint(Party):
+    def __init__(self):
+        Party.__init__(self)
+        
+        self.leg = None
+        
+            
+    def start(self):
+        self.leg = self.make_leg(None)
+        
+        return self.leg
+
+    
+    def may_finish(self):
+        self.leg.may_finish()
+        self.leg = None
+        self.logger.info("Endpoint finished.")
+
+
+    def do(self, action):
+        raise NotImplementedError()
+        
+
+    def do_slot(self, li, action):
+        self.do(action)
+
+
+
+
+class PlannedEndpoint(zap.Planned, Endpoint):
+    def __init__(self):
+        zap.Planned.__init__(self)
+        Endpoint.__init__(self)
+
+
+    def start(self):
+        self.start_plan()
+        
+        return Endpoint.start(self)
+        
+        
+    def may_finish(self):
+        if self.is_plan_running():
+            return
+            
+        Endpoint.may_finish(self)
+        
+
+    def wait_action(self, timeout=None):
+        event = yield from self.wait_event(timeout=timeout)
+        if not event:
+            return None
+            
+        action, = event
+        
+        return action
+            
+
+    def do(self, action):
+        self.send_event(action)
+
+
+    def plan_finished(self, error):
+        if error:
+            self.logger.error("Endpoint plan aborted with: %s!" % error)
+        
+        self.may_finish()
+
+
+
+
+class Bridge(Party):
+    def __init__(self):
+        Party.__init__(self)
+        
+        self.leg_count = 0
+        self.legs = {}
+        
+            
     def start(self):
         if self.legs:
             raise Exception("Already started!")
@@ -129,9 +229,9 @@ class Party(CallComponent):
         # slot, and this method is called, then remove it here.
         if len(self.legs) == 1:
             self.remove_leg(0)
-            self.logger.info("Finished.")
+            self.logger.info("Bridge finished.")
         else:
-            self.logger.debug("Not finishing yet, we have %d legs." % len(self.legs))
+            self.logger.debug("Not finishing yet, still have %d legs." % len(self.legs))
 
 
     def dial(self, type, action):
@@ -148,82 +248,43 @@ class Party(CallComponent):
         leg.forward(action)
 
 
-    def do_slot(self, li, action):
-        raise NotImplementedError()
 
 
-
-
-class PlannedParty(zap.Planned, Party):
+class Routing(Bridge):
     def __init__(self):
-        zap.Planned.__init__(self)
-        Party.__init__(self)
+        Bridge.__init__(self)
 
-
-    def start(self):
-        self.start_plan()
-        
-        return Party.start(self)
-        
-
-    def wait_action(self, action_type=None, timeout=None):  # TODO: merge with routing's
-        event = yield from self.wait_event(timeout=timeout)
-        if not event:
-            return None, None
-            
-        li, action = event
-        
-        if action_type and action["type"] != action_type:
-            raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
-            
-        return li, action
-            
-
-    def do_slot(self, li, action):
-        self.send_event(li, action)
-
-
-    def plan_finished(self, error):
-        if error:
-            self.logger.error("Party plan aborted with: %s!" % error)
-        
-        self.may_finish()
-
-
-
-
-class Routing(Party):
-    def __init__(self):
-        Party.__init__(self)
-
-        self.sent_ringback = False
-        self.queued_actions = {}
+        self.incoming_leg_rang = False
+        self.routing_concluded = False
+        self.queued_leg_actions = {}
 
 
     def add_leg(self):
-        leg = Party.add_leg(self)
-        self.queued_actions[leg.number] = []
+        leg = Bridge.add_leg(self)
+        self.queued_leg_actions[leg.number] = []
         return leg
         
 
-    def queue(self, li, action):
+    def queue_leg_action(self, li, action):
         self.logger.debug("Queueing %s from leg %s." % (action["type"], li))
-        self.queued_actions[li].append(action)
+        self.queued_leg_actions[li].append(action)
 
 
-    def reject(self, status):
-        self.logger.warning("Rejecting with status %s" % (status,))
-        self.legs[0].forward(dict(type="reject", status=status))
+    def reject_incoming_leg(self, status):
+        if not self.routing_concluded:
+            self.routing_concluded = True
+            self.logger.warning("Rejecting with status %s" % (status,))
+            self.legs[0].forward(dict(type="reject", status=status))
             
             
-    def ringback(self):
-        if not self.sent_ringback:
-            self.sent_ringback = True
+    def ring_incoming_leg(self):
+        if not self.incoming_leg_rang:
+            self.incoming_leg_rang = True
             self.logger.debug("Sending artificial ringback.")
             self.legs[0].forward(dict(type="ring"))
 
 
-    def hangup_all_outgoing(self, except_li):
+    def hangup_outgoing_legs(self, except_li):
         for li, leg in list(self.legs.items()):
             if li not in (0, except_li):
                 self.logger.debug("Hanging up leg %s" % li)
@@ -231,14 +292,29 @@ class Routing(Party):
                 self.remove_leg(li)
 
 
-    def anchor(self, li):
-        self.logger.debug("Anchored to leg %d." % li)
-        self.hangup_all_outgoing(li)
-        self.call.collapse_legs(self.legs[0], self.legs[li], self.queued_actions[li])
-        self.remove_leg(li)
+    def anchor_outgoing_leg(self, li):
+        if not self.routing_concluded:
+            self.routing_concluded = True
+            self.logger.debug("Anchored to leg %d." % li)
+            self.hangup_outgoing_legs(except_li=li)
+            self.call.collapse_legs(self.legs[0], self.legs[li], self.queued_leg_actions[li])
+            self.remove_leg(li)
+            # The incoming leg is kept to keep us alive for a while
 
 
-    def do_slot(self, li, action):
+    def may_finish(self):
+        if not self.routing_concluded:
+            if len(self.legs) >= 2:
+                return  # Give us some more time
+                
+            # No outgoing legs, no conclusion, no happy ending
+            self.logger.error("Routing gave up before reaching a conclusion!")
+            self.reject_incoming_leg(Status(500))
+            
+        return Bridge.may_finish(self)
+        
+
+    def process_leg_action(self, li, action):
         type = action["type"]
         self.logger.debug("Got %s from leg %d." % (type, li))
 
@@ -246,7 +322,8 @@ class Routing(Party):
             if type == "dial":
                 raise Exception("Should have handled dial in a subclass!")
             elif type == "hangup":
-                self.hangup_all_outgoing(None)
+                self.hangup_outgoing_legs(None)
+                self.routing_concluded = True
                 self.may_finish()
             else:
                 raise Exception("Invalid action from incoming leg: %s" % type)
@@ -256,18 +333,18 @@ class Routing(Party):
         if type == "reject":
             # FIXME: of course don't reject the incoming leg immediately
             # FIXME: shouldn't we finish here?
-            self.reject(action["status"])
+            self.reject_incoming_leg(action["status"])
         elif type == "ring":
             if action.get("session"):
                 action["type"] = "session"
-                self.queue(li, action)
+                self.queue_leg_action(li, action)
                 
-            self.ringback()
+            self.ring_incoming_leg()
         elif type == "session":
-            self.queue(li, action)
+            self.queue_leg_action(li, action)
         elif type == "accept":
-            self.queue(li, action)
-            self.anchor(li)
+            self.queue_leg_action(li, action)
+            self.anchor_outgoing_leg(li)
             self.may_finish()
         elif type == "hangup":
             # Oops, we anchored this leg because it accepted, but now hangs up
@@ -280,7 +357,7 @@ class Routing(Party):
 
 
 class SimpleRouting(Routing):
-    def route(self, action):
+    def route(self, dial_action):
         raise NotImplementedError()
 
 
@@ -288,17 +365,16 @@ class SimpleRouting(Routing):
         if li == 0 and action["type"] == "dial":
             try:
                 self.route(action)
-                
-                if not self.legs:
-                    raise Exception("Simple routing finished without legs!")
             except SipError as e:
                 self.logger.error("Simple routing SIP error: %s" % (e.status,))
-                self.reject(e.status)
+                self.reject_incoming_leg(e.status)
             except Exception as e:
                 self.logger.error("Simple routing internal error: %s" % (e,), exc_info=True)
-                self.reject(Status(500))
+                self.reject_incoming_leg(Status(500))
+            else:
+                self.may_finish()
         else:
-            Routing.do_slot(self, li, action)
+            self.process_leg_action(li, action)
 
 
 
@@ -322,53 +398,33 @@ class PlannedRouting(zap.Planned, Routing):
         Routing.may_finish(self)
             
 
-    def wait_action(self, leg_index=None, action_type=None, timeout=None):
+    def wait_leg_action(self, timeout=None):
         event = yield from self.wait_event(timeout=timeout)
         if not event:
             return None, None
             
         li, action = event
 
-        if leg_index is not None and li != leg_index:
-            raise Exception("Expected action from %s, got from %s!" % (leg_index, li))
-
-        if action_type and action["type"] != action_type:
-            raise Exception("Expected action %s, got %s!" % (action_type, action["type"]))
-        
         return li, action
-        
-            
-    def process_event(self, li, action):
-        # Take control after the plan finished. Even then the evens must be queued,
-        # so that they don't overtake the once queued, but not yet processed ones.
-        Routing.do_slot(self, li, action)
-        # TODO: how could we plug it directly to event_slot?
-        
+
 
     def plan_finished(self, exception):
         # Take control from here
         self.logger.debug("Routing plan finished.")
-        self.event_slot.plug(self.process_event)
+        self.event_slot.plug(self.process_leg_action)
         
-        status = None
-        
-        try:
-            if exception:
-                self.logger.debug("Routing plan finished with: %s" % exception)
+        if exception:
+            try:
                 raise exception
-        except SipError as e:
-            self.logger.error("Routing plan aborted with SIP error: %s" % e)
-            status = e.status
-        except Exception as e:
-            self.logger.error("Routing plan aborted with exception: %s" % e)
-            status = Status(500)
+            except SipError as e:
+                self.logger.error("Routing plan aborted with SIP error: %s" % e)
+                self.reject_incoming_leg(e.status)
+                self.hangup_outgoing_legs(None)
+            except Exception as e:
+                self.logger.error("Routing plan aborted with exception: %s" % e)
+                self.reject_incoming_leg(Status(500))
+                self.hangup_outgoing_legs(None)
             
-        if status:
-            # TODO: must handle double events for this to work well!
-            # TODO: Hm?
-            self.reject(status)
-            self.hangup_all_outgoing(None)
-
         self.may_finish()
         
         
@@ -379,9 +435,9 @@ class PlannedRouting(zap.Planned, Routing):
 
 
 
-class Bridge(Party):
+class SimpleBridge(Bridge):
     def __init__(self):
-        Party.__init__(self)
+        Bridge.__init__(self)
 
         
     def may_finish(self):
@@ -393,7 +449,7 @@ class Bridge(Party):
             self.logger.debug("Releasing incoming leg.")
             self.remove_leg(0)
             
-        self.logger.debug("Bridge finished.")
+        Bridge.may_finish(self)
         # Since only the legs held a reference to self, we may be destroyed
         # as soon as this method returns.
             

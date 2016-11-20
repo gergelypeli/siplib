@@ -66,5 +66,15 @@ class Resolver(Loggable):
 resolver = Resolver()
 resolver.set_oid("resolver")
 
+
 def resolve_slot(hostname):
     return resolver.begin(hostname)
+
+
+def wait_resolve(hostname, timeout=None):
+    slot_index, slot_args = yield zap.time_slot(timeout), resolve_slot(hostname)
+    
+    if slot_index == 0:
+        return None
+    else:
+        return slot_args[0]

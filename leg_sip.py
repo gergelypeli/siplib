@@ -1,12 +1,12 @@
 from format import Status
 from util import build_oid
-from leg import Party, Error
+from leg import Endpoint, Error
 from session import SessionState
 from sdp import SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES
 from leg_sip_invite import InviteClientState, InviteServerState
 
 
-class SipParty(Party):
+class SipParty(Endpoint):
     DOWN = "DOWN"
     SELECTING_HOP = "SELECTING_HOP"
     DIALING_IN = "DIALING_IN"
@@ -18,7 +18,7 @@ class SipParty(Party):
     
 
     def __init__(self, dialog):
-        super().__init__()
+        Endpoint.__init__(self)
 
         self.dialog = dialog
         self.state = self.DOWN
@@ -33,7 +33,7 @@ class SipParty(Party):
 
 
     def set_oid(self, oid):
-        Party.set_oid(self, oid)
+        Endpoint.set_oid(self, oid)
         self.dialog.set_oid(build_oid(oid, "dialog"))
 
 
@@ -54,7 +54,7 @@ class SipParty(Party):
 
 
     def forward(self, action):
-        self.legs[0].forward(action)
+        self.leg.forward(action)
         
 
     def make_invite(self, is_outgoing):
@@ -121,7 +121,7 @@ class SipParty(Party):
         if len(local_channels) != len(remote_channels):
             raise Exception("Channel count mismatch!")
 
-        leg = self.legs[0]
+        leg = self.leg
         
         for i in range(len(local_channels)):
             ml = leg.get_media_leg(i)
@@ -207,16 +207,16 @@ class SipParty(Party):
 
     def may_finish(self):
         self.deallocate_local_media(None, self.session.local_session)
-        Party.may_finish(self)
+        Endpoint.may_finish(self)
 
 
     def hop_selected(self, hop, action):
         action["auto_hop"] = hop  # don't alter the ctx, just to be sure
         self.logger.debug("Retrying dial with resolved hop")
-        self.do_slot(0, action)
+        self.do(action)
         
 
-    def do_slot(self, li, action):
+    def do(self, action):
         # TODO: we probably need an inner do method, to retry pending actions,
         # because we should update self.session once, not on retries.
         # Or we should update it in each case, below. Hm. In the helper methods?
@@ -337,8 +337,8 @@ class SipParty(Party):
                 return
         
             elif type == "tone":
-                if self.legs[0].media_legs and action.get("name"):
-                    self.legs[0].media_legs[0].notify("tone", dict(name=action["name"]))
+                if self.leg.media_legs and action.get("name"):
+                    self.leg.media_legs[0].notify("tone", dict(name=action["name"]))
                     
                 return
 

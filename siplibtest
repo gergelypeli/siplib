@@ -7,7 +7,7 @@ import sys
 from weakref import proxy
 
 from format import Addr, Uri, Nameaddr, Status, SipError, Hop
-from leg import PlannedParty, SimpleRouting, PlannedRouting
+from leg import PlannedEndpoint, SimpleRouting, PlannedRouting
 from sdp import Sdp
 from authority import Authority
 from registrar import RecordManager
@@ -63,48 +63,17 @@ MGW_ADDR = Addr(MGW_HOST, 20000)
 MEDIA_HOST = "otthon"
 
 
-class UnreachableParty(PlannedParty):
-    def plan(self):
-        self.logger.debug("Unreachable party created.")
+class TestEndpoint(PlannedEndpoint):
+    def wait_this_action(self, action_type):
+        action = yield from self.wait_action()
+        assert action and action["type"] == action_type
+        return action
         
-        yield from self.wait_action("dial")
-        self.logger.debug("Got dial, but not answering anything.")
 
-        yield from self.wait_action("hangup")
-        self.logger.debug("And now the caller hung up.")
-
-
-class RejectingParty(PlannedParty):
-    def plan(self):
-        self.logger.debug("Rejecting party created.")
-        
-        yield from self.wait_action("dial")
-        self.logger.debug("Got dial, but not now rejecting it.")
-
-        self.legs[0].forward(dict(type="reject", status=Status(603)))
-        self.logger.debug("And now done.")
-
-
-class RingingParty(PlannedParty):
-    def plan(self):
-        self.logger.debug("Ringing party created.")
-        
-        yield from self.wait_action("dial")
-        self.logger.debug("Got dial, now ringing forever.")
-
-        self.legs[0].forward(dict(type="ring"))
-
-        yield from self.wait_action("hangup")
-        self.logger.debug("And now the caller hung up.")
-
-
-class TestParty(PlannedParty):
     def update_session(self, offer):
-        leg = self.legs[0]
-        
-        if not leg.media_legs:
-            media_leg = leg.make_media_leg("player")
-            leg.set_media_leg(0, media_leg)
+        if not self.leg.media_legs:
+            media_leg = self.leg.make_media_leg("player")
+            self.leg.set_media_leg(0, media_leg)
             media_leg.play("playback.wav", ("PCMA", 8000, 1, None), volume=0.2, fade=3)
 
         answer = deepcopy(offer)
@@ -117,56 +86,89 @@ class TestParty(PlannedParty):
         
         
     def idle(self):
-        leg = self.legs[0]
-        
         while True:
-            li, action = yield from self.wait_action()
+            action = yield from self.wait_action()
             
             if action["type"] == "session":
                 answer = self.update_session(action["session"])
-                leg.forward(dict(type="session", session=answer))
+                self.leg.forward(dict(type="session", session=answer))
             elif action["type"] == "tone":
                 self.logger.debug("Okay, got a tone %s, fading out..." % action["name"])
                 break
             else:
                 self.logger.debug("Don't know what to do with %s, continuing..." % action["type"])
         
-        if leg.media_legs:
-            leg.media_legs[0].play(volume=0, fade=3)
+        if self.leg.media_legs:
+            self.leg.media_legs[0].play(volume=0, fade=3)
             yield from self.sleep(3)
             
-        leg.forward(dict(type="hangup"))
+        self.leg.forward(dict(type="hangup"))
 
 
-class CalleeParty(TestParty):
+class UnreachableEndpoint(TestEndpoint):
+    def plan(self):
+        self.logger.debug("Unreachable endpoint created.")
+        
+        yield from self.wait_this_action("dial")
+        self.logger.debug("Got dial, but not answering anything.")
+
+        yield from self.wait_this_action("hangup")
+        self.logger.debug("And now the caller hung up.")
+
+
+class RejectingEndpoint(TestEndpoint):
+    def plan(self):
+        self.logger.debug("Rejecting endpoint created.")
+        
+        yield from self.wait_this_action("dial")
+        self.logger.debug("Got dial, but not now rejecting it.")
+
+        self.leg.forward(dict(type="reject", status=Status(603)))
+        self.logger.debug("And now done.")
+
+
+class RingingEndpoint(TestEndpoint):
+    def plan(self):
+        self.logger.debug("Ringing endpoint created.")
+        
+        yield from self.wait_this_action("dial")
+        self.logger.debug("Got dial, now ringing forever.")
+
+        self.leg.forward(dict(type="ring"))
+
+        yield from self.wait_this_action("hangup")
+        self.logger.debug("And now the caller hung up.")
+
+
+class CalleeEndpoint(TestEndpoint):
     def plan(self):
         self.logger.debug("Callee created.")
         
-        li, action = yield from self.wait_action("dial")
+        action = yield from self.wait_this_action("dial")
         offer = action.get("session")
         self.logger.debug("Got offer:\n%s" % repr(offer))
         
         yield from self.sleep(1)
-        self.legs[0].forward(dict(type="ring"))
+        self.leg.forward(dict(type="ring"))
         
         yield from self.sleep(1)
         
         answer = self.update_session(offer)
-        self.legs[0].forward(dict(type="accept", session=answer))
+        self.leg.forward(dict(type="accept", session=answer))
 
         yield from self.idle()
         
         self.logger.debug("Callee done.")
 
 
-class CallerParty(TestParty):
+class CallerEndpoint(TestEndpoint):
     # TODO: call the phone without SDP!
     
     def plan(self):
         self.logger.debug("Caller created")
         
-        slot_index, slot_args = yield resolver.resolve_slot("index.hu")
-        self.logger.debug("Resolved in plan index.hu to: %s" % slot_args)
+        address = yield from resolver.wait_resolve("index.hu")
+        self.logger.debug("Resolved index.hu asynchronously to: %s" % address)
         
         ctx = {
             'from': CALLER_NAMEADDR,
@@ -174,10 +176,10 @@ class CallerParty(TestParty):
         }
         
         offer = None  # FIXME: make one from CALLER_SDP!
-        self.legs[0].forward(dict(type="dial", ctx=ctx, session=offer))
+        self.leg.forward(dict(type="dial", ctx=ctx, session=offer))
 
         while True:
-            li, action = yield from self.wait_action()
+            action = yield from self.wait_action()
         
             if action["type"] == "reject":
                 self.logger.error("Oops, we got rejected!")
@@ -191,7 +193,7 @@ class CallerParty(TestParty):
         offer = action.get("session")
         answer = self.update_session(offer)
         
-        self.legs[0].forward(dict(type="session", session=answer))
+        self.leg.forward(dict(type="session", session=answer))
 
         # Be more flexible here!
         yield from self.idle()
@@ -271,11 +273,11 @@ class TestSwitch(Switch):
         if type == "routing":
             return TestRouting()
         elif type == "callee":
-            return CalleeParty()
+            return CalleeEndpoint()
         elif type == "unreachable":
-            return UnreachableParty()
+            return UnreachableEndpoint()
         elif type == "ringing":
-            return RingingParty()
+            return RingingEndpoint()
         else:
             return Switch.make_thing(self, type)
 
@@ -320,7 +322,7 @@ class SwitchB(TestSwitch):
         def plan(self):
             self.logger.debug("Routing plan started.")
             
-            li, action = yield from self.wait_action()
+            li, action = yield from self.wait_leg_action()
             ctx = action["ctx"]
             to = ctx["to"]
             
@@ -373,8 +375,8 @@ class SwitchB(TestSwitch):
     def test_dialing(self):
         self.logger.debug("Dialing begins.")
 
-        incoming_leg = CallerParty()
-        self.start_call(incoming_leg)
+        incoming_thing = CallerEndpoint()
+        self.start_call(incoming_thing)
 
 
 def main():
