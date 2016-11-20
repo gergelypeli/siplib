@@ -54,15 +54,15 @@ class Switch(Loggable):
     def set_oid(self, oid):
         Loggable.set_oid(self, oid)
 
-        self.account_manager.set_oid(build_oid(oid, "accman"))
-        self.authority.set_oid(build_oid(oid, "authority"))
-        self.record_manager.set_oid(build_oid(oid, "recman"))
-        self.registration_manager.set_oid(build_oid(oid, "regman"))
-        self.transport_manager.set_oid(build_oid(oid, "transport"))
-        self.transaction_manager.set_oid(build_oid(oid, "transaction"))
-        self.dialog_manager.set_oid(build_oid(oid, "diaman"))
-        self.mgc.set_oid(build_oid(oid, "mgc"))
-        self.ground.set_oid(build_oid(oid, "ground"))
+        self.account_manager.set_oid(oid, "accman")
+        self.authority.set_oid(oid, "authority")
+        self.record_manager.set_oid(oid, "recman")
+        self.registration_manager.set_oid(oid, "regman")
+        self.transport_manager.set_oid(oid, "transport")
+        self.transaction_manager.set_oid(oid, "transaction")
+        self.dialog_manager.set_oid(oid, "diaman")
+        self.mgc.set_oid(oid, "mgc")
+        self.ground.set_oid(oid, "ground")
 
 
     def start(self):

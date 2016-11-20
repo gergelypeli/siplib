@@ -1,6 +1,6 @@
 from weakref import proxy
 
-from util import build_oid, Loggable
+from util import Loggable
 from format import SipError, Status
 import zap
 
@@ -67,7 +67,7 @@ class Leg(CallComponent):
         
         if media_leg:
             self.logger.debug("Adding media leg %s." % channel_index)
-            media_leg.set_oid(build_oid(self.oid, "channel", channel_index))
+            media_leg.set_oid(self.oid, "channel", channel_index)
             self.call.media_leg_changed(self.oid, channel_index, True)
         
 
@@ -95,7 +95,7 @@ class Party(CallComponent):
     def make_leg(self, li):
         leg = Leg(self, li)
         leg.set_call(self.call)
-        leg.set_oid(build_oid(self.oid, "leg", li))
+        leg.set_oid(self.oid, "leg", li)
         self.call.add_leg(leg)
         
         return leg
@@ -209,7 +209,7 @@ class Bridge(Party):
 
         leg = Leg(self, li)
         leg.set_call(self.call)
-        leg.set_oid(build_oid(self.oid, "leg", li))
+        leg.set_oid(self.oid, "leg", li)
         self.call.add_leg(leg)
 
         self.legs[li] = proxy(leg)

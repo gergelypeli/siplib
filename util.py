@@ -75,7 +75,8 @@ class Loggable(object):
         self.oid = None
         
         
-    def set_oid(self, oid):  # TODO: accept oid, key, value=None?
+    def set_oid(self, parent, *args):
+        oid = build_oid(parent, *args)
         self.logger = logging.LoggerAdapter(logging.getLogger(), dict(oid=oid))
         self.oid = oid
 

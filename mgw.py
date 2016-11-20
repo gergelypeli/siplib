@@ -107,9 +107,9 @@ class PassLeg(Leg):
                 
             self.filename = params["filename"]
             self.recv_recorder = RtpRecorder(self.format)
-            self.recv_recorder.set_oid(build_oid(self.oid, "recv"))
+            self.recv_recorder.set_oid(self.oid, "recv")
             self.send_recorder = RtpRecorder(self.format)
-            self.send_recorder.set_oid(build_oid(self.oid, "send"))
+            self.send_recorder.set_oid(self.oid, "send")
             
             self.is_recording = False
             self.has_recorded = False
@@ -150,9 +150,9 @@ class NetLeg(Leg):
         self.rtp_builder = RtpBuilder()
         self.dtmf_extractor = DtmfExtractor()
         self.dtmf_detected_plug = self.dtmf_extractor.dtmf_detected_slot.plug(self.dtmf_detected)
-        self.dtmf_extractor.set_oid(build_oid(self.oid, "dtmf-ex"))
+        self.dtmf_extractor.set_oid(self.oid, "dtmf-ex")
         self.dtmf_injector = DtmfInjector()
-        self.dtmf_injector.set_oid(build_oid(self.oid, "dtmf-in"))
+        self.dtmf_injector.set_oid(self.oid, "dtmf-in")
         self.recved_plug = None
         
         
@@ -367,7 +367,7 @@ class MediaGateway(Loggable):
 
     def set_oid(self, oid):
         Loggable.set_oid(self, oid)
-        self.msgp.set_oid(build_oid(oid, "msgp"))
+        self.msgp.set_oid(oid, "msgp")
         
 
     def set_name(self, name):

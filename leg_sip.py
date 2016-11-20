@@ -1,5 +1,4 @@
 from format import Status
-from util import build_oid
 from leg import Endpoint, Error
 from session import SessionState
 from sdp import SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES
@@ -34,7 +33,7 @@ class SipParty(Endpoint):
 
     def set_oid(self, oid):
         Endpoint.set_oid(self, oid)
-        self.dialog.set_oid(build_oid(oid, "dialog"))
+        self.dialog.set_oid(oid, "dialog")
 
 
     def change_state(self, new_state):
@@ -68,7 +67,7 @@ class SipParty(Endpoint):
             self.invite = InviteServerState()
             self.invite.message_slot.plug(self.send_response)
             
-        self.invite.set_oid(build_oid(self.oid, "invite"))
+        self.invite.set_oid(self.oid, "invite")
         
 
     def flatten_formats(self, formats, pt_key):

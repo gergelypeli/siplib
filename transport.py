@@ -2,7 +2,7 @@ import socket
 from weakref import proxy
 
 from format import Hop, Addr, parse_structured_message, print_structured_message
-from util import Loggable, build_oid
+from util import Loggable
 import zap
 import resolver
 
@@ -90,7 +90,7 @@ class TransportManager(Loggable):
         Loggable.set_oid(self, oid)
         
         for transport in self.transports:
-            transport.set_oid(build_oid(self.oid, "iface", transport.interface))
+            transport.set_oid(self.oid, "iface", transport.interface)
             
         
     def add_udp_transport(self, local_addr, interface=None):

@@ -1,7 +1,7 @@
 from weakref import proxy, WeakValueDictionary
 
 from msgp import MsgpPeer  # MsgpClient
-from util import vacuum, build_oid, Loggable
+from util import vacuum, Loggable
 import zap
 
 
@@ -188,7 +188,7 @@ class Controller(Loggable):
     def set_oid(self, oid):
         Loggable.set_oid(self, oid)
         
-        self.msgp.set_oid(build_oid(oid, "msgp"))
+        self.msgp.set_oid(oid, "msgp")
         
         
     def set_name(self, name):

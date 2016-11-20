@@ -7,7 +7,7 @@ import errno
 import types
 
 from async_net import TcpReconnector, TcpListener
-from util import Loggable, build_oid
+from util import Loggable
 from format import Addr
 import zap
 
@@ -562,10 +562,10 @@ class MsgpDispatcher(Loggable):
         self.logger.debug("Adding handshake with %s" % (addr,))
         
         pipe = MsgpPipe(socket)
-        pipe.set_oid(build_oid(self.oid, "pipe", str(addr)))
+        pipe.set_oid(self.oid, "pipe", str(addr))
 
         handshake = Handshake()
-        handshake.set_oid(build_oid(self.oid, "handshake", str(addr)))
+        handshake.set_oid(self.oid, "handshake", str(addr))
         handshake.request_slot.plug(self.process_handshake, addr=addr)
         handshake.complete_slot.plug(self.complete_handshake, addr=addr)
 
@@ -614,7 +614,7 @@ class MsgpDispatcher(Loggable):
         if not stream:
             self.logger.debug("Creating new stream for %s" % name)
             stream = MsgpStream()
-            stream.set_oid(build_oid(self.oid, "stream", name))
+            stream.set_oid(self.oid, "stream", name)
             stream.request_slot.plug(self.process_request, name=name)
             stream.response_slot.plug(self.process_response, name=name)
             stream.error_slot.plug(self.process_error, name=name)
@@ -624,7 +624,7 @@ class MsgpDispatcher(Loggable):
         else:
             self.logger.debug("Already having a stream for %s" % name)
 
-        pipe.set_oid(build_oid(self.oid, "pipe", name))  # Hah, pipe renamed here!
+        pipe.set_oid(self.oid, "pipe", name)  # Hah, pipe renamed here!
         stream.connect(pipe)
     
 
@@ -698,10 +698,10 @@ class MsgpPeer(MsgpDispatcher):
         MsgpDispatcher.set_oid(self, oid)
         
         if self.listener:
-            self.listener.set_oid(build_oid(self.oid, "listener"))
+            self.listener.set_oid(self.oid, "listener")
 
         for addr, reconnector in self.reconnectors_by_addr.items():
-            reconnector.set_oid(build_oid(self.oid, "reconnector", str(addr)))
+            reconnector.set_oid(self.oid, "reconnector", str(addr))
 
 
     def set_name(self, name):

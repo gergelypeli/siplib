@@ -4,7 +4,7 @@ import heapq
 import datetime
 import collections
 
-from util import Loggable, build_oid
+from util import Loggable
 
 
 class Plug:
@@ -390,7 +390,7 @@ class Planned(Loggable):  # Oops, we may call base class methods twice
         
         if generator:
             self.event_plan = Plan()
-            self.event_plan.set_oid(build_oid(self.oid, "plan"))
+            self.event_plan.set_oid(self.oid, "plan")
             self.event_plan.finished_slot.plug(self.plan_finished)
             self.event_plan.start(generator)
 
