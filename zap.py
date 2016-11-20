@@ -309,16 +309,27 @@ class Plan(Loggable):
         schedule(self.resume)
 
 
+    def is_running(self):
+        return self.generator is not None
+
+
+    def finished(self, error):
+        self.generator = None
+        self.resume_plugs = None
+        self.resume_value = None
+        self.finished_slot.zap(error)
+        
+
     def abort(self):
         if self.generator:
             try:
                 self.generator.close()
             except Exception as e:
                 self.logger.warning("Plan aborted with %s." % e)
-                self.finished_slot.zap(e)
+                self.finished(e)
             else:
                 self.logger.warning("Plan aborted.")
-                self.finished_slot.zap(None)
+                self.finished(None)
 
 
     def zapped(self, *args, slot_index):
@@ -352,75 +363,64 @@ class Plan(Loggable):
             self.resume_plugs = [ slot.instaplug(self.zapped, slot_index=i) for i, slot in enumerate(slots) ]
         except StopIteration as e:
             self.logger.debug("Terminated plan.")
-            self.generator = None
-            self.resume_plugs = None
-            
             if e.value:
-                self.logger.debug("Plan return value ignored!")
-            
-            self.finished_slot.zap(None)
+                self.logger.warning("Plan return value ignored!")
+                
+            self.finished(None)
         except Exception as e:
             self.logger.warning("Aborted plan with exception!", exc_info=True)
-            self.generator = None
-            self.resume_plugs = None
-            
-            self.finished_slot.zap(e)
+            self.finished(e)
 
 
 class Planned(Loggable):  # Oops, we may call base class methods twice
     def __init__(self):
         Loggable.__init__(self)
     
-        self.planner = Plan()
-        self.planner.finished_slot.plug(self.plan_almost_finished)
-        self.event_slot = EventSlot()
+        # Keep us as lightweight as possible
+        self.event_plan = None
+        self.event_slot = None
 
 
     def __del__(self):
-        if self.planner:
-            self.planner.abort()
+        self.abort_plan()
 
 
-    def set_oid(self, oid):
-        Loggable.set_oid(self, oid)
-        
-        self.planner.set_oid(build_oid(self.oid, "planner"))
-        
-        
     def start_plan(self):
-        self.planner.start(self.plan())
+        generator = self.plan()
+        
+        if generator:
+            self.event_plan = Plan()
+            self.event_plan.set_oid(build_oid(self.oid, "plan"))
+            self.event_plan.finished_slot.plug(self.plan_finished)
+            self.event_plan.start(generator)
+
+            self.event_slot = EventSlot()
+            
+
+    def abort_plan(self):
+        if self.event_plan and self.event_plan.is_running():
+            self.event_plan.abort()
 
 
-    def notify_plan(self, *args):
+    def send_event(self, *args):
         self.event_slot.zap(*args)
 
 
-    def sleep(self, timeout):
-        yield time_slot(timeout)
-        
-
-    def suspend_plan(self, timeout=None):  # TODO
+    def wait_event(self, timeout=None):  # TODO
         slot_index, args = yield time_slot(timeout), self.event_slot
         
         return args if slot_index == 1 else None
-
-
-    def is_plan_running(self):
-        return self.planner is not None
-    
-    
-    def plan_almost_finished(self, error):
-        self.planner = None
-        self.plan_finished(error)
         
-        
+
     def plan_finished(self, error):
         raise NotImplementedError()
 
         
     def plan(self):
-        raise NotImplementedError()
-        
+        return None
+
+
+
 
 kernel = Kernel()
 kernel.set_oid("kernel")

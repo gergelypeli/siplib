@@ -167,7 +167,7 @@ class PlannedParty(zap.Planned, Party):
         
 
     def wait_action(self, action_type=None, timeout=None):  # TODO: merge with routing's
-        event = yield from self.suspend_plan(timeout=timeout)
+        event = yield from self.wait_event(timeout=timeout)
         if not event:
             return None, None
             
@@ -180,7 +180,7 @@ class PlannedParty(zap.Planned, Party):
             
 
     def do_slot(self, li, action):
-        self.notify_plan(li, action)
+        self.send_event(li, action)
 
 
     def plan_finished(self, error):
@@ -323,7 +323,7 @@ class PlannedRouting(zap.Planned, Routing):
             
 
     def wait_action(self, leg_index=None, action_type=None, timeout=None):
-        event = yield from self.suspend_plan(timeout=timeout)
+        event = yield from self.wait_event(timeout=timeout)
         if not event:
             return None, None
             
@@ -374,7 +374,7 @@ class PlannedRouting(zap.Planned, Routing):
         
     def do_slot(self, li, action):
         self.logger.debug("Planned routing processing a %s" % action["type"])
-        self.notify_plan(li, action)
+        self.send_event(li, action)
 
 
 
