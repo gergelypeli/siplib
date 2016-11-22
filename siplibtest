@@ -218,7 +218,7 @@ class TestController(Controller):
         self.media_addresses = set(Addr(MEDIA_HOST, port).resolved() for port in ports)
         
     
-    def allocate_media_address(self, sid):
+    def allocate_media_address(self, mgw_sid):
         return self.media_addresses.pop()
     
     

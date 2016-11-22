@@ -46,8 +46,8 @@ class Leg(CallComponent):
 
     # Technically this method has nothing to do with the Leg, but putting
     # media related things in Party would be worse.
-    def make_media_leg(self, type):
-        return self.call.make_media_leg(type)
+    def make_media_leg(self, type, mgw_sid):
+        return self.call.make_media_leg(type, mgw_sid)
         
 
     def set_media_leg(self, channel_index, media_leg):

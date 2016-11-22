@@ -222,7 +222,7 @@ class Call(Loggable):
         #thing.start()
 
 
-    def start(self, incoming_thing):  # TODO: update switch!
+    def start(self, incoming_thing):
         self.setup_thing(incoming_thing, [ 0 ], None)
         incoming_leg = incoming_thing.start()
         
@@ -239,19 +239,21 @@ class Call(Loggable):
         self.logger.debug("Call is finished.")
         self.switch.call_finished(self)
 
+
+    def select_gateway_sid(self, ctype, mgw_affinity):
+        return self.switch.select_gateway_sid(ctype, mgw_affinity)
         
-    def allocate_media_address(self, channel_index):
-        # TODO
-        sid_affinity = None
-        return self.switch.mgc.allocate_media_address(sid_affinity)
+        
+    def allocate_media_address(self, mgw_sid):
+        return self.switch.allocate_media_address(mgw_sid)
         
         
     def deallocate_media_address(self, addr):
-        self.switch.mgc.deallocate_media_address(addr)
+        self.switch.deallocate_media_address(addr)
     
     
-    def make_media_leg(self, type):
-        return self.switch.make_media_leg(type)
+    def make_media_leg(self, type, mgw_sid):
+        return self.switch.make_media_leg(type, mgw_sid)
 
 
     def select_hop_slot(self, next_uri):

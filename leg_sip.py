@@ -75,31 +75,51 @@ class SipParty(Endpoint):
 
 
     def allocate_local_media(self, old_session, new_session):
+        # TODO: can't this go into SessionState?
         new_channels = new_session["channels"] if new_session else []
         old_channels = old_session["channels"] if old_session else []
         
         for i, new_channel in enumerate(new_channels):
-            if i >= len(old_channels):
-                self.logger.debug("Allocating local media address for channel %d" % i)
-                local_addr = self.call.allocate_media_address(i)  # TODO: deallocate!
+            old_channel = old_channels[i] if i < len(old_channels) else None
+            
+            ctype = new_channel["type"]
+            mgw_affinity = new_channel.get("mgw_affinity")
+            
+            if not old_channel:
+                self.logger.debug("Allocating local media address for channel %d (%s@%s)" % (i, ctype, mgw_affinity))
+                mgw_sid = self.call.select_gateway_sid(ctype, mgw_affinity)
+                local_addr, mgw_affinity = self.call.allocate_media_address(mgw_sid)
             else:
-                local_addr = old_channels[i]["rtp_local_addr"]
+                mgw_sid = mgw_affinity or old_channel["mgw_affinity"]
+                local_addr = old_channel["rtp_local_addr"]
         
             new_channel["rtp_local_addr"] = local_addr
-            next_pt = 96
+            new_channel["mgw_affinity"] = mgw_sid
+            
+            next_payload_type = 96
+            used_payload_types = set()
             
             for f in new_channel["formats"]:
-                x = (f["encoding"], f["clock"], f["encp"], f["fmtp"])
+                format_info = (f["encoding"], f["clock"], f["encp"], f["fmtp"])
+                rpt = f.get("rtp_remote_payload_type")  # the one from the other endpoint
                 
-                for pt, info in STATIC_PAYLOAD_TYPES.items():
-                    if info == x:
+                for spt, info in STATIC_PAYLOAD_TYPES.items():
+                    if info == format_info:
+                        pt = spt
                         break
                 else:
-                    pt = next_pt
-                    next_pt += 1
-                    #raise Exception("Couldn't find payload type for %s!" % (encoding, clock))
+                    if rpt and rpt not in used_payload_types:
+                        pt = rpt
+                    else:
+                        while next_payload_type in used_payload_types:
+                            next_payload_type += 1
+                        
+                        pt = next_payload_type
+                        next_payload_type += 1
+                        #raise Exception("Couldn't find payload type for %s!" % (encoding, clock))
 
                 f["rtp_local_payload_type"] = pt
+                used_payload_types.add(pt)
                 
                 
     def deallocate_local_media(self, old_session, new_session):
@@ -123,16 +143,16 @@ class SipParty(Endpoint):
         leg = self.leg
         
         for i in range(len(local_channels)):
+            lc = local_channels[i]
+            rc = remote_channels[i]
             ml = leg.get_media_leg(i)
             
             if not ml:
                 self.logger.debug("Making media leg for channel %d" % i)
-                ml = leg.make_media_leg("net")
+                mgw_affinity = lc["mgw_affinity"]
+                ml = leg.make_media_leg("net", mgw_affinity)
                 leg.set_media_leg(i, ml)
                 ml.event_slot.plug(self.notified)
-                
-            lc = local_channels[i]
-            rc = remote_channels[i]
             
             params = {
                 'local_addr': lc["rtp_local_addr"],
@@ -144,10 +164,20 @@ class SipParty(Endpoint):
             self.logger.debug("Refreshing media leg %d: %s" % (i, params))
             ml.update(**params)
             
+            
+    def add_mgw_affinities(self, session):
+        local_channels = self.session.local_session["channels"]
+        remote_channels = session["channels"]
+        
+        for i in range(len(local_channels)):
+            remote_channels[i]["mgw_affinity"] = local_channels[i]["mgw_affinity"]
+
 
     def process_incoming_offer(self, sdp):
         session = self.sdp_parser.parse(sdp, is_answer=False)
         self.session.set_remote_offer(session)
+        self.add_mgw_affinities(session)
+        
         return session
 
     
@@ -158,6 +188,7 @@ class SipParty(Endpoint):
         if rejected_local_offer:
             self.deallocate_local_media(self.session.local_session, rejected_local_offer)
         else:
+            self.add_mgw_affinities(session)
             self.realize_local_media()
             
         return session

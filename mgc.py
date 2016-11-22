@@ -248,14 +248,16 @@ class Controller(Loggable):
         self.mgw_sid = sid if remote_addr else None
 
 
-    def select_gateway_sid(self):
+    def select_gateway_sid(self, ctype, mgw_affinity):
         if not self.mgw_sid:
             raise Exception("Sorry, no mgw_sid yet!")
+        elif mgw_affinity and mgw_affinity != self.mgw_sid:
+            raise Exception("WAT, we don't know this MGW!")
         else:
             return self.mgw_sid
     
 
-    def allocate_media_address(self, sid):
+    def allocate_media_address(self, mgw_sid):
         raise NotImplementedError()
 
 
@@ -263,21 +265,21 @@ class Controller(Loggable):
         raise NotImplementedError()
 
     
-    def make_media_leg(self, type):
+    def make_media_leg(self, type, mgw_sid):
         # TODO: maybe this function shouldn't be in Controller at all.
+        ml = None
         
         if type == "pass":
-            return PassMediaLeg()
+            ml = PassMediaLeg()
         elif type == "echo":
-            return EchoMediaLeg()
+            ml = EchoMediaLeg()
         elif type == "player":
-            return PlayerMediaLeg()
+            ml = PlayerMediaLeg()
         elif type == "net":
-            return NetMediaLeg()
+            ml = NetMediaLeg()
         else:
             raise Exception("No such media leg type: %s!" % type)
-
-
-    def bind_thing(self, ml, sid_affinity):
-        sid = sid_affinity or self.select_gateway_sid()
-        ml.bind(proxy(self), sid)
+            
+        ml.bind(proxy(self), mgw_sid)
+        
+        return ml
