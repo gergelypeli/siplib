@@ -115,7 +115,7 @@ class Switch(Loggable):
         return self.mgc.make_media_leg(type, mgw_sid)
         
 
-    def make_thing(self, type):
+    def make_party(self, type):
         if type == "routing":
             return Routing()
         elif type == "sip":
@@ -125,14 +125,14 @@ class Switch(Loggable):
         elif type == "record":
             return RecordingBridge()
         else:
-            raise Exception("Unknown leg type '%s'!" % type)
+            raise Exception("Unknown party type '%s'!" % type)
 
 
     def make_call(self):
         return Call(proxy(self), proxy(self.ground))
         
         
-    def start_call(self, incoming_thing):
+    def start_call(self, incoming_party):
         call = self.make_call()
         
         oid = build_oid(self.oid, "call", self.call_count)
@@ -141,13 +141,13 @@ class Switch(Loggable):
         
         self.calls_by_oid[oid] = call
 
-        call.start(incoming_thing)
+        call.start(incoming_party)
 
 
     def start_sip_call(self, params):
         incoming_dialog = Dialog(proxy(self.dialog_manager))
-        incoming_thing = SipEndpoint(incoming_dialog)
-        self.start_call(incoming_thing)
+        incoming_party = SipEndpoint(incoming_dialog)
+        self.start_call(incoming_party)
         
         # The dialog must be fed directly, since the request contains no local tag yet.
         incoming_dialog.recv_request(params)

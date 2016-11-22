@@ -1,6 +1,5 @@
 from weakref import proxy
 
-from mgc import MediaContext
 from util import build_oid, Loggable
 
 
@@ -148,11 +147,9 @@ class Ground(Loggable):
             if smleg.sid != tmleg.sid:
                 raise Exception("Sid mismatch!")
 
-            sid_affinity = smleg.sid
-        
-            mc = MediaContext()
+            mgw_sid = smleg.sid
+            mc = self.mgc.make_media_leg("context", mgw_sid)  # FIXME!
             mc.set_oid(coid)
-            self.mgc.bind_thing(mc, sid_affinity)
         
             self.media_contexts_by_span[span] = mc
             mc.set_leg_oids([ soid, toid ])
@@ -190,9 +187,9 @@ class Call(Loggable):
         self.may_finish()
         
 
-    def setup_thing(self, thing, path, suffix):
-        thing.set_call(proxy(self))
-        thing.set_path(path)
+    def setup_party(self, party, path, suffix):
+        party.set_call(proxy(self))
+        party.set_path(path)
         
         oid = self.oid
         
@@ -202,32 +199,32 @@ class Call(Loggable):
         if suffix:
             oid = build_oid(oid, suffix)
 
-        thing.set_oid(oid)
+        party.set_oid(oid)
         
 
-    def make_thing(self, type, path, suffix):
-        thing = self.switch.make_thing(type)
+    def make_party(self, type, path, suffix):
+        party = self.switch.make_party(type)
         
-        self.setup_thing(thing, path, suffix)
+        self.setup_party(party, path, suffix)
 
-        return thing
+        return party
 
 
-    def link_leg_to_thing(self, leg, thing):
-        thing_leg = thing.start()
+    def link_leg_to_party(self, leg, party):
+        party_leg = party.start()
         
-        self.logger.debug("Linking %s to %s" % (leg.oid, thing_leg.oid))
-        self.ground.link_legs(leg.oid, thing_leg.oid)
+        self.logger.debug("Linking %s to %s" % (leg.oid, party_leg.oid))
+        self.ground.link_legs(leg.oid, party_leg.oid)
 
         #thing.start()
 
 
-    def start(self, incoming_thing):
-        self.setup_thing(incoming_thing, [ 0 ], None)
-        incoming_leg = incoming_thing.start()
+    def start(self, incoming_party):
+        self.setup_party(incoming_party, [ 0 ], None)
+        incoming_leg = incoming_party.start()
         
-        routing = self.make_thing("routing", [], "reception")
-        self.link_leg_to_thing(incoming_leg, routing)
+        routing = self.make_party("routing", [], "reception")
+        self.link_leg_to_party(incoming_leg, routing)
 
         #incoming_thing.start()
 
@@ -261,12 +258,6 @@ class Call(Loggable):
                     
 
     def media_leg_changed(self, leg_index, channel_index, is_added):
-        if is_added:
-            leg = self.ground.legs_by_oid[leg_index]
-            ml = leg.get_media_leg(channel_index)
-            sid_affinity = None  # TODO
-            self.switch.mgc.bind_thing(ml, sid_affinity)
-            
         self.ground.media_leg_changed(leg_index, channel_index, is_added)
 
 

@@ -243,8 +243,8 @@ class Bridge(Party):
         leg = self.add_leg()
         li = leg.number
         
-        thing = self.call.make_thing(type, self.path + [ li ], None)
-        self.call.link_leg_to_thing(leg, thing)
+        party = self.call.make_party(type, self.path + [ li ], None)
+        self.call.link_leg_to_party(leg, party)
         leg.forward(action)
 
 

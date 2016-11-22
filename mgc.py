@@ -277,6 +277,8 @@ class Controller(Loggable):
             ml = PlayerMediaLeg()
         elif type == "net":
             ml = NetMediaLeg()
+        elif type == "context":  # FIXME!
+            ml = MediaContext()
         else:
             raise Exception("No such media leg type: %s!" % type)
             
