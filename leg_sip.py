@@ -5,7 +5,7 @@ from sdp import SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES
 from leg_sip_invite import InviteClientState, InviteServerState
 
 
-class SipParty(Endpoint):
+class SipEndpoint(Endpoint):
     DOWN = "DOWN"
     SELECTING_HOP = "SELECTING_HOP"
     DIALING_IN = "DIALING_IN"
