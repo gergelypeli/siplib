@@ -36,6 +36,10 @@ class SipEndpoint(Endpoint):
         self.dialog.set_oid(oid, "dialog")
 
 
+    def get_dialog(self):
+        return self.dialog
+        
+
     def change_state(self, new_state):
         self.logger.debug("Changing state %s => %s" % (self.state, new_state))
         self.state = new_state

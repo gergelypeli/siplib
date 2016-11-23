@@ -1,10 +1,9 @@
-from weakref import proxy
-
 from util import build_oid, Loggable
 
 
 class Ground(Loggable):
-    def __init__(self, mgc):
+    def __init__(self, switch, mgc):
+        self.switch = switch
         self.mgc = mgc
         
         self.legs_by_oid = {}
@@ -53,6 +52,7 @@ class Ground(Loggable):
         if leg_oid1 in self.targets_by_source:
             raise Exception("Second leg already linked: %s!" % leg_oid1)
             
+        self.logger.info("Linking %s to %s" % (leg_oid0, leg_oid1))
         self.targets_by_source[leg_oid0] = leg_oid1
         self.targets_by_source[leg_oid1] = leg_oid0
         
@@ -163,35 +163,11 @@ class Ground(Loggable):
             ctx.delete()
 
 
-class Call(Loggable):
-    def __init__(self, switch, ground):
-        Loggable.__init__(self)
-
-        self.switch = switch
-        self.ground = ground
-        self.leg_oids = set()
-                
-        
-    def add_leg(self, leg):
-        if not leg.oid:
-            raise Exception("Leg has no oid!")
-        
-        self.leg_oids.add(leg.oid)
-        self.ground.add_leg(leg)
-        leg.finished_slot.plug(self.leg_finished, leg_oid=leg.oid)
-
-
-    def leg_finished(self, leg_oid):
-        self.leg_oids.remove(leg_oid)
-        self.ground.remove_leg(leg_oid)
-        self.may_finish()
-        
-
-    def setup_party(self, party, path, suffix):
-        party.set_call(proxy(self))
-        party.set_path(path)
-        
-        oid = self.oid
+    def setup_party(self, party, base_oid, path, suffix):
+        #party.set_call(proxy(self))
+        # TODO: if we don't use suffix, this thing can mostly go into Party.set_path
+        party.set_path(base_oid, path)
+        oid = base_oid
         
         if path:
             oid = build_oid(oid, "party", path)
@@ -200,70 +176,27 @@ class Call(Loggable):
             oid = build_oid(oid, suffix)
 
         party.set_oid(oid)
-        
-
-    def make_party(self, type, path, suffix):
-        party = self.switch.make_party(type)
-        
-        self.setup_party(party, path, suffix)
-
-        return party
 
 
-    def link_leg_to_party(self, leg, party):
-        party_leg = party.start()
-        
-        self.logger.debug("Linking %s to %s" % (leg.oid, party_leg.oid))
-        self.ground.link_legs(leg.oid, party_leg.oid)
-
-        #thing.start()
-
-
-    def start(self, incoming_party):
-        self.setup_party(incoming_party, [ 0 ], None)
-        incoming_leg = incoming_party.start()
-        
-        routing = self.make_party("routing", [], "reception")
-        self.link_leg_to_party(incoming_leg, routing)
-
-        #incoming_thing.start()
-
-
-    def may_finish(self):
-        if self.leg_oids:
-            return
-            
-        self.logger.debug("Call is finished.")
-        self.switch.call_finished(self)
-
-
-    def select_gateway_sid(self, ctype, mgw_affinity):
-        return self.switch.select_gateway_sid(ctype, mgw_affinity)
-        
-        
-    def allocate_media_address(self, mgw_sid):
-        return self.switch.allocate_media_address(mgw_sid)
-        
-        
-    def deallocate_media_address(self, addr):
-        self.switch.deallocate_media_address(addr)
-    
-    
-    def make_media_leg(self, type, mgw_sid):
-        return self.switch.make_media_leg(type, mgw_sid)
+    def make_party(self, type):
+        return self.switch.make_party(type)
 
 
     def select_hop_slot(self, next_uri):
         return self.switch.select_hop_slot(next_uri)
-                    
-
-    def media_leg_changed(self, leg_index, channel_index, is_added):
-        self.ground.media_leg_changed(leg_index, channel_index, is_added)
 
 
-    def forward(self, leg, action):
-        self.ground.forward(leg.oid, action)
+    def select_gateway_sid(self, ctype, mgw_affinity):
+        return self.mgc.select_gateway_sid(ctype, mgw_affinity)
         
         
-    def collapse_legs(self, leg0, leg1, queued_actions=None):
-        self.ground.collapse_legs(leg0.oid, leg1.oid, queued_actions)
+    def allocate_media_address(self, mgw_sid):
+        return self.mgc.allocate_media_address(mgw_sid)
+        
+        
+    def deallocate_media_address(self, addr):
+        self.mgc.deallocate_media_address(addr)
+    
+    
+    def make_media_leg(self, type, mgw_sid):
+        return self.mgc.make_media_leg(type, mgw_sid)

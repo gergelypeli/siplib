@@ -6,7 +6,7 @@ from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
 from leg import Routing, Bridge, RecordingBridge
 from leg_sip import SipEndpoint
-from ground import Ground, Call
+from ground import Ground
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
 from account import Account, AccountManager
@@ -22,7 +22,6 @@ class Switch(Loggable):
     ):
         Loggable.__init__(self)
 
-        self.calls_by_oid = {}
         self.call_count = 0
 
         self.transport_manager = transport_manager or TransportManager(
@@ -45,7 +44,10 @@ class Switch(Loggable):
         )
         self.account_manager = account_manager or AccountManager(
         )
-        self.ground = Ground(proxy(self.mgc))
+        self.ground = Ground(
+            proxy(self),
+            proxy(self.mgc)
+        )
         
         self.transaction_manager.request_slot.plug(self.process_request)
         self.transaction_manager.response_slot.plug(self.process_response)
@@ -133,24 +135,25 @@ class Switch(Loggable):
         
         
     def start_call(self, incoming_party):
-        call = self.make_call()
-        
-        oid = build_oid(self.oid, "call", self.call_count)
+        base_oid = build_oid(self.oid, "call", self.call_count)
         self.call_count += 1
-        call.set_oid(oid)
-        
-        self.calls_by_oid[oid] = call
 
-        call.start(incoming_party)
+        self.ground.setup_party(incoming_party, base_oid, [ 0 ], None)
+        incoming_leg = incoming_party.start()
+        
+        routing = self.make_party("routing")
+        self.ground.setup_party(routing, base_oid, [], "reception")
+
+        routing_leg = routing.start()
+        self.ground.link_legs(incoming_leg.oid, routing_leg.oid)
 
 
     def start_sip_call(self, params):
-        incoming_dialog = Dialog(proxy(self.dialog_manager))
-        incoming_party = SipEndpoint(incoming_dialog)
+        incoming_party = self.ground.make_party("sip")
         self.start_call(incoming_party)
         
         # The dialog must be fed directly, since the request contains no local tag yet.
-        incoming_dialog.recv_request(params)
+        incoming_party.get_dialog().recv_request(params)
         
 
     def call_finished(self, call):

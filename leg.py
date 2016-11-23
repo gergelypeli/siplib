@@ -8,32 +8,38 @@ import zap
 class Error(Exception): pass
 
 
-class CallComponent(Loggable):
+class GroundDweller(Loggable):
     def __init__(self):
         Loggable.__init__(self)
         
-        self.call = None
+        self.ground = None
         
     
-    def set_call(self, call):
-        self.call = call
+    def set_ground(self, ground):
+        self.ground = ground
 
 
         
         
-class Leg(CallComponent):
+class Leg(GroundDweller):
     def __init__(self, owner, number):
-        CallComponent.__init__(self)
+        GroundDweller.__init__(self)
 
         self.owner = owner
         self.number = number
         
         self.media_legs = []
-        self.finished_slot = zap.Slot()  # TODO: is this better than a direct call?
+        #self.finished_slot = zap.Slot()  # TODO: is this better than a direct call?
 
+
+    def set_oid(self, oid):
+        GroundDweller.set_oid(self, oid)
+        
+        self.ground.add_leg(self)
+        
     
     def forward(self, action):
-        self.call.forward(self, action)
+        self.ground.forward(self.oid, action)
         
         
     def may_finish(self):
@@ -41,13 +47,14 @@ class Leg(CallComponent):
             self.set_media_leg(ci, None)
 
         self.logger.debug("Leg is finished.")
-        self.finished_slot.zap()
+        self.ground.remove_leg(self.oid)
+        #self.finished_slot.zap()
 
 
     # Technically this method has nothing to do with the Leg, but putting
     # media related things in Party would be worse.
     def make_media_leg(self, type, mgw_sid):
-        return self.call.make_media_leg(type, mgw_sid)
+        return self.ground.make_media_leg(type, mgw_sid)
         
 
     def set_media_leg(self, channel_index, media_leg):
@@ -60,7 +67,7 @@ class Leg(CallComponent):
         
         if old:
             self.logger.debug("Deleting media leg %s." % channel_index)
-            self.call.media_leg_changed(self.oid, channel_index, False)
+            self.ground.media_leg_changed(self.oid, channel_index, False)
             old.delete()
         
         self.media_legs[channel_index] = media_leg
@@ -68,7 +75,7 @@ class Leg(CallComponent):
         if media_leg:
             self.logger.debug("Adding media leg %s." % channel_index)
             media_leg.set_oid(self.oid, "channel", channel_index)
-            self.call.media_leg_changed(self.oid, channel_index, True)
+            self.ground.media_leg_changed(self.oid, channel_index, True)
         
 
     def get_media_leg(self, ci):
@@ -81,22 +88,23 @@ class Leg(CallComponent):
 
 
 
-class Party(CallComponent):
+class Party(GroundDweller):
     def __init__(self):
-        CallComponent.__init__(self)
+        GroundDweller.__init__(self)
         
+        self.base_oid = None
         self.path = None
         
             
-    def set_path(self, path):
+    def set_path(self, base_oid, path):
+        self.base_oid = base_oid
         self.path = path
 
 
     def make_leg(self, li):
         leg = Leg(self, li)
-        leg.set_call(self.call)
+        leg.set_ground(self.ground)
         leg.set_oid(self.oid, "leg", li)
-        self.call.add_leg(leg)
         
         return leg
         
@@ -210,7 +218,7 @@ class Bridge(Party):
         leg = Leg(self, li)
         leg.set_call(self.call)
         leg.set_oid(self.oid, "leg", li)
-        self.call.add_leg(leg)
+        #self.call.add_leg(leg)
 
         self.legs[li] = proxy(leg)
         
@@ -243,8 +251,12 @@ class Bridge(Party):
         leg = self.add_leg()
         li = leg.number
         
-        party = self.call.make_party(type, self.path + [ li ], None)
-        self.call.link_leg_to_party(leg, party)
+        party = self.call.ground.make_party(type)
+        self.call.ground.setup_party(party, self.base_oid, self.path + [ li ], None)
+        #self.call.link_leg_to_party(leg, party)
+        party_leg = party.start()
+        self.call.ground.link_legs(leg.oid, party_leg.oid)
+
         leg.forward(action)
 
 
@@ -297,7 +309,7 @@ class Routing(Bridge):
             self.routing_concluded = True
             self.logger.debug("Anchored to leg %d." % li)
             self.hangup_outgoing_legs(except_li=li)
-            self.call.collapse_legs(self.legs[0], self.legs[li], self.queued_leg_actions[li])
+            self.ground.collapse_legs(self.legs[0].oid, self.legs[li].oid, self.queued_leg_actions[li])
             self.remove_leg(li)
             # The incoming leg is kept to keep us alive for a while
 

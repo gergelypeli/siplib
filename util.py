@@ -65,6 +65,11 @@ def build_oid(parent, *args):
     return oid
 
 
+class Oid(str):
+    def __add__(self, x, y=None):
+        return Oid(str.__add__(self, "," + x))
+
+
 class Loggable(object):
     # NOTE: both methods are idempotent, so if that ugliness happens that
     # they're called multiple times due to multiple inheritance, it won't
