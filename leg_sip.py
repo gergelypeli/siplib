@@ -33,7 +33,7 @@ class SipEndpoint(Endpoint):
 
     def set_oid(self, oid):
         Endpoint.set_oid(self, oid)
-        self.dialog.set_oid(oid, "dialog")
+        self.dialog.set_oid(oid.add("dialog"))
 
 
     def get_dialog(self):
@@ -71,7 +71,7 @@ class SipEndpoint(Endpoint):
             self.invite = InviteServerState()
             self.invite.message_slot.plug(self.send_response)
             
-        self.invite.set_oid(self.oid, "invite")
+        self.invite.set_oid(self.oid.add("invite"))
         
 
     def flatten_formats(self, formats, pt_key):
@@ -91,8 +91,8 @@ class SipEndpoint(Endpoint):
             
             if not old_channel:
                 self.logger.debug("Allocating local media address for channel %d (%s@%s)" % (i, ctype, mgw_affinity))
-                mgw_sid = self.call.select_gateway_sid(ctype, mgw_affinity)
-                local_addr, mgw_affinity = self.call.allocate_media_address(mgw_sid)
+                mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
+                local_addr = self.ground.allocate_media_address(mgw_sid)
             else:
                 mgw_sid = mgw_affinity or old_channel["mgw_affinity"]
                 local_addr = old_channel["rtp_local_addr"]
@@ -132,7 +132,7 @@ class SipEndpoint(Endpoint):
         
         for i in range(len(old_channels), len(new_channels)):
             self.logger.debug("Deallocating local media address for channel %d" % i)
-            self.call.deallocate_media_address(new_channels[i]["rtp_local_addr"])
+            self.ground.deallocate_media_address(new_channels[i]["rtp_local_addr"])
 
 
     def realize_local_media(self):
@@ -153,9 +153,9 @@ class SipEndpoint(Endpoint):
             
             if not ml:
                 self.logger.debug("Making media leg for channel %d" % i)
-                mgw_affinity = lc["mgw_affinity"]
-                ml = leg.make_media_leg("net", mgw_affinity)
-                leg.set_media_leg(i, ml)
+                mgw_sid = lc["mgw_affinity"]
+                ml = leg.make_media_leg("net")
+                leg.set_media_leg(i, ml, mgw_sid)
                 ml.event_slot.plug(self.notified)
             
             params = {
@@ -170,6 +170,9 @@ class SipEndpoint(Endpoint):
             
             
     def add_mgw_affinities(self, session):
+        if not self.session.local_session:
+            return
+            
         local_channels = self.session.local_session["channels"]
         remote_channels = session["channels"]
         
@@ -279,7 +282,7 @@ class SipEndpoint(Endpoint):
                 # Hop may be calculated here, but it takes another round
                 if not hop:
                     next_uri = route[0].uri if route else uri
-                    self.call.select_hop_slot(next_uri).plug(self.hop_selected, action=action)
+                    self.ground.select_hop_slot(next_uri).plug(self.hop_selected, action=action)
                     self.change_state(self.SELECTING_HOP)
                     return
             

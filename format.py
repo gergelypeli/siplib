@@ -1,5 +1,3 @@
-from __future__ import print_function, unicode_literals, absolute_import
-
 import re
 import collections
 import socket
@@ -363,7 +361,7 @@ def parse_message(msg):
         if k not in params:
             params[k] = v
         elif isinstance(params[k], list):
-            params[k].extend([x.strip() for x in v.split(",")])  # TODO: which fields?
+            params[k].append(v)  # FIXME: this does not handle unquoted comma separators!
         else:
             raise FormatError("Duplicate field received: %s" % k)
 

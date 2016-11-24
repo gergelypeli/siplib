@@ -3,7 +3,7 @@ from weakref import ref, proxy, WeakValueDictionary
 
 from rtp import read_wav, write_wav, RtpPlayer, RtpRecorder, RtpBuilder, RtpParser, DtmfExtractor, DtmfInjector, Format
 from msgp import MsgpPeer  # MsgpServer
-from util import Loggable, build_oid
+from util import Loggable
 import zap
 
 class Error(Exception): pass
@@ -107,9 +107,9 @@ class PassLeg(Leg):
                 
             self.filename = params["filename"]
             self.recv_recorder = RtpRecorder(self.format)
-            self.recv_recorder.set_oid(self.oid, "recv")
+            self.recv_recorder.set_oid(self.oid.add("recv"))
             self.send_recorder = RtpRecorder(self.format)
-            self.send_recorder.set_oid(self.oid, "send")
+            self.send_recorder.set_oid(self.oid.add("send"))
             
             self.is_recording = False
             self.has_recorded = False
@@ -150,9 +150,9 @@ class NetLeg(Leg):
         self.rtp_builder = RtpBuilder()
         self.dtmf_extractor = DtmfExtractor()
         self.dtmf_detected_plug = self.dtmf_extractor.dtmf_detected_slot.plug(self.dtmf_detected)
-        self.dtmf_extractor.set_oid(self.oid, "dtmf-ex")
+        self.dtmf_extractor.set_oid(self.oid.add("dtmf-ex"))
         self.dtmf_injector = DtmfInjector()
-        self.dtmf_injector.set_oid(self.oid, "dtmf-in")
+        self.dtmf_injector.set_oid(self.oid.add("dtmf-in"))
         self.recved_plug = None
         
         
@@ -348,8 +348,7 @@ class Context(Thing):
         except IndexError:
             raise Error("No outgoing leg!")
 
-        #print("Forwarding in %s a %s from %d to %d" % (self.label, format, li, lj))
-        
+        #self.logger.debug("Media forward from %s to %s" % (self.legs[li].label, self.legs[lj].label))
         leg.send_packet(packet)
 
 
@@ -367,7 +366,7 @@ class MediaGateway(Loggable):
 
     def set_oid(self, oid):
         Loggable.set_oid(self, oid)
-        self.msgp.set_oid(oid, "msgp")
+        self.msgp.set_oid(oid.add("msgp"))
         
 
     def set_name(self, name):
@@ -425,7 +424,7 @@ class MediaGateway(Loggable):
 
     def create_context(self, label, owner_sid, type):
         if type == "proxy":
-            oid = build_oid(build_oid(self.oid, "context"), label)
+            oid = self.oid.add("context").add(label)
             context = Context(oid, label, owner_sid, proxy(self))
         else:
             raise Error("Invalid context type %s!" % type)
@@ -448,7 +447,7 @@ class MediaGateway(Loggable):
     # Legs
 
     def create_leg(self, label, owner_sid, type):
-        oid = build_oid(build_oid(self.oid, "leg"), label)
+        oid = self.oid.add("leg").add(label)
         
         if type == "pass":
             leg = PassLeg(oid, label, owner_sid)

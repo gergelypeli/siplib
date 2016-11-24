@@ -12,7 +12,7 @@ from sdp import Sdp
 from authority import Authority
 from registrar import RecordManager
 from account import Account
-from util import setup_logging, build_oid, my_exchandler
+from util import setup_logging, my_exchandler, Oid
 from mgw import MediaGateway
 from mgc import Controller  #, PlayerMediaLeg  #, EchoMediaLeg
 from switch import Switch
@@ -37,6 +37,7 @@ CALLEE_NAMEADDR = Nameaddr(Uri(Addr(B_DOMAIN, None), "callee"), "Callee")
 A_CRED = ("A_AUTHNAME", "A_HA1")
 B_CRED = ("B_AUTHNAME", "B_HA1")
 
+SNOM_ADDR = Addr("192.168.1.7", 2048)
 SNOM_NUMBER = "phone"
 SNOM_CRED = ("phone", "38450ead4036feb352c45462d8008511")  # md5(phone:a.switch:secret)
 
@@ -71,13 +72,21 @@ class TestEndpoint(PlannedEndpoint):
         
 
     def update_session(self, offer):
-        if not self.leg.media_legs:
-            media_leg = self.leg.make_media_leg("player")
-            self.leg.set_media_leg(0, media_leg)
-            media_leg.play("playback.wav", ("PCMA", 8000, 1, None), volume=0.2, fade=3)
-
         answer = deepcopy(offer)
         answer["is_answer"] = True
+        for c in answer["channels"]:
+            c["formats"] = [ f for f in c["formats"] if f["encoding"] in ("PCMA", "telephone-event") ]
+
+        if not self.leg.media_legs:
+            answer_channel = answer["channels"][0]
+            ctype = answer_channel["type"]
+            mgw_affinity = answer_channel.get("mgw_affinity")
+            mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
+
+            answer_channel["mgw_affinity"] = mgw_sid
+            media_leg = self.leg.make_media_leg("player")
+            self.leg.set_media_leg(0, media_leg, mgw_sid)
+            media_leg.play("playback.wav", ("PCMA", 8000, 1, None), volume=0.1, fade=3)
         
         for c in answer["channels"]:
             c["send"], c["recv"] = c["recv"], c["send"]
@@ -231,7 +240,7 @@ class TestRouting(SimpleRouting):
         ctx = action["ctx"]
         to_uri = ctx["to"].uri
         self.logger.debug("Checking registered SIP contact: %s" % (to_uri,))
-        contacts = self.call.switch.record_manager.lookup_contacts(to_uri)
+        contacts = self.ground.switch.record_manager.lookup_contacts(to_uri)
             
         if len(contacts) == 1:
             uri, hop = contacts[0]
@@ -269,7 +278,7 @@ class TestSwitch(Switch):
         self.transport_manager.add_udp_transport(local_addr, "eth0")
 
 
-    def make_thing(self, type):
+    def make_party(self, type):
         if type == "routing":
             return TestRouting()
         elif type == "callee":
@@ -279,7 +288,7 @@ class TestSwitch(Switch):
         elif type == "ringing":
             return RingingEndpoint()
         else:
-            return Switch.make_thing(self, type)
+            return Switch.make_party(self, type)
 
 
 class SwitchA(TestSwitch):
@@ -307,10 +316,11 @@ class SwitchA(TestSwitch):
         
         
     def test_snoming(self):
+        # We need the "support broken registrar" option, otherwise we'd have to guess
+        # a random line id.
         snom_uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
-        snom_addr = Addr("192.168.1.8", 1024)  # Quite fake
-        snom_contact = Uri(snom_addr, SNOM_NUMBER)
-        snom_hop = Hop('eth0', A_ADDR.resolved(), snom_addr.resolved())
+        snom_contact = Uri(SNOM_ADDR, SNOM_NUMBER)
+        snom_hop = Hop('eth0', A_ADDR.resolved(), SNOM_ADDR.resolved())
         
         self.record_manager.emulate_registration(snom_uri, snom_contact, 60, snom_hop)
         
@@ -356,11 +366,11 @@ class SwitchB(TestSwitch):
             zap.time_slot(1).plug(self.test_registering)
 
 
-    def make_thing(self, type):
+    def make_party(self, type):
         if type == "routing":
             return self.Routing()
         else:
-            return TestSwitch.make_thing(self, type)
+            return TestSwitch.make_party(self, type)
 
 
     def test_registering(self):
@@ -375,8 +385,8 @@ class SwitchB(TestSwitch):
     def test_dialing(self):
         self.logger.debug("Dialing begins.")
 
-        incoming_thing = CallerEndpoint()
-        self.start_call(incoming_thing)
+        incoming_party = CallerEndpoint()
+        self.start_call(incoming_party)
 
 
 def main():
@@ -388,17 +398,17 @@ def main():
     logging.debug("Hello!")
 
     mgw = MediaGateway(MGW_ADDR.resolved())
-    mgw.set_oid("mgw")
-    mgw.set_name("the-mgw")
+    mgw.set_oid(Oid("mgw"))
+    mgw.set_name(Oid("the-mgw"))
     mgw.start()
 
     switch_a = SwitchA(A_ADDR.resolved(), MGW_ADDR.resolved(), range(30000, 30020, 2))
-    switch_a.set_oid(build_oid(None, "switch", "a"))
+    switch_a.set_oid(Oid().add("switch", "a"))
     switch_a.set_name("switch-a")
     switch_a.start()
     
     switch_b = SwitchB(B_ADDR.resolved(), MGW_ADDR.resolved(), range(40000, 40020, 2))
-    switch_b.set_oid(build_oid(None, "switch", "b"))
+    switch_b.set_oid(Oid().add("switch", "b"))
     switch_b.set_name("switch-b")
     switch_b.start()
 
@@ -417,9 +427,7 @@ def main():
         del mgw
     
         logging.debug("Bye!")
+        logging.shutdown()
 
 
-try:
-    main()
-finally:
-    logging.shutdown()
+main()

@@ -10,7 +10,7 @@ from ground import Ground
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
 from account import Account, AccountManager
-from util import build_oid, Loggable
+from util import Loggable
 from mgc import Controller
 
 
@@ -56,15 +56,15 @@ class Switch(Loggable):
     def set_oid(self, oid):
         Loggable.set_oid(self, oid)
 
-        self.account_manager.set_oid(oid, "accman")
-        self.authority.set_oid(oid, "authority")
-        self.record_manager.set_oid(oid, "recman")
-        self.registration_manager.set_oid(oid, "regman")
-        self.transport_manager.set_oid(oid, "transport")
-        self.transaction_manager.set_oid(oid, "transaction")
-        self.dialog_manager.set_oid(oid, "diaman")
-        self.mgc.set_oid(oid, "mgc")
-        self.ground.set_oid(oid, "ground")
+        self.account_manager.set_oid(oid.add("accman"))
+        self.authority.set_oid(oid.add("authority"))
+        self.record_manager.set_oid(oid.add("recman"))
+        self.registration_manager.set_oid(oid.add("regman"))
+        self.transport_manager.set_oid(oid.add("transport"))
+        self.transaction_manager.set_oid(oid.add("transaction"))
+        self.dialog_manager.set_oid(oid.add("diaman"))
+        self.mgc.set_oid(oid.add("mgc"))
+        self.ground.set_oid(oid.add("ground"))
 
 
     def start(self):
@@ -101,6 +101,7 @@ class Switch(Loggable):
             self.transaction_manager.send_message(response, msg)
 
 
+    # TODO: do we still need these?
     def select_gateway_sid(self, ctype, mgw_affinity):
         return self.mgc.select_gateway_sid(ctype, mgw_affinity)
         
@@ -113,14 +114,14 @@ class Switch(Loggable):
         self.mgc.deallocate_media_address(addr)
     
     
-    def make_media_leg(self, type, mgw_sid):
-        return self.mgc.make_media_leg(type, mgw_sid)
+    def make_media_leg(self, type):
+        return self.mgc.make_media_leg(type)
         
 
     def make_party(self, type):
-        if type == "routing":
-            return Routing()
-        elif type == "sip":
+        # No default Routing class to make, must overload this method!
+        
+        if type == "sip":
             return SipEndpoint(Dialog(proxy(self.dialog_manager)))
         elif type == "bridge":
             return Bridge()
@@ -135,7 +136,7 @@ class Switch(Loggable):
         
         
     def start_call(self, incoming_party):
-        base_oid = build_oid(self.oid, "call", self.call_count)
+        base_oid = self.oid.add("call", self.call_count)
         self.call_count += 1
 
         self.ground.setup_party(incoming_party, base_oid, [ 0 ], None)

@@ -1,4 +1,6 @@
-from util import build_oid, Loggable
+from weakref import proxy
+
+from util import Loggable
 
 
 class Ground(Loggable):
@@ -13,7 +15,7 @@ class Ground(Loggable):
         
     
     def generate_context_oid(self):
-        context_oid = build_oid(self.oid, "context", self.context_count)
+        context_oid = self.oid.add("context", self.context_count)
         self.context_count += 1
         
         return context_oid
@@ -142,14 +144,16 @@ class Ground(Loggable):
             tmleg.refresh({})
             
             coid = self.generate_context_oid()
-            self.logger.debug("Creating context %s" % coid)
+            self.logger.info("Must join media leg %s to %s" % (soid, toid))
+            self.logger.info("Creating context %s" % coid)
         
             if smleg.sid != tmleg.sid:
                 raise Exception("Sid mismatch!")
 
             mgw_sid = smleg.sid
-            mc = self.mgc.make_media_leg("context", mgw_sid)  # FIXME!
+            mc = self.mgc.make_media_leg("context")  # FIXME!
             mc.set_oid(coid)
+            self.mgc.bind_media_leg(mc, mgw_sid)  # FIXME!
         
             self.media_contexts_by_span[span] = mc
             mc.set_leg_oids([ soid, toid ])
@@ -159,9 +163,16 @@ class Ground(Loggable):
             if not ctx:
                 raise Exception("Hm, context does not exist, how can you be removed?")
                 
-            self.logger.debug("Removing context %s" % ctx.oid)
+            self.logger.info("Removing context %s" % ctx.oid)
             ctx.delete()
 
+
+    def setup_leg(self, leg, oid):
+        leg.set_oid(oid)
+        leg.set_ground(proxy(self))
+        
+        self.add_leg(leg)
+        
 
     def setup_party(self, party, base_oid, path, suffix):
         #party.set_call(proxy(self))
@@ -170,12 +181,13 @@ class Ground(Loggable):
         oid = base_oid
         
         if path:
-            oid = build_oid(oid, "party", path)
+            oid = oid.add("party", path)
             
         if suffix:
-            oid = build_oid(oid, suffix)
+            oid = oid.add(suffix)
 
         party.set_oid(oid)
+        party.set_ground(proxy(self))
 
 
     def make_party(self, type):
@@ -198,5 +210,9 @@ class Ground(Loggable):
         self.mgc.deallocate_media_address(addr)
     
     
-    def make_media_leg(self, type, mgw_sid):
-        return self.mgc.make_media_leg(type, mgw_sid)
+    def make_media_leg(self, type):
+        return self.mgc.make_media_leg(type)
+
+
+    def bind_media_leg(self, ml, mgw_sid):
+        return self.mgc.bind_media_leg(ml, mgw_sid)

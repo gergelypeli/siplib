@@ -15,6 +15,7 @@ class MediaThing(Loggable):
 
 
     def bind(self, mgc, sid):
+        # Should be called after set_oid
         self.mgc = mgc
         self.sid = sid
 
@@ -188,7 +189,7 @@ class Controller(Loggable):
     def set_oid(self, oid):
         Loggable.set_oid(self, oid)
         
-        self.msgp.set_oid(oid, "msgp")
+        self.msgp.set_oid(oid.add("msgp"))
         
         
     def set_name(self, name):
@@ -233,7 +234,7 @@ class Controller(Loggable):
         
         if not thing:
             if not drop_response:
-                self.logger.error("Response from MGW to unknown entity!")
+                self.logger.error("Response from MGW to unknown entity: %s" % oid)
         else:
             self.logger.debug("Response from MGW to %s" % oid)
             thing.process_response(None, msgid, params)
@@ -265,7 +266,7 @@ class Controller(Loggable):
         raise NotImplementedError()
 
     
-    def make_media_leg(self, type, mgw_sid):
+    def make_media_leg(self, type):
         # TODO: maybe this function shouldn't be in Controller at all.
         ml = None
         
@@ -281,7 +282,10 @@ class Controller(Loggable):
             ml = MediaContext()
         else:
             raise Exception("No such media leg type: %s!" % type)
-            
-        ml.bind(proxy(self), mgw_sid)
-        
+
+        self.logger.info("Made media leg of type %s" % type)
         return ml
+
+
+    def bind_media_leg(self, ml, mgw_sid):
+        ml.bind(proxy(self), mgw_sid)

@@ -63,11 +63,6 @@ class InviteState(Loggable):
         raise NotImplementedError()
         
         
-    def abort(self, message):
-        self.logger.error(message)
-        self.state = FINISH
-        
-        
     def set_rpr_supported(self):
         self.rpr_supported = True
         
@@ -122,7 +117,16 @@ class InviteState(Loggable):
         
         return msg, sdp, is_answer
 
+        
+    def abort(self, message):
+        self.logger.error(message)
+        self.state = FINISH
+        return None, None, None
 
+
+    def ignore(self, message):
+        self.logger.warning(message)
+        return None, None, None
 
 
 class InviteClientState(InviteState):
@@ -235,7 +239,8 @@ class InviteClientState(InviteState):
                         self.send("ACK", None, ack, req)
                         return self.recv("final response", FINISH, msg)
                 else:
-                    return self.abort("Unexpected final response!")
+                    # This can be a duplicate final
+                    return self.ignore("Ignoring unexpected final response!")
             elif has_rpr:
                 rseq = msg["rseq"]
                 

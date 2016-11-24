@@ -16,6 +16,9 @@ class GroundDweller(Loggable):
         
     
     def set_ground(self, ground):
+        if not ground:
+            raise Exception("No ground!")
+            
         self.ground = ground
 
 
@@ -32,19 +35,13 @@ class Leg(GroundDweller):
         #self.finished_slot = zap.Slot()  # TODO: is this better than a direct call?
 
 
-    def set_oid(self, oid):
-        GroundDweller.set_oid(self, oid)
-        
-        self.ground.add_leg(self)
-        
-    
     def forward(self, action):
         self.ground.forward(self.oid, action)
         
         
     def may_finish(self):
         for ci in range(len(self.media_legs)):
-            self.set_media_leg(ci, None)
+            self.set_media_leg(ci, None, None)
 
         self.logger.debug("Leg is finished.")
         self.ground.remove_leg(self.oid)
@@ -53,11 +50,11 @@ class Leg(GroundDweller):
 
     # Technically this method has nothing to do with the Leg, but putting
     # media related things in Party would be worse.
-    def make_media_leg(self, type, mgw_sid):
-        return self.ground.make_media_leg(type, mgw_sid)
+    def make_media_leg(self, type):
+        return self.ground.make_media_leg(type)
         
 
-    def set_media_leg(self, channel_index, media_leg):
+    def set_media_leg(self, channel_index, media_leg, mgw_sid):
         if channel_index > len(self.media_legs):
             raise Exception("Invalid media leg index!")
         elif channel_index == len(self.media_legs):
@@ -74,7 +71,8 @@ class Leg(GroundDweller):
         
         if media_leg:
             self.logger.debug("Adding media leg %s." % channel_index)
-            media_leg.set_oid(self.oid, "channel", channel_index)
+            media_leg.set_oid(self.oid.add("channel", channel_index))
+            self.ground.bind_media_leg(media_leg, mgw_sid)
             self.ground.media_leg_changed(self.oid, channel_index, True)
         
 
@@ -103,8 +101,8 @@ class Party(GroundDweller):
 
     def make_leg(self, li):
         leg = Leg(self, li)
-        leg.set_ground(self.ground)
-        leg.set_oid(self.oid, "leg", li)
+        
+        self.ground.setup_leg(leg, self.oid.add("leg", li))
         
         return leg
         
@@ -118,6 +116,7 @@ class Party(GroundDweller):
 
 
     def do_slot(self, li, action):
+        self.logger.critical("No do_slot: %r" % self)
         raise NotImplementedError()
 
 
@@ -215,11 +214,7 @@ class Bridge(Party):
         li = self.leg_count  # outgoing legs are numbered from 1
         self.leg_count += 1
 
-        leg = Leg(self, li)
-        leg.set_call(self.call)
-        leg.set_oid(self.oid, "leg", li)
-        #self.call.add_leg(leg)
-
+        leg = self.make_leg(li)
         self.legs[li] = proxy(leg)
         
         return leg
@@ -251,11 +246,11 @@ class Bridge(Party):
         leg = self.add_leg()
         li = leg.number
         
-        party = self.call.ground.make_party(type)
-        self.call.ground.setup_party(party, self.base_oid, self.path + [ li ], None)
+        party = self.ground.make_party(type)
+        self.ground.setup_party(party, self.base_oid, self.path + [ li ], None)
         #self.call.link_leg_to_party(leg, party)
         party_leg = party.start()
-        self.call.ground.link_legs(leg.oid, party_leg.oid)
+        self.ground.link_legs(leg.oid, party_leg.oid)
 
         leg.forward(action)
 
@@ -493,6 +488,11 @@ class RecordingBridge(Bridge):
         new = len(answer["channels"])
         
         for i in range(old, new):
+            answer_channel = answer["channels"][i]
+            ctype = answer_channel["type"]
+            mgw_affinity = answer_channel.get("mgw_affinity")
+            mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
+
             this = self.legs[0].make_media_leg("pass")
             that = self.legs[1].make_media_leg("pass")
 
@@ -500,8 +500,8 @@ class RecordingBridge(Bridge):
             this.pair(proxy(that))
             that.pair(proxy(this))
             
-            self.legs[0].set_media_leg(i, this)
-            self.legs[1].set_media_leg(i, that)
+            self.legs[0].set_media_leg(i, this, mgw_sid)
+            self.legs[1].set_media_leg(i, that, mgw_sid)
             
             format = ("L16", 8000, 1, None)
             this.refresh(dict(filename="recorded.wav", format=format, record=True))

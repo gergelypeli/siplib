@@ -2,7 +2,7 @@ import socket
 import multiprocessing
 
 import zap
-from util import Loggable
+from util import Loggable, Oid
 
 
 class Resolver(Loggable):
@@ -64,7 +64,7 @@ class Resolver(Loggable):
 
 
 resolver = Resolver()
-resolver.set_oid("resolver")
+resolver.set_oid(Oid("resolver"))
 
 
 def resolve_slot(hostname):

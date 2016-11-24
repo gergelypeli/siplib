@@ -48,26 +48,18 @@ OID_TRANSPORT = "transport"
 OID_AUTHORITY = "authority"
 
 
-def build_oid(parent, *args):
-    args = list(args)
-    oid = parent
-    
-    while args:
-        key = args.pop(0)
-        key = key[0 if FULL_OIDS else 1] if isinstance(key, tuple) else key
-        
-        value = args.pop(0) if args else None
-        value = ".".join(str(x) for x in value) if isinstance(value, list) else value
-        
-        kv = "%s=%s" % (key, value) if value is not None else key
-        oid = "%s,%s" % (oid, kv) if oid is not None else kv
-        
-    return oid
-
-
 class Oid(str):
-    def __add__(self, x, y=None):
-        return Oid(str.__add__(self, "," + x))
+    def add(self, key, value=None):
+        if isinstance(key, tuple):
+            key = key[0 if FULL_OIDS else 1]
+            
+        if isinstance(value, list):
+            value = ".".join(str(x) for x in value)  # TODO: make the caller do the join
+            
+        kv = "%s=%s" % (key, value) if value is not None else key
+        oid = "%s,%s" % (self, kv) if self else kv
+        
+        return Oid(oid)
 
 
 class Loggable(object):
@@ -80,8 +72,7 @@ class Loggable(object):
         self.oid = None
         
         
-    def set_oid(self, parent, *args):
-        oid = build_oid(parent, *args)
+    def set_oid(self, oid):
         self.logger = logging.LoggerAdapter(logging.getLogger(), dict(oid=oid))
         self.oid = oid
 

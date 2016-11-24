@@ -90,7 +90,7 @@ class TransportManager(Loggable):
         Loggable.set_oid(self, oid)
         
         for transport in self.transports:
-            transport.set_oid(self.oid, "iface", transport.interface)
+            transport.set_oid(self.oid.add("iface", transport.interface))
             
         
     def add_udp_transport(self, local_addr, interface=None):
