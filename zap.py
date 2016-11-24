@@ -360,7 +360,22 @@ class Plan(Loggable):
             if not isinstance(slots, tuple): slots = (slots,)
             
             self.logger.debug("Suspended plan for %d slots." % len(slots))
-            self.resume_plugs = [ slot.instaplug(self.zapped, slot_index=i) for i, slot in enumerate(slots) ]
+            # This is tricky, since we use instaplugs with EventSlots, so they can
+            # fire as soon as plugged in. So zapped must work during this loop, and we must
+            # stop if we look like resumed. This would be nicer if we could create the Plug
+            # first, then attach it to the Slot.
+            self.resume_plugs = []
+            
+            for i, slot in enumerate(slots):
+                plug = slot.instaplug(self.zapped, slot_index=i)
+                
+                if self.resume_plugs is None:
+                    # Seems like we were instazapped here, get out, we're already scheduled
+                    plug.unplug()
+                    break
+                    
+                self.resume_plugs.append(plug)
+                
         except StopIteration as e:
             self.logger.debug("Terminated plan.")
             if e.value:

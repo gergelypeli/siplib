@@ -482,7 +482,7 @@ class SimpleBridge(Bridge):
             self.may_finish()
 
     
-class RecordingBridge(Bridge):
+class RecordingBridge(SimpleBridge):
     def hack_media(self, li, answer):
         old = len(self.legs[0].media_legs)
         new = len(answer["channels"])
@@ -523,4 +523,4 @@ class RecordingBridge(Bridge):
         if session and session["is_answer"] and len(session) > 1:
             self.hack_media(li, session)
         
-        Bridge.do_slot(self, li, action)
+        SimpleBridge.do_slot(self, li, action)
