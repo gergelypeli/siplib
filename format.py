@@ -1,4 +1,3 @@
-import re
 import collections
 import socket
 from sdp import Sdp
@@ -7,14 +6,6 @@ from sdp import Sdp
 META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "sdp", "hop", "user_params", "authname" ]
 LIST_HEADER_FIELDS = [ "via", "route", "record_route", "contact" ]
 
-
-def assert_numeric_hostname(ip4):
-    socket.inet_aton(ip4)
-    
-    
-def resolve_hostname(hostname):
-    return socket.gethostbyname(hostname)
-    
 
 class FormatError(Exception):
     pass
@@ -27,19 +18,186 @@ class SipError(Exception):
         
     def __str__(self):
         return "%d %s" % self.status
+
+
+class Parser:
+    def __init__(self, text):
+        # The text should end with line terminators, so we don't have to check for length
+        # And should replace all tabs with spaces, which is legal.
+        self.text = text + '\n'
+        self.pos = 0
+
+
+    def __repr__(self):
+        return "Parser(...%r)" % self.text[self.pos:]
         
+        
+    def startswith(self, what):
+        return self.text.startswith(what)
+        
+        
+    def grab_literal(self, value):
+        if self.text[self.pos:self.pos+len(value)] != value:
+            raise Exception("Expected literal %r: %r!" % (value, self.text[self.pos:]))
+            
+        self.pos += len(value)
+        
+        
+    def grab_whitespace(self):
+        if self.text[self.pos] not in ' \t':
+            raise Exception("Expected whitespace: %r" % self.text[self.pos:])
+            
+        while self.text[self.pos] in ' \t':
+            self.pos += 1
+
+
+    def grab_until(self, delimiters):
+        start = self.pos
+        
+        while self.text[self.pos] not in delimiters + '\n':
+            self.pos += 1
+            
+        end = self.pos
+        chunk = self.text[start:end]
+        
+        return chunk
+            
+
+    def grab_number(self):
+        start = self.pos
+        
+        while self.text[self.pos].isdigit():
+            self.pos += 1
+            
+        end = self.pos
+        number = self.text[start:end]
+        
+        if not number:
+            raise Exception("Expected number!")
+            
+        return int(number)
+
+
+    def grab_separator(self, only=None):
+        pos = self.pos
+        
+        while self.text[pos] in ' \t':
+            pos += 1
+            
+        separator = self.text[pos]
+        if only and separator not in only:
+            return None
+            
+        self.pos = pos + 1
+        
+        if separator not in '()<>@,;:\"/[]?={}\n':  # Newline is our addition
+            raise Exception("Expected separator!")
+        
+        return separator
+
+
+    def lookahead(self, find, before):
+        pos = self.pos
+        
+        while self.text[pos] not in before + '\n':
+            if self.text[pos] in find:
+                return True
+            
+            pos += 1
+                
+        return False
+        
+
+    def is_token_character(self, c):
+        return c.isalnum() or c in "-.!%*_+`'~"
+
+        
+    def grab_token(self):
+        start = self.pos
+        
+        while self.is_token_character(self.text[self.pos]):
+            self.pos += 1
+            
+        end = self.pos
+        token = self.text[start:end]
+        
+        if not token:
+            raise Exception("Expected token: %r" % self.text[self.pos:])
+        
+        return token
+        
+
+    def grab_quoted(self):
+        while self.text[self.pos] in ' \t':
+            self.pos += 1
+            
+        if self.text[self.pos] != '"':
+            raise Exception("Expected quoted-string!")
+            
+        self.pos += 1
+        quoted = ""
+        
+        while self.text[self.pos] != '"':
+            if self.text[self.pos] == '\\':
+                self.pos += 1
+                
+            quoted += self.text[self.pos]
+            self.pos += 1
+        
+        self.pos += 1
+        
+        return quoted
+
+
+    def grab_token_or_quoted(self):
+        if self.text[self.pos] in '" \t':
+            return self.grab_quoted()
+        else:
+            return self.grab_token()
+    
+    
+    def grab_word(self):  # To be used for callid only
+        start = self.pos
+        
+        while not self.text[self.pos].isspace():
+            self.pos += 1
+            
+        end = self.pos
+        word = self.text[start:end]
+        
+        return word
+        
+    
 
 class Addr(collections.namedtuple("Addr", [ "host", "port" ])):
     def __str__(self):
+        return self.print()
+        
+    
+    def print(self):
         return "%s:%d" % self if self.port is not None else "%s" % self.host
 
 
+    @classmethod
+    def parse(cls, parser):
+        host = parser.grab_token()
+        port = None
+        
+        if parser.grab_separator(':'):
+            port = parser.grab_number()
+            
+        return cls(host, port)
+        
+
     def resolved(self):
-        return Addr(resolve_hostname(self.host), self.port)
+        return Addr(socket.gethostbyname(self.host), self.port)
 
 
     def assert_resolved(self):
-        assert_numeric_hostname(self.host)
+        try:
+            socket.inet_aton(self.host)
+        except Exception:
+            raise Exception("Host address is not numeric!")
         
 
 Addr.__new__.__defaults__ = (None,)
@@ -84,10 +242,16 @@ class Rack(collections.namedtuple("Rack", [ "rseq", "cseq", "method" ])):
         
         
     @classmethod
-    def parse(cls, value):
-        rseq, cseq, method = value.split()
+    def parse(cls, parser):
+        rseq = parser.grab_number()
+        parser.grab_whitespace()
         
-        return cls(int(rseq), int(cseq), method.upper())
+        cseq = parser.grab_number()
+        parser.grab_whitespace()
+        
+        method = parser.grab_token().upper()
+        
+        return cls(rseq, cseq, method)
 
 
 class Via(collections.namedtuple("Via", [ "addr", "branch" ])):
@@ -96,14 +260,43 @@ class Via(collections.namedtuple("Via", [ "addr", "branch" ])):
 
 
     @classmethod
-    def parse(cls, value):
-        m = re.search("SIP/2.0/UDP ([^:;]+)(:(\\d+))?;branch=z9hG4bK([^;]+)", value)
-        if not m:
-            raise FormatError("Invalid Via!")
-        host, port, branch = m.group(1), int(m.group(3)) if m.group(3) else None, m.group(4)
-        return cls(Addr(host, port), branch)
+    def parse(cls, parser):
+        proto = parser.grab_token()
+        parser.grab_literal("/")
+        
+        version = parser.grab_token()
+        parser.grab_literal("/")
+        
+        transport = parser.grab_token()
+        parser.grab_whitespace()
+        
+        if proto != "SIP" or version != "2.0" or transport != "UDP":
+            raise Exception("Expected vanilla Via!")
+        
+        addr = Addr.parse(parser)
+        params = {}
+        
+        while parser.grab_separator(';'):
+            key = parser.grab_token()
+            value = None
+            
+            if parser.grab_separator('='):
+                value = parser.grab_token_or_quoted()
+                
+            params[key] = value
+            
+        # FIXME: we can relax this now
+        branch = params["branch"]
+        
+        if not branch.startswith("z9hG4bK"):
+            raise Exception("Expected modern Via!")
+            
+        branch = branch[7:]
+        
+        return cls(addr, branch)
 
 
+# TODO: this shouldn't be here
 class Hop(collections.namedtuple("Hop", [ "interface", "local_addr", "remote_addr" ])):
     def __new__(cls, interface, local_addr, remote_addr):
         local_addr.assert_resolved()
@@ -116,35 +309,21 @@ class Hop(collections.namedtuple("Hop", [ "interface", "local_addr", "remote_add
         return "%s/%s/%s" % (self.interface, self.local_addr, self.remote_addr)
 
 
-def must_match(pattern, s):
-    m = re.search(pattern, s)
-    if m:
-        return m.groups()
-    else:
-        raise Exception("Not matched %r!" % pattern)
-
-
-def parse_digest_params(value):
-    rest, = must_match(r"^Digest\s+(.*)", value)
-    items = {}
+def parse_digest(parser):
+    parser.grab_literal("Digest")
+    parser.grab_whitespace()
     
-    while True:
-        key, rest = must_match(r"^(\w+)=(.*)", rest)
+    params = {}
+    
+    while not params or parser.grab_separator(","):
+        key = parser.grab_token()
+        parser.grab_literal("=")
+        value = parser.grab_token_or_quoted()
         
-        if rest.startswith('"'):
-            value, rest = must_match(r'^"(.*?)"(.*)', rest)
-        else:
-            value, rest = must_match(r'^([^,]*)(.*)', rest)
-            
-        items[key] = value
-        
-        if not rest:
-            break
-        
-        rest, = must_match("^,(.*)", rest)
-        
-    return items
+        params[key] = value
 
+    return params
+    
 
 class WwwAuth(collections.namedtuple("WwwAuth",
     [ "realm", "nonce", "domain", "opaque", "algorithm", "stale", "qop" ]
@@ -168,15 +347,16 @@ class WwwAuth(collections.namedtuple("WwwAuth",
 
         
     @classmethod
-    def parse(cls, value):
-        items = parse_digest_params(value)
-        
-        if "stale" in items:
-            items["stale"] = True if items["stale"].lower() == "true" else False
-        if "qop" in items:
-            items["qop"] = items["qop"].split(",")
+    def parse(cls, parser):
+        params = parse_digest(parser)
+    
+        if "stale" in params:
+            params["stale"] = True if params["stale"].lower() == "true" else False
             
-        return cls(**items)
+        if "qop" in params:
+            params["qop"] = params["qop"].split(",")
+            
+        return cls(**params)
         
     
 class Auth(collections.namedtuple("Auth",
@@ -206,13 +386,13 @@ class Auth(collections.namedtuple("Auth",
         
 
     @classmethod
-    def parse(cls, value):
-        items = parse_digest_params(value)
-        
-        if "nc" in items:
-            items["nc"] = int(items["nc"], 16)
+    def parse(cls, parser):
+        params = parse_digest(parser)
+
+        if "nc" in params:
+            params["nc"] = int(params["nc"], 16)
             
-        return cls(**items)
+        return cls(**params)
 
 
 def parse_parts(parts):
@@ -232,6 +412,22 @@ def print_params(params):
     return [ "%s=%s" % (k, v) if v is not True else k for k, v in params.items() if v]
 
 
+def parse_semicolon_params(parser):
+    params = {}
+    
+    while parser.grab_separator(";"):
+        key = parser.grab_token()
+        value = None
+    
+        if parser.grab_separator("="):
+            value = parser.grab_token_or_quoted()
+        
+        params[key] = value
+
+
+    return params
+    
+
 class Uri(collections.namedtuple("Uri", "addr user scheme params")):
     def __new__(cls, addr, user=None, scheme=None, params=None):
         return super().__new__(cls, addr, user, scheme or "sip", params or {})
@@ -248,9 +444,7 @@ class Uri(collections.namedtuple("Uri", "addr user scheme params")):
         
 
     def print(self):
-        host, port = self.addr
-        hostport = "%s:%d" % (host, port) if port else host
-        parts = [ hostport ] + print_params(self.params)
+        parts = [ self.addr.print() ] + print_params(self.params)
         rest = ";".join(parts)
         rest = "%s@%s" % (self.user, rest) if self.user else rest
         uri = "%s:%s" % (self.scheme, rest)
@@ -259,27 +453,32 @@ class Uri(collections.namedtuple("Uri", "addr user scheme params")):
 
 
     @classmethod
-    def parse(cls, uri):
-        scheme, rest = uri.split(':', 1)
+    def parse(cls, parser, no_params=False):
+        scheme = parser.grab_token()
+        parser.grab_literal(":")
         
-        if "@" in rest:
-            user, rest = rest.split('@', 1)
-        else:
-            user = None
+        if scheme not in ("sip", "sips"):
+            nonsip = parser.grab_until(" >")
+            return cls(None, None, scheme, nonsip)
+    
+        username = None
+        password = None
+    
+        if parser.lookahead('@', ';>'):
+            username = parser.grab_token()
             
-        # TODO: split password from user!
-        parts = rest.split(";")
-        
-        if ":" in parts[0]:
-            host, port = parts[0].split(':', 1)
-            port = int(port)
-        else:
-            host = parts[0]
-            port = None
-        
-        params = parse_parts(parts[1:])
-
-        return cls(Addr(host, port), user, scheme, params)
+            if parser.grab_separator(':'):
+                password = parser.grab_token()
+                
+            parser.grab_literal('@')
+            
+        addr = Addr.parse(parser)
+        params = parse_semicolon_params(parser) if not no_params else {}
+            
+        if password:
+            raise Exception("Unexpected password!")
+            
+        return cls(addr, username, scheme, params)
 
 
 class Nameaddr(collections.namedtuple("Nameaddr", "uri name params")):
@@ -301,19 +500,34 @@ class Nameaddr(collections.namedtuple("Nameaddr", "uri name params")):
 
 
     @classmethod
-    def parse(cls, contact):
-        m = re.search('^\\s*(".*?"|[^"]*?)\\s*<(.*?)>(.*)$', contact)
-        if m:
-            name = m.group(1).strip('"')
-            name = name or None
-            uri = m.group(2)  # may contain semicolons itself
-            parts = m.group(3).split(";")
-        else:
-            name = None
-            parts = contact.split(";")
-            uri = parts[0]
+    def parse(cls, parser):
+        displayname = None
+        uri = None
+        angles = False
 
-        return cls(uri=Uri.parse(uri), name=name, params=parse_parts(parts[1:]))
+        if parser.startswith("<"):
+            angles = True
+        elif parser.startswith('"'):
+            displayname = parser.grab_quoted()
+            angles = True
+        elif not parser.lookahead(":", "<"):
+            displayname = parser.grab_token()
+            angles = True
+            
+        if angles:
+            if not parser.grab_separator("<"):
+                raise Exception("Expected left angle bracket!")
+                
+            uri = Uri.parse(parser)
+        
+            if not parser.grab_separator(">"):
+                raise Exception("Expected right angle bracket!")
+        else:
+            uri = Uri.parse(parser, no_params=True)
+        
+        params = parse_semicolon_params(parser)
+        
+        return cls(uri=uri, name=displayname, params=params)
         
         
     def tagged(self, tag):
@@ -323,19 +537,19 @@ class Nameaddr(collections.namedtuple("Nameaddr", "uri name params")):
             return Nameaddr(self.uri, self.name, dict(self.params, tag=tag))
 
 
-def print_message(initial_line, params, body):
+def print_message(initial_line, headers, body):
     header_lines = []
 
-    for k, v in params.items():
-        field = k.replace("_", "-").title()
+    for field, value in headers.items():
+        field = field.replace("_", "-").title()
 
-        if isinstance(v, list):
+        if isinstance(value, list):
             # Some header types cannot be joined into a comma separated list,
             # such as the authorization ones, since they contain a comma themselves.
             # So output separate headers always.
-            header_lines.extend(["%s: %s" % (field, i) for i in v])
+            header_lines.extend(["%s: %s" % (field, v) for v in value])
         else:
-            header_lines.append("%s: %s" % (field, v))
+            header_lines.append("%s: %s" % (field, value))
 
     lines = [ initial_line ] + header_lines + [ "", body ]
     return "\r\n".join(lines)
@@ -345,7 +559,8 @@ def parse_message(msg):
     lines = msg.split("\r\n")
     initial_line = lines.pop(0)
     body = ""
-    params = { field: [] for field in LIST_HEADER_FIELDS }  # TODO: auth related?
+    headers = { field: [] for field in LIST_HEADER_FIELDS }  # TODO: auth related?
+    last_field = None
 
     while lines:
         line = lines.pop(0)
@@ -354,18 +569,27 @@ def parse_message(msg):
             body = "\r\n".join(lines)
             break
 
-        k, s, v = line.partition(":")
-        k = k.strip().replace("-", "_").lower()
-        v = v.strip()
-
-        if k not in params:
-            params[k] = v
-        elif isinstance(params[k], list):
-            params[k].append(v)  # FIXME: this does not handle unquoted comma separators!
+        if line.startswith(" "):
+            if not last_field:
+                raise Exception("First header is a continuation!")
+                
+            if isinstance(headers[last_field], list):
+                headers[last_field][-1] += line
+            else:
+                headers[last_field] += line
         else:
-            raise FormatError("Duplicate field received: %s" % k)
+            field, colon, value = line.partition(":")
+            field = field.strip().replace("-", "_").lower()
+            value = value.strip()
 
-    return initial_line, params, body
+            if field not in headers:
+                headers[field] = value
+            elif isinstance(headers[field], list):
+                headers[field].append(value)
+            else:
+                raise FormatError("Duplicate header received: %s" % field)
+
+    return initial_line, headers, body
 
 
 def print_structured_message(params):
@@ -377,7 +601,7 @@ def print_structured_message(params):
     else:
         raise FormatError("Invalid structured message!")
 
-    p = collections.OrderedDict()
+    headers = collections.OrderedDict()
     mandatory_fields = ["from", "to", "call_id", "cseq", "via"]  # order these nicely
     other_fields = [f for f in params if f not in mandatory_fields]
 
@@ -385,77 +609,104 @@ def print_structured_message(params):
         if params[field] is None:
             pass
         elif field in ("from", "to", "www_authenticate", "authorization", "rack"):
-            p[field] = params[field].print()
+            headers[field] = params[field].print()
         elif field == "cseq":
-            p[field] = "%d %s" % (params[field], params["method"])
+            headers[field] = "%d %s" % (params[field], params["method"])
         elif field == "rseq":
-            p[field] = "%d" % params[field]
+            headers[field] = "%d" % params[field]
         elif field in ("contact", "route"):
-            p[field] = [ f.print() for f in params[field] ]
+            headers[field] = [ f.print() for f in params[field] ]
         elif field in ("via",):
-            p[field] = [ f.print() for f in params[field] ]
+            headers[field] = [ f.print() for f in params[field] ]
         elif field in ("supported", "require"):
-            p[field] = ", ".join(sorted(params[field]))
+            headers[field] = ", ".join(sorted(params[field]))
         elif field not in META_HEADER_FIELDS:
-            p[field] = params[field]
+            headers[field] = params[field]
 
     body = ""
     sdp = params.get("sdp")
     if sdp:
         body = sdp.print()
-        p["content_type"] = "application/sdp"
-        p["content_length"] = len(body)
+        headers["content_type"] = "application/sdp"
+        headers["content_length"] = len(body)
 
-    return print_message(initial_line, p, body)
+    return print_message(initial_line, headers, body)
 
 
 def parse_structured_message(msg):
-    initial_line, params, body = parse_message(msg)
+    initial_line, headers, body = parse_message(msg)
     p = {}
+    parser = Parser(initial_line)
 
-    m = re.search("^SIP/2.0\\s+(\\d\\d\\d)\\s+(.+)$", initial_line)
-    if m:
+    token = parser.grab_token()
+    
+    if token == "SIP":
+        # Response
+        parser.grab_literal("/")
+    
+        version = parser.grab_token()
+        parser.grab_whitespace()
+        if version != "2.0":
+            raise Exception("Expected SIP version 2.0!")
+    
+        code = parser.grab_number()
+        parser.grab_whitespace()
+        
+        reason = parser.grab_until("")
+        
         p["is_response"] = True
-        p["status"] = Status(code=int(m.group(1)), reason=m.group(2))
-
-    m = re.search("^(\\w+)\\s+(\\S+)\\s*SIP/2.0\\s*$", initial_line)
-    if m:
+        p["status"] = Status(code=code, reason=reason)
+    else:
+        # Request
+        method = token.upper()
+        parser.grab_whitespace()
+        
+        uri = Uri.parse(parser)
+        parser.grab_whitespace()
+        
+        token = parser.grab_token()
+        parser.grab_literal("/")
+        
+        version = parser.grab_token()
+        if version != "2.0":
+            raise Exception("Expected SIP version 2.0!")
+        
         p["is_response"] = False
-        method, uri = m.groups()
         p["method"] = method
-        p["uri"] = Uri.parse(uri)
+        p["uri"] = uri
 
-    if not p:
-        raise FormatError("Invalid message!")
-
-    for field in params:
+    for field, header in headers.items():
         # TODO: refactor a bit!
         if field in ("from", "to"):
-            p[field] = Nameaddr.parse(params[field])
+            p[field] = Nameaddr.parse(Parser(header))
         elif field in ("contact", "route"):
-            p[field] = [ Nameaddr.parse(s) for s in params[field] ]
+            p[field] = [ Nameaddr.parse(Parser(h)) for h in header ]
         elif field in ("www_authenticate"):
-            p[field] = WwwAuth.parse(params[field])
+            p[field] = WwwAuth.parse(Parser(header))
         elif field in ("authorization"):
-            p[field] = Auth.parse(params[field])
-        elif field == "cseq":
-            cseq_num, cseq_method = params[field].split()
-            p[field] = int(cseq_num)
+            p[field] = Auth.parse(Parser(header))
+        elif field == "cseq":  # TODO
+            parser = Parser(header)
+            number = parser.grab_number()
+            parser.grab_whitespace()
+            method = parser.grab_token().upper()
+            
+            p[field] = number
             if "method" in p:
-                if p["method"] != cseq_method:
-                    raise FormatError("Mismatching method in cseq field!")
+                if p["method"] != method:
+                    raise FormatError("Mismatching method in CSeq field: %r vs %r" % (p["method"], method))
             else:
-                p["method"] = cseq_method.upper()  # Necessary for CANCEL responses
+                p["method"] = method  # Necessary for CANCEL responses
         elif field == "rseq":
-            p[field] = int(params[field])
+            p[field] = int(header)  # TODO
         elif field == "rack":
-            p[field] = Rack.parse(params[field])
+            p[field] = Rack.parse(Parse(header))
         elif field == "via":
-            p[field] = [ Via.parse(s) for s in params[field] ]
+            p[field] = [ Via.parse(Parser(h)) for h in header ]
         elif field in ("supported", "require"):
-            p[field] = set( x.strip() for x in params[field].split(",") )
+            p[field] = set( x.strip() for x in header.split(",") )  # TODO
         elif field not in META_HEADER_FIELDS:
-            p[field] = params[field]
+            p[field] = header
         else:
             print("Warning, header field ignored: '%s'!" % field)
 
