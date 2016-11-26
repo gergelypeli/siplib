@@ -21,7 +21,7 @@ import resolver
 
 TEST_DIALIN = 1
 TEST_DIALOUT = 2
-TEST = TEST_DIALIN
+TEST = TEST_DIALOUT
 
 HOST = "otthon"
 A_ADDR = Addr(HOST, 5060)
@@ -414,8 +414,8 @@ def main():
 
     try:
         zap.loop()
-    except KeyboardInterrupt:
-        pass
+    #except KeyboardInterrupt:
+    #    pass
     except Exception:
         logging.critical("Crashed!")
         my_exchandler(*sys.exc_info())

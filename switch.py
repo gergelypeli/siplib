@@ -4,7 +4,7 @@ from format import Status
 from transport import TransportManager
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
-from leg import Routing, Bridge, RecordingBridge
+from leg import Bridge, RecordingBridge
 from leg_sip import SipEndpoint
 from ground import Ground
 from authority import Authority
@@ -131,10 +131,6 @@ class Switch(Loggable):
             raise Exception("Unknown party type '%s'!" % type)
 
 
-    def make_call(self):
-        return Call(proxy(self), proxy(self.ground))
-        
-        
     def start_call(self, incoming_party):
         base_oid = self.oid.add("call", self.call_count)
         self.call_count += 1
