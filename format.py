@@ -20,6 +20,17 @@ class SipError(Exception):
         return "%d %s" % self.status
 
 
+LWS = ' \t'
+ALPHANUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+MARK = "-_.!~*'()"
+UNRESERVED = ALPHANUM + MARK
+RESERVED = ";/?:@&=+$,"
+ESCAPED = "%"  # followed by two hex digits, but we ignore that here
+URIC = RESERVED + UNRESERVED + ESCAPED
+REASON = URIC + LWS
+TOKEN = ALPHANUM + "-.!%*_+`'~"
+
+
 class Parser:
     def __init__(self, text):
         # The text should end with line terminators, so we don't have to check for length
@@ -34,34 +45,50 @@ class Parser:
         
     def startswith(self, what):
         return self.text.startswith(what)
-        
-        
-    def grab_literal(self, value):
-        if self.text[self.pos:self.pos+len(value)] != value:
-            raise Exception("Expected literal %r: %r!" % (value, self.text[self.pos:]))
+
+
+    def skip_lws(self, pos):
+        while True:
+            if self.text[pos] in LWS:
+                pos += 1
+            elif self.text[pos] == '\r' and self.text[pos + 1] == '\n' and self.text[pos + 2] in LWS:
+                pos += 3
+            else:
+                return pos
             
-        self.pos += len(value)
+        
+    def grab_string(self, acceptable):
+        start = self.pos
+        pos = start
+        
+        while self.text[pos] in acceptable:
+            pos += 1
+            
+        end = pos
+        value = self.text[start:end]
+        self.pos = pos
+        
+        return value
+        
+        
+    def grab_newline(self):
+        pos = self.pos
+        pos = self.skip_lws(pos)  # Skips line folding, too
+            
+        if self.text[pos] != '\r' or self.text[pos + 1] != '\n':
+            raise Exception("Expected newline!")
+            
+        pos += 2
+        self.pos = pos
         
         
     def grab_whitespace(self):
-        if self.text[self.pos] not in ' \t':
-            raise Exception("Expected whitespace: %r" % self.text[self.pos:])
+        pos = self.skip_lws(self.pos)
+        if pos == self.pos:
+            raise Exception("Expected whitespace at %r" % self)
             
-        while self.text[self.pos] in ' \t':
-            self.pos += 1
+        self.pos = pos
 
-
-    def grab_until(self, delimiters):
-        start = self.pos
-        
-        while self.text[self.pos] not in delimiters + '\n':
-            self.pos += 1
-            
-        end = self.pos
-        chunk = self.text[start:end]
-        
-        return chunk
-            
 
     def grab_number(self):
         start = self.pos
@@ -78,79 +105,75 @@ class Parser:
         return int(number)
 
 
-    def grab_separator(self, only=None):
+    def can_grab_separator(self, wanted, left_pad=False, right_pad=False):
         pos = self.pos
         
-        while self.text[pos] in ' \t':
-            pos += 1
+        if left_pad:
+            pos = self.skip_lws(pos)
             
         separator = self.text[pos]
-        if only and separator not in only:
-            return None
+        if separator != wanted:
+            return False
             
-        self.pos = pos + 1
+        pos += 1
         
-        if separator not in '()<>@,;:\"/[]?={}\n':  # Newline is our addition
-            raise Exception("Expected separator!")
-        
-        return separator
-
-
-    def lookahead(self, find, before):
-        pos = self.pos
-        
-        while self.text[pos] not in before + '\n':
-            if self.text[pos] in find:
-                return True
+        if right_pad:
+            pos = self.skip_lws(pos)
             
-            pos += 1
-                
-        return False
+        self.pos = pos
         
+        return True
 
-    def is_token_character(self, c):
-        return c.isalnum() or c in "-.!%*_+`'~"
 
-        
+    def grab_separator(self, wanted, left_pad=False, right_pad=False):
+        if not self.can_grab_separator(wanted, left_pad, right_pad):
+            raise Exception("Expected separator %r at %r" % (wanted, self))
+            
+
     def grab_token(self):
         start = self.pos
+        pos = start
         
-        while self.is_token_character(self.text[self.pos]):
-            self.pos += 1
+        while self.text[pos] in TOKEN:
+            pos += 1
             
-        end = self.pos
+        end = pos
         token = self.text[start:end]
+        self.pos = pos
         
         if not token:
-            raise Exception("Expected token: %r" % self.text[self.pos:])
+            raise Exception("Expected token at %r" % self)
         
         return token
         
 
     def grab_quoted(self):
-        while self.text[self.pos] in ' \t':
-            self.pos += 1
+        pos = self.skip_lws(self.pos)
             
-        if self.text[self.pos] != '"':
+        if self.text[pos] != '"':
             raise Exception("Expected quoted-string!")
             
-        self.pos += 1
+        pos += 1
         quoted = ""
         
-        while self.text[self.pos] != '"':
-            if self.text[self.pos] == '\\':
-                self.pos += 1
+        while self.text[pos] != '"':
+            if self.text[pos] == '\\':
+                pos += 1
                 
-            quoted += self.text[self.pos]
-            self.pos += 1
+                if self.text[pos] in "\n\r":
+                    raise Exception("Illegal escaping at %r!" % self)
+                
+            quoted += self.text[pos]
+            pos += 1
         
-        self.pos += 1
+        pos += 1
+        self.pos = self.skip_lws(pos)
         
         return quoted
 
 
     def grab_token_or_quoted(self):
-        if self.text[self.pos] in '" \t':
+        if self.text[self.pos] in '"' + LWS:
             return self.grab_quoted()
         else:
             return self.grab_token()
@@ -158,16 +181,17 @@ class Parser:
     
     def grab_word(self):  # To be used for callid only
         start = self.pos
+        pos = start
         
-        while not self.text[self.pos].isspace():
-            self.pos += 1
+        while not self.text[pos].isspace():
+            pos += 1
             
-        end = self.pos
+        end = pos
         word = self.text[start:end]
+        self.pos = pos
         
         return word
         
-    
 
 class Addr(collections.namedtuple("Addr", [ "host", "port" ])):
     def __str__(self):
@@ -183,7 +207,7 @@ class Addr(collections.namedtuple("Addr", [ "host", "port" ])):
         host = parser.grab_token()
         port = None
         
-        if parser.grab_separator(':'):
+        if parser.can_grab_separator(':'):
             port = parser.grab_number()
             
         return cls(host, port)
@@ -256,16 +280,16 @@ class Rack(collections.namedtuple("Rack", [ "rseq", "cseq", "method" ])):
 
 class Via(collections.namedtuple("Via", [ "addr", "branch" ])):
     def print(self):
-        return "SIP/2.0/UDP %s:%d;branch=z9hG4bK%s" % (self.addr + (self.branch,))
+        return "SIP/2.0/UDP %s:%d;branch=%s" % (self.addr + (self.branch,))
 
 
     @classmethod
     def parse(cls, parser):
         proto = parser.grab_token()
-        parser.grab_literal("/")
+        parser.grab_separator("/")
         
         version = parser.grab_token()
-        parser.grab_literal("/")
+        parser.grab_separator("/")
         
         transport = parser.grab_token()
         parser.grab_whitespace()
@@ -276,23 +300,18 @@ class Via(collections.namedtuple("Via", [ "addr", "branch" ])):
         addr = Addr.parse(parser)
         params = {}
         
-        while parser.grab_separator(';'):
+        while parser.can_grab_separator(';'):
             key = parser.grab_token()
             value = None
             
-            if parser.grab_separator('='):
+            if parser.can_grab_separator('='):
                 value = parser.grab_token_or_quoted()
                 
             params[key] = value
             
         # FIXME: we can relax this now
         branch = params["branch"]
-        
-        if not branch.startswith("z9hG4bK"):
-            raise Exception("Expected modern Via!")
-            
-        branch = branch[7:]
-        
+
         return cls(addr, branch)
 
 
@@ -310,14 +329,17 @@ class Hop(collections.namedtuple("Hop", [ "interface", "local_addr", "remote_add
 
 
 def parse_digest(parser):
-    parser.grab_literal("Digest")
+    token = parser.grab_token()
+    if token != 'Digest':
+        raise Exception("Expected 'Digest'!")
+    
     parser.grab_whitespace()
     
     params = {}
     
-    while not params or parser.grab_separator(","):
+    while not params or parser.can_grab_separator(","):
         key = parser.grab_token()
-        parser.grab_literal("=")
+        parser.grab_separator("=")
         value = parser.grab_token_or_quoted()
         
         params[key] = value
@@ -415,11 +437,11 @@ def print_params(params):
 def parse_semicolon_params(parser):
     params = {}
     
-    while parser.grab_separator(";"):
+    while parser.can_grab_separator(";"):
         key = parser.grab_token()
         value = None
     
-        if parser.grab_separator("="):
+        if parser.can_grab_separator("="):
             value = parser.grab_token_or_quoted()
         
         params[key] = value
@@ -453,30 +475,47 @@ class Uri(collections.namedtuple("Uri", "addr user scheme params")):
 
 
     @classmethod
-    def parse(cls, parser, no_params=False):
-        scheme = parser.grab_token()
-        parser.grab_literal(":")
+    def parse(cls, parser, bare_scheme=None):
+        if bare_scheme:
+            # It is given if the Uri was found not enclosed between angle brackets.
+            # Then the parser already grabbed the scheme and the colon by accident.
+            # Also, in this case we have no URI parameters.
+            scheme = bare_scheme
+        else:
+            scheme = parser.grab_token()
+            parser.grab_separator(":")
+
+        # OK, there's no sane way to parse this shit incrementally
+        uric = parser.grab_string(URIC)
         
         if scheme not in ("sip", "sips"):
-            nonsip = parser.grab_until(" >")
-            return cls(None, None, scheme, nonsip)
+            return cls(None, None, scheme, uric)
     
         username = None
         password = None
-    
-        if parser.lookahead('@', ';>'):
-            username = parser.grab_token()
+        
+        if "@" in uric:
+            userinfo, hostport = uric.split("@")
             
-            if parser.grab_separator(':'):
-                password = parser.grab_token()
-                
-            parser.grab_literal('@')
+            if ":" in userinfo:
+                username, password = userinfo.split(":")
+                raise Exception("Unexpected password!")  # FIXME
+            else:
+                username = userinfo
+        else:
+            hostport = uric
             
-        addr = Addr.parse(parser)
-        params = parse_semicolon_params(parser) if not no_params else {}
+        if hostport.startswith("["):
+            raise Exception("Can't parse IPV6 references yet!")
             
-        if password:
-            raise Exception("Unexpected password!")
+        if ":" in hostport:
+            host, port = hostport.split(":")
+        else:
+            host, port = hostport, None
+            
+        addr = Addr(host, port)
+        
+        params = parse_semicolon_params(parser) if not bare_scheme else {}
             
         return cls(addr, username, scheme, params)
 
@@ -503,27 +542,28 @@ class Nameaddr(collections.namedtuple("Nameaddr", "uri name params")):
     def parse(cls, parser):
         displayname = None
         uri = None
-        angles = False
+        bare_scheme = None
 
-        if parser.startswith("<"):
-            angles = True
-        elif parser.startswith('"'):
+        # Leading LWS is already grabbed by the header parsing, or the
+        # comma parsing.
+        if parser.startswith('"'):
             displayname = parser.grab_quoted()
-            angles = True
-        elif not parser.lookahead(":", "<"):
-            displayname = parser.grab_token()
-            angles = True
+        elif not parser.startswith("<"):
+            # This is either a bare display name, or the scheme of a URI
+            token = parser.grab_token()
             
-        if angles:
-            if not parser.grab_separator("<"):
-                raise Exception("Expected left angle bracket!")
-                
-            uri = Uri.parse(parser)
+            if parser.can_grab_separator(":"):
+                bare_scheme = token
+            else:
+                displayname = token
+                parser.grab_whitespace()  # This is not optional
         
-            if not parser.grab_separator(">"):
-                raise Exception("Expected right angle bracket!")
+        if bare_scheme:        
+            uri = Uri.parse(parser, bare_scheme)
         else:
-            uri = Uri.parse(parser, no_params=True)
+            parser.grab_separator("<", True, False)
+            uri = Uri.parse(parser)
+            parser.grab_separator(">", False, True)
         
         params = parse_semicolon_params(parser)
         
@@ -642,7 +682,7 @@ def parse_structured_message(msg):
     
     if token == "SIP":
         # Response
-        parser.grab_literal("/")
+        parser.grab_separator("/")
     
         version = parser.grab_token()
         parser.grab_whitespace()
@@ -652,7 +692,7 @@ def parse_structured_message(msg):
         code = parser.grab_number()
         parser.grab_whitespace()
         
-        reason = parser.grab_until("")
+        reason = parser.grab_string(REASON)
         
         p["is_response"] = True
         p["status"] = Status(code=code, reason=reason)
@@ -665,7 +705,7 @@ def parse_structured_message(msg):
         parser.grab_whitespace()
         
         token = parser.grab_token()
-        parser.grab_literal("/")
+        parser.grab_separator("/")
         
         version = parser.grab_token()
         if version != "2.0":
@@ -686,7 +726,7 @@ def parse_structured_message(msg):
                 parser = Parser(h)
                 nameaddrs = []
                 
-                while not nameaddrs or parser.grab_separator(","):
+                while not nameaddrs or parser.can_grab_separator(","):
                     nameaddrs.append(Nameaddr.parse(parser))
                     
                 p[field].extend(nameaddrs)

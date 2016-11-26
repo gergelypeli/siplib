@@ -48,6 +48,9 @@ import zap
 # sending the ACK should destroy the sent INVITE, even if keeping its branch
 
 
+BRANCH_MAGIC = "z9hG4bK"
+
+
 class Error(Exception): pass
 
 
@@ -63,7 +66,7 @@ def identify(params):
 
 
 def generate_branch():
-    return uuid.uuid4().hex[:8]
+    return BRANCH_MAGIC + uuid.uuid4().hex[:8]
 
     
 class Transaction(object):
