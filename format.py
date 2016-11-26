@@ -680,7 +680,16 @@ def parse_structured_message(msg):
         if field in ("from", "to"):
             p[field] = Nameaddr.parse(Parser(header))
         elif field in ("contact", "route"):
-            p[field] = [ Nameaddr.parse(Parser(h)) for h in header ]
+            p[field] = []
+            
+            for h in header:
+                parser = Parser(h)
+                nameaddrs = []
+                
+                while not nameaddrs or parser.grab_separator(","):
+                    nameaddrs.append(Nameaddr.parse(parser))
+                    
+                p[field].extend(nameaddrs)
         elif field in ("www_authenticate"):
             p[field] = WwwAuth.parse(Parser(header))
         elif field in ("authorization"):
@@ -700,7 +709,7 @@ def parse_structured_message(msg):
         elif field == "rseq":
             p[field] = int(header)  # TODO
         elif field == "rack":
-            p[field] = Rack.parse(Parse(header))
+            p[field] = Rack.parse(Parser(header))
         elif field == "via":
             p[field] = [ Via.parse(Parser(h)) for h in header ]
         elif field in ("supported", "require"):
