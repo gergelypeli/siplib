@@ -510,6 +510,10 @@ class Uri(collections.namedtuple("Uri", "addr user scheme params")):
             
         if ":" in hostport:
             host, port = hostport.split(":")
+            try:
+                port = int(port)
+            except Exception:
+                raise Exception("Expected numeric port!")
         else:
             host, port = hostport, None
             

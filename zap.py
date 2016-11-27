@@ -246,7 +246,11 @@ class Kernel(Loggable):
         #logging.debug("Readers: %r" % self.readers_by_fd)
         #logging.debug("Writers: %r" % self.writers_by_fd)
         #self.logger.debug("Timeout: %s" % timeout)
-        events = self.poll.poll(timeout)
+        try:
+            events = self.poll.poll(timeout)
+        except KeyboardInterrupt:
+            return True
+            
         now = datetime.datetime.now()
         #self.logger.debug("Events: %r" % events)
 
@@ -288,6 +292,8 @@ class Kernel(Loggable):
             self.slots_by_key = { key: self.slots_by_key[key] for key in self.registered_keys }
             self.time_heap = [ key for key in self.time_heap if key in self.registered_keys ]
             heapq.heapify(self.time_heap)
+            
+        return False
 
 
 class Plan(Loggable):
@@ -474,8 +480,9 @@ def schedule(task):
     
 def loop():
     global scheduled_tasks
+    finished = False
     
-    while True:
+    while not finished:
         while scheduled_tasks:
             # Tasks may be scheduled while we run others
             tasks = scheduled_tasks
@@ -486,4 +493,4 @@ def loop():
                 task()
         
         #kernel.logger.debug("Polling")
-        kernel.do_poll()
+        finished = kernel.do_poll()

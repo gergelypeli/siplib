@@ -338,9 +338,13 @@ class Routing(Bridge):
             return
 
         if type == "reject":
-            # FIXME: of course don't reject the incoming leg immediately
-            # FIXME: shouldn't we finish here?
-            self.reject_incoming_leg(action["status"])
+            # FIXME: we probably shouldn't just forward the last rejection status
+            self.remove_leg(li)
+
+            if len(self.legs) == 1:
+                self.reject_incoming_leg(action["status"])
+
+            self.may_finish()
         elif type == "ring":
             if action.get("session"):
                 action["type"] = "session"

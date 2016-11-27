@@ -39,6 +39,9 @@ class Ground(Loggable):
         
         if linked_leg_oid:
             self.targets_by_source.pop(linked_leg_oid, None)
+            
+        if not self.legs_by_oid:
+            self.logger.info("Back to empty state.")
         
         
     def link_legs(self, leg_oid0, leg_oid1):
