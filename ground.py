@@ -177,24 +177,17 @@ class Ground(Loggable):
         self.add_leg(leg)
         
 
-    def setup_party(self, party, base_oid, path, suffix):
-        #party.set_call(proxy(self))
-        # TODO: if we don't use suffix, this thing can mostly go into Party.set_path
-        party.set_path(base_oid, path)
-        oid = base_oid
+    def make_party(self, type, call_oid, path):
+        party = self.switch.make_party(type)
         
-        if path:
-            oid = oid.add("party", path)
-            
-        if suffix:
-            oid = oid.add(suffix)
-
-        party.set_oid(oid)
+        party.set_path(call_oid, path)
+        
+        pathstr = ",".join(str(x) for x in path) if path else None
+        party.set_oid(call_oid.add(type, pathstr))
+        
         party.set_ground(proxy(self))
-
-
-    def make_party(self, type):
-        return self.switch.make_party(type)
+        
+        return party
 
 
     def select_hop_slot(self, next_uri):
@@ -364,7 +357,6 @@ class Leg(GroundDweller):
 
         self.logger.debug("Leg is finished.")
         self.ground.remove_leg(self.oid)
-        #self.finished_slot.zap()
 
 
     # Technically this method has nothing to do with the Leg, but putting

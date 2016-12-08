@@ -131,23 +131,23 @@ class Switch(Loggable):
             raise Exception("Unknown party type '%s'!" % type)
 
 
-    def start_call(self, incoming_party):
-        base_oid = self.oid.add("call", self.call_count)
+    def start_call(self, incoming_type):
+        call_oid = self.oid.add("call", self.call_count)
         self.call_count += 1
 
-        self.ground.setup_party(incoming_party, base_oid, [ 0 ], None)
+        incoming_party = self.ground.make_party(incoming_type, call_oid, [ 0 ])
         incoming_leg = incoming_party.start()
         
-        routing = self.make_party("routing")
-        self.ground.setup_party(routing, base_oid, [], "reception")
-
+        routing = self.ground.make_party("routing", call_oid, [])
         routing_leg = routing.start()
+        
         self.ground.link_legs(incoming_leg.oid, routing_leg.oid)
+        
+        return incoming_party
 
 
     def start_sip_call(self, params):
-        incoming_party = self.ground.make_party("sip")
-        self.start_call(incoming_party)
+        incoming_party = self.start_call("sip")
         
         # The dialog must be fed directly, since the request contains no local tag yet.
         incoming_party.get_dialog().recv_request(params)

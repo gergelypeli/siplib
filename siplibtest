@@ -369,6 +369,8 @@ class SwitchB(TestSwitch):
     def make_party(self, type):
         if type == "routing":
             return self.Routing()
+        elif type == "caller":
+            return CallerEndpoint()
         else:
             return TestSwitch.make_party(self, type)
 
@@ -385,8 +387,7 @@ class SwitchB(TestSwitch):
     def test_dialing(self):
         self.logger.debug("Dialing begins.")
 
-        incoming_party = CallerEndpoint()
-        self.start_call(incoming_party)
+        self.start_call("caller")
 
 
 def main():

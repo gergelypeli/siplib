@@ -53,9 +53,6 @@ class Oid(str):
         if isinstance(key, tuple):
             key = key[0 if FULL_OIDS else 1]
             
-        if isinstance(value, list):
-            value = ".".join(str(x) for x in value)  # TODO: make the caller do the join
-            
         kv = "%s=%s" % (key, value) if value is not None else key
         oid = "%s,%s" % (self, kv) if self else kv
         

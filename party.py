@@ -10,12 +10,12 @@ class Party(GroundDweller):
     def __init__(self):
         GroundDweller.__init__(self)
         
-        self.base_oid = None
+        self.call_oid = None
         self.path = None
         
             
-    def set_path(self, base_oid, path):
-        self.base_oid = base_oid
+    def set_path(self, call_oid, path):
+        self.call_oid = call_oid
         self.path = path
 
 
@@ -166,9 +166,7 @@ class Bridge(Party):
         leg = self.add_leg()
         li = leg.number
         
-        party = self.ground.make_party(type)
-        self.ground.setup_party(party, self.base_oid, self.path + [ li ], None)
-        #self.call.link_leg_to_party(leg, party)
+        party = self.ground.make_party(type, self.call_oid, self.path + [ li ])
         party_leg = party.start()
         self.ground.link_legs(leg.oid, party_leg.oid)
 
