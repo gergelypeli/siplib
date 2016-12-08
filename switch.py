@@ -101,23 +101,6 @@ class Switch(Loggable):
             self.transaction_manager.send_message(response, msg)
 
 
-    # TODO: do we still need these?
-    def select_gateway_sid(self, ctype, mgw_affinity):
-        return self.mgc.select_gateway_sid(ctype, mgw_affinity)
-        
-        
-    def allocate_media_address(self, mgw_sid):
-        return self.mgc.allocate_media_address(mgw_sid)
-        
-        
-    def deallocate_media_address(self, addr):
-        self.mgc.deallocate_media_address(addr)
-    
-    
-    def make_media_leg(self, type):
-        return self.mgc.make_media_leg(type)
-        
-
     def make_party(self, type):
         # No default Routing class to make, must overload this method!
         

@@ -27,6 +27,10 @@ class Party(GroundDweller):
         return leg
         
         
+    def make_media_leg(self, type):
+        return self.ground.make_media_leg(type)
+        
+        
     def start(self):
         raise NotImplementedError()
 
@@ -415,8 +419,8 @@ class RecordingBridge(SimpleBridge):
             mgw_affinity = answer_channel.get("mgw_affinity")
             mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
 
-            this = self.legs[0].make_media_leg("pass")
-            that = self.legs[1].make_media_leg("pass")
+            this = self.make_media_leg("pass")
+            that = self.make_media_leg("pass")
 
             # Pairing must happen before setting it, because realizing needs it
             this.pair(proxy(that))

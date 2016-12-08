@@ -159,7 +159,7 @@ class SipEndpoint(Endpoint):
             if not ml:
                 self.logger.debug("Making media leg for channel %d" % i)
                 mgw_sid = am.mgw_sid
-                ml = self.leg.make_media_leg("net")
+                ml = self.make_media_leg("net")
                 self.leg.set_media_leg(i, ml, mgw_sid)
                 ml.event_slot.plug(self.notified)
             

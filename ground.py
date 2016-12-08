@@ -359,12 +359,6 @@ class Leg(GroundDweller):
         self.ground.remove_leg(self.oid)
 
 
-    # Technically this method has nothing to do with the Leg, but putting
-    # media related things in Party would be worse.
-    def make_media_leg(self, type):
-        return self.ground.make_media_leg(type)
-        
-
     def set_media_leg(self, channel_index, media_leg, mgw_sid):
         if channel_index > len(self.media_legs):
             raise Exception("Invalid media leg index!")
