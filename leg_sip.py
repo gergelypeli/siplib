@@ -1,8 +1,12 @@
+from collections import namedtuple
+
 from format import Status
 from leg import Endpoint, Error
-from session import SessionState
 from sdp import SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES
 from leg_sip_invite import InviteClientState, InviteServerState
+
+
+AllocatedMedia = namedtuple("AllocatedMedia", "mgw_sid local_addr")
 
 
 class SipEndpoint(Endpoint):
@@ -22,7 +26,7 @@ class SipEndpoint(Endpoint):
         self.dialog = dialog
         self.state = self.DOWN
         self.invite = None
-        self.session = SessionState()
+        self.allocated_media = []
         self.pending_actions = []
         
         self.sdp_builder = SdpBuilder()
@@ -78,32 +82,31 @@ class SipEndpoint(Endpoint):
         return { f[pt_key]: (f["encoding"], f["clock"], f["encp"], f["fmtp"]) for f in formats }
 
 
-    def allocate_local_media(self, old_session, new_session):
-        # TODO: can't this go into SessionState?
-        new_channels = new_session["channels"] if new_session else []
-        old_channels = old_session["channels"] if old_session else []
+    def update_local_media(self):
+        ss = self.leg.session_state
+        gs = ss.pending_ground_session or ss.ground_session
+        local_channels = gs["channels"] if gs else []
         
-        for i, new_channel in enumerate(new_channels):
-            old_channel = old_channels[i] if i < len(old_channels) else None
-            
-            ctype = new_channel["type"]
-            mgw_affinity = new_channel.get("mgw_affinity")
-            
-            if not old_channel:
+        for i, local_channel in enumerate(local_channels):
+            if i < len(self.allocated_media):
+                mgw_sid, local_addr = self.allocated_media[i]
+            else:
+                ctype = local_channel["type"]
+                mgw_affinity = local_channel.get("mgw_affinity")
                 self.logger.debug("Allocating local media address for channel %d (%s@%s)" % (i, ctype, mgw_affinity))
+                
                 mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
                 local_addr = self.ground.allocate_media_address(mgw_sid)
-            else:
-                mgw_sid = mgw_affinity or old_channel["mgw_affinity"]
-                local_addr = old_channel["rtp_local_addr"]
-        
-            new_channel["rtp_local_addr"] = local_addr
-            new_channel["mgw_affinity"] = mgw_sid
+                
+                allocated_media = AllocatedMedia(mgw_sid, local_addr)
+                self.allocated_media.append(allocated_media)
+                
+            local_channel["rtp_local_addr"] = local_addr
             
             next_payload_type = 96
             used_payload_types = set()
             
-            for f in new_channel["formats"]:
+            for f in local_channel["formats"]:
                 format_info = (f["encoding"], f["clock"], f["encp"], f["fmtp"])
                 rpt = f.get("rtp_remote_payload_type")  # the one from the other endpoint
                 
@@ -124,38 +127,36 @@ class SipEndpoint(Endpoint):
 
                 f["rtp_local_payload_type"] = pt
                 used_payload_types.add(pt)
-                
-                
-    def deallocate_local_media(self, old_session, new_session):
-        new_channels = new_session["channels"] if new_session else []
-        old_channels = old_session["channels"] if old_session else []
         
-        for i in range(len(old_channels), len(new_channels)):
-            self.logger.debug("Deallocating local media address for channel %d" % i)
-            self.ground.deallocate_media_address(new_channels[i]["rtp_local_addr"])
+        for i, allocated_media in reversed(list(enumerate(self.allocated_media))):
+            if i >= len(local_channels):
+                mgw_sid, local_addr = allocated_media
+                self.logger.debug("Deallocating local media address for channel %d" % i)
+                self.ground.deallocate_media_address(local_addr)
+                self.allocated_media.pop()
 
 
     def realize_local_media(self):
         # This must only be called after an answer is accepted
         self.logger.debug("realize_local_media")
-        local_channels = self.session.local_session["channels"]
-        remote_channels = self.session.remote_session["channels"]
+        ss = self.leg.session_state
+        local_channels = ss.ground_session["channels"] if ss.ground_session else []
+        remote_channels = ss.party_session["channels"] if ss.party_session else []
         
         if len(local_channels) != len(remote_channels):
             raise Exception("Channel count mismatch!")
 
-        leg = self.leg
-        
         for i in range(len(local_channels)):
             lc = local_channels[i]
             rc = remote_channels[i]
-            ml = leg.get_media_leg(i)
+            am = self.allocated_media[i]
+            ml = self.leg.get_media_leg(i)
             
             if not ml:
                 self.logger.debug("Making media leg for channel %d" % i)
-                mgw_sid = lc["mgw_affinity"]
-                ml = leg.make_media_leg("net")
-                leg.set_media_leg(i, ml, mgw_sid)
+                mgw_sid = am.mgw_sid
+                ml = self.leg.make_media_leg("net")
+                self.leg.set_media_leg(i, ml, mgw_sid)
                 ml.event_slot.plug(self.notified)
             
             params = {
@@ -170,80 +171,52 @@ class SipEndpoint(Endpoint):
             
             
     def add_mgw_affinities(self, session):
-        if not self.session.local_session:
-            return
-            
-        local_channels = self.session.local_session["channels"]
         remote_channels = session["channels"]
         
-        for i in range(len(local_channels)):
-            remote_channels[i]["mgw_affinity"] = local_channels[i]["mgw_affinity"]
-
-
-    def process_incoming_offer(self, sdp):
-        session = self.sdp_parser.parse(sdp, is_answer=False)
-        self.session.set_remote_offer(session)
-        self.add_mgw_affinities(session)
-        
-        return session
-
-    
-    def process_incoming_answer(self, sdp):
-        session = self.sdp_parser.parse(sdp, is_answer=True)
-        rejected_local_offer = self.session.set_remote_answer(session)
-        
-        if rejected_local_offer:
-            self.deallocate_local_media(self.session.local_session, rejected_local_offer)
-        else:
-            self.add_mgw_affinities(session)
-            self.realize_local_media()
-            
-        return session
+        for i in range(len(self.allocated_media)):
+            remote_channels[i]["mgw_affinity"] = self.allocated_media[i].mgw_sid
 
 
     def process_incoming_sdp(self, sdp, is_answer):
         if not sdp:
             return None
-        elif is_answer:
-            return self.process_incoming_answer(sdp)
+            
+        session = self.sdp_parser.parse(sdp, is_answer)
+        self.leg.session_state.set_party_session(session)
+
+        if is_answer:
+            if len(session) == 1:  # reject
+                self.update_local_media()
+            else:
+                self.add_mgw_affinities(session)
+                self.realize_local_media()
         else:
-            return self.process_incoming_offer(sdp)
+            self.add_mgw_affinities(session)
+        
+        return session
             
     
-    def process_outgoing_offer(self, session):
-        if session["is_answer"]:
-            raise Exception("Offer expected!")
-            
-        self.allocate_local_media(self.session.local_session, session)
-        self.session.set_local_offer(session)
-        sdp = self.sdp_builder.build(session)
-        return sdp
-
-    
-    def process_outgoing_answer(self, session):
-        if not session["is_answer"]:
-            raise Exception("Answer expected!")
-            
-        self.allocate_local_media(self.session.local_session, session)
-        self.session.set_local_answer(session)  # don't care about rejected remote offers
-        self.realize_local_media()
-        sdp = self.sdp_builder.build(session)
-        return sdp
-
-            
     def process_outgoing_session(self, session):
         # Returns the sdp
         
         if not session:
             return None
-        elif session["is_answer"]:
-            return self.process_outgoing_answer(session)
-        else:
-            return self.process_outgoing_offer(session)
+            
+        self.leg.session_state.set_ground_session(session)
+        self.update_local_media()
+
+        if session["is_answer"]:
+            self.realize_local_media()
+
+        sdp = self.sdp_builder.build(session)
+        return sdp
         
 
     def may_finish(self):
-        self.deallocate_local_media(None, self.session.local_session)
+        # TODO: nicer!
+        self.leg.session_state.ground_session = None
+        self.update_local_media()
+        
         Endpoint.may_finish(self)
 
 

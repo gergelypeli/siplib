@@ -5,107 +5,97 @@ class Error(Exception):
 
 class SessionState:
     def __init__(self):
-        self.local_session = None
-        self.remote_session = None
-        self.pending_local_session = None
-        self.pending_remote_session = None
+        self.ground_session = None
+        self.party_session = None
+        self.pending_ground_session = None
+        self.pending_party_session = None
         
         
-    def set_local_offer(self, session):
+    def set_ground_session(self, session):
         if not session:
-            raise Error("No outgoing offer specified!")
-        elif session["is_answer"]:
-            raise Error("Outgoing offer is an answer!")
-        elif self.pending_local_session:
-            raise Error("Outgoing offer already pending!")
-        elif self.pending_remote_session:
-            raise Error("Incoming offer also pending!")
-        else:
-            self.pending_local_session = session
-
-
-    def set_remote_offer(self, session):
-        if not session:
-            raise Error("No incoming offer specified!")
-        elif session["is_answer"]:
-            raise Error("Incoming offer is an answer!")
-        elif self.pending_local_session:
-            raise Error("Outgoing offer also pending!")
-        elif self.pending_remote_session:
-            raise Error("Incoming offer already pending!")
-        else:
-            self.pending_remote_session = session
-            
-            
-    def set_local_answer(self, session):
-        if not session:
-            raise Error("No outgoing answer specified!")
-        elif not self.pending_remote_session:
-            raise Error("Incoming offer not pending!")
+            raise Error("No ground session specified!")
         elif not session["is_answer"]:
-            raise Error("Outgoing answer is an offer!")
-        elif len(session) == 1:  # rejected
-            s = self.pending_remote_session
-            self.pending_remote_session = None
-            return s
-        else:
-            self.remote_session = self.pending_remote_session
-            self.local_session = session
-            self.pending_remote_session = None
+            # Offer
             
-        return None
+            if self.pending_ground_session:
+                raise Error("Ground offer already pending!")
+            elif self.pending_party_session:
+                raise Error("Party offer also pending!")
+            else:
+                self.pending_ground_session = session
+        else:
+            # Answer
+
+            if not self.pending_party_session:
+                raise Error("Party offer not pending!")
+            elif len(session) == 1:  # rejected
+                self.pending_party_session = None
+            else:
+                self.party_session = self.pending_party_session
+                self.ground_session = session
+                self.pending_party_session = None
 
 
-    def set_remote_answer(self, session):
+    def set_party_session(self, session):
         if not session:
-            raise Error("No incoming answer specified!")
-        elif not self.pending_local_session:
-            raise Error("Outgoing offer not pending!")
+            raise Error("No party session specified!")
         elif not session["is_answer"]:
-            raise Error("Incoming answer is an offer!")
-        elif len(session) == 1:  # rejected
-            s = self.pending_local_session
-            self.pending_local_session = None
-            return s
-        else:
-            self.local_session = self.pending_local_session
-            self.remote_session = session
-            self.pending_local_session = None
+            # Offer
             
-        return None
-
-
-    def get_local_offer(self):
-        if self.pending_local_session:
-            return self.pending_local_session
+            if self.pending_ground_session:
+                raise Error("Ground offer also pending!")
+            elif self.pending_party_session:
+                raise Error("Party offer already pending!")
+            else:
+                self.pending_party_session = session
         else:
-            raise Error("Outgoing offer not pending!")
+            # Answer
+            
+            if not self.pending_ground_session:
+                raise Error("Ground offer not pending!")
+            elif len(session) == 1:  # rejected
+                self.pending_ground_session = None
+            else:
+                self.ground_session = self.pending_ground_session
+                self.party_session = session
+                self.pending_ground_session = None
+            
+
+    def get_ground_offer(self):
+        if self.pending_ground_session:
+            return self.pending_ground_session
+        else:
+            raise Error("Ground offer not pending!")
         
         
-    def get_remote_offer(self):
-        if self.pending_remote_session:
-            return self.pending_remote_session
+    def get_party_offer(self):
+        if self.pending_party_session:
+            return self.pending_party_session
         else:
-            raise Error("Incoming offer not pending!")
+            raise Error("Party offer not pending!")
             
             
-    def get_local_answer(self):
-        if self.pending_local_session:
-            raise Error("Outgoing offer is pending!")
-        elif self.pending_remote_session:
-            raise Error("Incoming offer still pending!")
-        elif not self.local_session:
-            raise Error("No local answer yet!")
+    def get_ground_answer(self):
+        if self.pending_ground_session:
+            raise Error("Ground offer is pending!")
+        elif self.pending_party_session:
+            raise Error("Party offer still pending!")
+        elif not self.ground_session:
+            raise Error("No ground answer yet!")
+        elif not self.ground_session["is_answer"]:
+            raise Error("Ground was not the answering one!")
         else:
-            return self.local_session
+            return self.ground_session
 
 
-    def get_remote_answer(self):
-        if self.pending_local_session:
-            raise Error("Outgoing offer still pending!")
-        elif self.pending_remote_session:
-            raise Error("Incoming offer is pending!")
-        elif not self.remote_session:
-            raise Error("No remote answer yet!")
+    def get_party_answer(self):
+        if self.pending_ground_session:
+            raise Error("Ground offer still pending!")
+        elif self.pending_party_session:
+            raise Error("Party offer is pending!")
+        elif not self.party_session:
+            raise Error("No party answer yet!")
+        elif not self.party_session["is_answer"]:
+            raise Error("Party was not the answering one!")
         else:
-            return self.remote_session
+            return self.party_session

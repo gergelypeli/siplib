@@ -2,6 +2,7 @@ from weakref import proxy
 
 from util import Loggable
 from format import SipError, Status
+from session import SessionState
 import zap
 
 
@@ -32,7 +33,7 @@ class Leg(GroundDweller):
         self.number = number
         
         self.media_legs = []
-        #self.finished_slot = zap.Slot()  # TODO: is this better than a direct call?
+        self.session_state = SessionState()
 
 
     def forward(self, action):

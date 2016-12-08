@@ -452,20 +452,3 @@ class SdpParser:
         )
         
         return session
-
-
-# dict(
-#   is_answer=False,
-#   bandwidth=0,
-#   channels=[
-#     dict(
-#       clock=8000,
-#       ptime=20,
-#       send=True,
-#       recv=True,
-#       formats=[
-#         dict(encoding="G729", fmtp="annexb=no", encp=1)
-#       ]
-#     )
-#   ]
-#)
