@@ -4,8 +4,8 @@ from format import Status
 from transport import TransportManager
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
-from leg import Bridge, RecordingBridge
-from leg_sip import SipEndpoint
+from party import Bridge, RecordingBridge
+from party_sip import SipEndpoint
 from ground import Ground
 from authority import Authority
 from registrar import RegistrationManager, RecordManager

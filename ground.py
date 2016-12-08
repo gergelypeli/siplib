@@ -219,3 +219,185 @@ class Ground(Loggable):
 
     def bind_media_leg(self, ml, mgw_sid):
         return self.mgc.bind_media_leg(ml, mgw_sid)
+
+
+
+
+class GroundDweller(Loggable):
+    def __init__(self):
+        Loggable.__init__(self)
+        
+        self.ground = None
+        
+    
+    def set_ground(self, ground):
+        if not ground:
+            raise Exception("No ground!")
+            
+        self.ground = ground
+
+
+
+
+class Error(Exception):
+    pass
+
+
+class SessionState:
+    def __init__(self):
+        self.ground_session = None
+        self.party_session = None
+        self.pending_ground_session = None
+        self.pending_party_session = None
+        
+        
+    def set_ground_session(self, session):
+        if not session:
+            raise Error("No ground session specified!")
+        elif not session["is_answer"]:
+            # Offer
+            
+            if self.pending_ground_session:
+                raise Error("Ground offer already pending!")
+            elif self.pending_party_session:
+                raise Error("Party offer also pending!")
+            else:
+                self.pending_ground_session = session
+        else:
+            # Answer
+
+            if not self.pending_party_session:
+                raise Error("Party offer not pending!")
+            elif "channels" not in session:  # rejected
+                self.pending_party_session = None
+            else:
+                self.party_session = self.pending_party_session
+                self.ground_session = session
+                self.pending_party_session = None
+
+
+    def set_party_session(self, session):
+        if not session:
+            raise Error("No party session specified!")
+        elif not session["is_answer"]:
+            # Offer
+            
+            if self.pending_ground_session:
+                raise Error("Ground offer also pending!")
+            elif self.pending_party_session:
+                raise Error("Party offer already pending!")
+            else:
+                self.pending_party_session = session
+        else:
+            # Answer
+            
+            if not self.pending_ground_session:
+                raise Error("Ground offer not pending!")
+            elif "channels" not in session:  # rejected
+                self.pending_ground_session = None
+            else:
+                self.ground_session = self.pending_ground_session
+                self.party_session = session
+                self.pending_ground_session = None
+            
+
+    def get_ground_offer(self):
+        if self.pending_ground_session:
+            return self.pending_ground_session
+        else:
+            raise Error("Ground offer not pending!")
+        
+        
+    def get_party_offer(self):
+        if self.pending_party_session:
+            return self.pending_party_session
+        else:
+            raise Error("Party offer not pending!")
+            
+            
+    def get_ground_answer(self):
+        if self.pending_ground_session:
+            raise Error("Ground offer is pending!")
+        elif self.pending_party_session:
+            raise Error("Party offer still pending!")
+        elif not self.ground_session:
+            raise Error("No ground answer yet!")
+        elif not self.ground_session["is_answer"]:
+            raise Error("Ground was not the answering one!")
+        else:
+            return self.ground_session
+
+
+    def get_party_answer(self):
+        if self.pending_ground_session:
+            raise Error("Ground offer still pending!")
+        elif self.pending_party_session:
+            raise Error("Party offer is pending!")
+        elif not self.party_session:
+            raise Error("No party answer yet!")
+        elif not self.party_session["is_answer"]:
+            raise Error("Party was not the answering one!")
+        else:
+            return self.party_session
+
+
+        
+        
+class Leg(GroundDweller):
+    def __init__(self, owner, number):
+        GroundDweller.__init__(self)
+
+        self.owner = owner
+        self.number = number
+        
+        self.media_legs = []
+        self.session_state = SessionState()
+
+
+    def forward(self, action):
+        self.ground.forward(self.oid, action)
+        
+        
+    def may_finish(self):
+        for ci in range(len(self.media_legs)):
+            self.set_media_leg(ci, None, None)
+
+        self.logger.debug("Leg is finished.")
+        self.ground.remove_leg(self.oid)
+        #self.finished_slot.zap()
+
+
+    # Technically this method has nothing to do with the Leg, but putting
+    # media related things in Party would be worse.
+    def make_media_leg(self, type):
+        return self.ground.make_media_leg(type)
+        
+
+    def set_media_leg(self, channel_index, media_leg, mgw_sid):
+        if channel_index > len(self.media_legs):
+            raise Exception("Invalid media leg index!")
+        elif channel_index == len(self.media_legs):
+            self.media_legs.append(None)
+            
+        old = self.media_legs[channel_index]
+        
+        if old:
+            self.logger.debug("Deleting media leg %s." % channel_index)
+            self.ground.media_leg_changed(self.oid, channel_index, False)
+            old.delete()
+        
+        self.media_legs[channel_index] = media_leg
+        
+        if media_leg:
+            self.logger.debug("Adding media leg %s." % channel_index)
+            media_leg.set_oid(self.oid.add("channel", channel_index))
+            self.ground.bind_media_leg(media_leg, mgw_sid)
+            self.ground.media_leg_changed(self.oid, channel_index, True)
+        
+
+    def get_media_leg(self, ci):
+        return self.media_legs[ci] if ci < len(self.media_legs) else None
+
+
+    def do(self, action):
+        self.owner.do_slot(self.number, action)

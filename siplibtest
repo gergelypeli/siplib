@@ -7,7 +7,7 @@ import sys
 from weakref import proxy
 
 from format import Addr, Uri, Nameaddr, Status, SipError, Hop
-from leg import PlannedEndpoint, SimpleRouting, PlannedRouting
+from party import PlannedEndpoint, SimpleRouting, PlannedRouting
 from sdp import Sdp
 from authority import Authority
 from registrar import RecordManager

@@ -1,13 +1,17 @@
 from collections import namedtuple
 
 from format import Status
-from leg import Endpoint, Error
+from party import Endpoint
 from sdp import SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES
-from leg_sip_invite import InviteClientState, InviteServerState
+from party_sip_invite import InviteClientState, InviteServerState
 
 
 AllocatedMedia = namedtuple("AllocatedMedia", "mgw_sid local_addr")
 
+
+class Error(Exception):
+    pass
+    
 
 class SipEndpoint(Endpoint):
     DOWN = "DOWN"
@@ -185,7 +189,7 @@ class SipEndpoint(Endpoint):
         self.leg.session_state.set_party_session(session)
 
         if is_answer:
-            if len(session) == 1:  # reject
+            if "channels" not in session:  # reject
                 self.update_local_media()
             else:
                 self.add_mgw_affinities(session)

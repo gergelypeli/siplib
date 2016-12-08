@@ -1,89 +1,8 @@
 from weakref import proxy
 
-from util import Loggable
+from ground import GroundDweller, Leg
 from format import SipError, Status
-from session import SessionState
 import zap
-
-
-class Error(Exception): pass
-
-
-class GroundDweller(Loggable):
-    def __init__(self):
-        Loggable.__init__(self)
-        
-        self.ground = None
-        
-    
-    def set_ground(self, ground):
-        if not ground:
-            raise Exception("No ground!")
-            
-        self.ground = ground
-
-
-        
-        
-class Leg(GroundDweller):
-    def __init__(self, owner, number):
-        GroundDweller.__init__(self)
-
-        self.owner = owner
-        self.number = number
-        
-        self.media_legs = []
-        self.session_state = SessionState()
-
-
-    def forward(self, action):
-        self.ground.forward(self.oid, action)
-        
-        
-    def may_finish(self):
-        for ci in range(len(self.media_legs)):
-            self.set_media_leg(ci, None, None)
-
-        self.logger.debug("Leg is finished.")
-        self.ground.remove_leg(self.oid)
-        #self.finished_slot.zap()
-
-
-    # Technically this method has nothing to do with the Leg, but putting
-    # media related things in Party would be worse.
-    def make_media_leg(self, type):
-        return self.ground.make_media_leg(type)
-        
-
-    def set_media_leg(self, channel_index, media_leg, mgw_sid):
-        if channel_index > len(self.media_legs):
-            raise Exception("Invalid media leg index!")
-        elif channel_index == len(self.media_legs):
-            self.media_legs.append(None)
-            
-        old = self.media_legs[channel_index]
-        
-        if old:
-            self.logger.debug("Deleting media leg %s." % channel_index)
-            self.ground.media_leg_changed(self.oid, channel_index, False)
-            old.delete()
-        
-        self.media_legs[channel_index] = media_leg
-        
-        if media_leg:
-            self.logger.debug("Adding media leg %s." % channel_index)
-            media_leg.set_oid(self.oid.add("channel", channel_index))
-            self.ground.bind_media_leg(media_leg, mgw_sid)
-            self.ground.media_leg_changed(self.oid, channel_index, True)
-        
-
-    def get_media_leg(self, ci):
-        return self.media_legs[ci] if ci < len(self.media_legs) else None
-
-
-    def do(self, action):
-        self.owner.do_slot(self.number, action)
-
 
 
 
@@ -525,7 +444,7 @@ class RecordingBridge(SimpleBridge):
     def do_slot(self, li, action):
         session = action.get("session")
         
-        if session and session["is_answer"] and len(session) > 1:
+        if session and session["is_answer"] and "channels" in session:
             self.hack_media(li, session)
         
         SimpleBridge.do_slot(self, li, action)
