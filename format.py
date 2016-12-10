@@ -316,16 +316,19 @@ class Via(collections.namedtuple("Via", [ "addr", "branch" ])):
 
 
 # TODO: this shouldn't be here
-class Hop(collections.namedtuple("Hop", [ "interface", "local_addr", "remote_addr" ])):
-    def __new__(cls, interface, local_addr, remote_addr):
-        local_addr.assert_resolved()
-        remote_addr.assert_resolved()
+class Hop(collections.namedtuple("Hop", [ "transport", "interface", "local_addr", "remote_addr" ])):
+    def __new__(cls, transport, interface, local_addr, remote_addr):
+        if local_addr:
+            local_addr.assert_resolved()
+            
+        if remote_addr:
+            remote_addr.assert_resolved()
         
-        return super().__new__(cls, interface, local_addr, remote_addr)
+        return super().__new__(cls, transport, interface, local_addr, remote_addr)
         
         
     def __str__(self):
-        return "%s/%s/%s" % (self.interface, self.local_addr, self.remote_addr)
+        return "%s/%s/%s/%s" % (self.transport, self.interface, self.local_addr, self.remote_addr)
 
 
 def parse_digest(parser):

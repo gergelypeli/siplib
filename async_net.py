@@ -194,6 +194,10 @@ class Reconnector(Loggable):
                 self.logger.debug("%s connection attempt to %s failed immediately, %s retry" %
                         (self.type, self.addr, "will" if self.timeout else "won't"))
                 self.socket = None
+                
+                if not self.timeout:
+                    self.connected_slot.zap(None)
+                    
                 return
         else:
             self.logger.debug("%s connect unexpectedly succeeded" % self.type)
@@ -282,7 +286,7 @@ class Message(object):
 
 class Connection(object):
     """
-    Handles sending and receiving HTTP-style messages over as asynchronous socket.
+    Handles sending and receiving HTTP-style messages over an asynchronous socket.
     Reports events to its user as:
         process - called after receiving full messages
         disconnect - called on network errors
@@ -440,4 +444,170 @@ class Connection(object):
             self.outgoing_queue.append(buffer)
         else:
             self.outgoing_buffer = buffer
+            self.write_plug = zap.write_slot(self.socket).plug(self.writable)
+
+
+
+# Copy pasted from Connection not to use Message
+# TODO: make it work without socket, add use_socket method!
+class HttpLikeStream:
+    """
+    Handles sending and receiving HTTP-style messages over an asynchronous socket.
+    Reports events to its user as:
+        process - called after receiving full messages
+        disconnect - called on network errors
+        exhausted - called when the input direction is closed by the peer
+        flushed - called when the output buffer gets empty
+    """
+
+    def __init__(self, socket, keepalive_interval=None):
+        self.socket = socket
+
+        self.outgoing_buffer = b""
+        self.outgoing_queue = []
+        self.incoming_buffer = b""
+        self.incoming_length = 0
+        
+        self.process_slot = zap.EventSlot()
+        self.disconnect_slot = zap.Slot()
+        self.exhausted_slot = zap.Slot()
+        self.flushed_slot = zap.Slot()
+
+        self.read_plug = zap.read_slot(self.socket).plug(self.readable)
+        self.write_plug = zap.write_slot(self.socket).plug(self.writable)
+        
+        if keepalive_interval:
+            self.time_plug = zap.time_slot(keepalive_interval, repeat=True).plug(self.keepalive)
+
+
+    def keepalive(self):
+        if not self.outgoing_buffer:
+            # Send empty lines now and then
+            self.outgoing_buffer = b"\r\n"
+            self.write_plug = zap.write_slot(self.socket).plug(self.writable)
+
+
+    def writable(self):
+        """Called when the socket becomes writable."""
+        if self.outgoing_buffer:
+            try:
+                sent = self.socket.send(self.outgoing_buffer)
+            except IOError as e:
+                self.logger.error("Socket error while sending: %s" % e)
+                self.write_plug.unplug()
+                self.disconnect_slot.zap()
+                return
+
+            self.outgoing_buffer = self.outgoing_buffer[sent:]
+
+        if not self.outgoing_buffer:
+            if self.outgoing_queue:
+                self.outgoing_buffer = self.outgoing_queue.pop(0)
+            else:
+                self.write_plug.unplug()
+                self.flushed_slot.zap()
+
+
+    def check_incoming_message(self):
+        """Check and parse messages from the incoming buffer."""
+        if not self.incoming_length:
+            # No header processed yet, look for the next one
+
+            while self.incoming_buffer.startswith(b"\r\n"):
+                # Found a keepalive empty line, get rid of it
+                self.incoming_buffer = self.incoming_buffer[2:]
+
+            header, separator, rest = self.incoming_buffer.partition(b"\r\n\r\n")
+
+            if separator:
+                # Found a header, find the message length
+                #self.incoming_buffer = rest
+                #self.logger.info("Incoming message with header %r" % header)
+                header = header.lower()
+                CL = b"\r\ncontent-length"
+                i = header.index(CL)
+                
+                if i < 0:
+                    raise Exception("No Content-Length in message!")
+                    
+                start = i + len(CL)
+                
+                while header[start] in b" \t:":
+                    start += 1
+                
+                end = start
+                
+                while header[end].isdigit():
+                    end += 1
+                    
+                content_length = int(header[start:end])
+                self.incoming_length = len(header) + 4 + content_length
+
+        if self.incoming_length:
+            # If have a header, get the body
+
+            if len(self.incoming_buffer) >= self.incoming_length:
+                # Already read the whole body, return the complete message
+
+                message = self.incoming_buffer[:self.incoming_length]
+                self.incoming_buffer = self.incoming_buffer[self.incoming_length:]
+                self.incoming_length = None
+
+                return message
+
+        # No complete message yet
+        return None
+
+
+    def readable(self):
+        """Called when the socket becomes readable."""
+        exhausted = False
+        disconnected = False
+
+        while True:
+            recved = None
+
+            try:
+                recved = self.socket.recv(65536)
+            except socket.error as e:
+                if e.errno == errno.EAGAIN:
+                    break
+
+                self.logger.error("Socket error while receiving: %s" % e)
+                self.read_plug.unplug()
+                disconnected = True
+                break
+
+            if not recved:
+                self.read_plug.unplug()
+                exhausted = True
+                break
+
+            self.incoming_buffer += recved
+
+        # Since the user will get no further notifications if some incoming messages remain
+        # buffered, all available messages must be got. To help the user not to forget this,
+        # we'll return all available messages in a list.
+        while True:
+            msg = self.check_incoming_message()
+
+            if msg:
+                self.process_slot.zap(msg)
+            else:
+                break
+
+        if exhausted:
+            self.exhausted_slot.zap()
+
+        if disconnected:
+            self.disconnect_slot.zap()
+
+
+    def put_message(self, message):
+        """Send a message to the peer."""
+
+        if self.outgoing_buffer:
+            self.outgoing_queue.append(message)
+        else:
+            self.outgoing_buffer = message
             self.write_plug = zap.write_slot(self.socket).plug(self.writable)
