@@ -1,10 +1,12 @@
 import collections
 import socket
+
 from sdp import Sdp
+from async_net import HttpLikeMessage
 
 # TODO: use attributes instead for these
 META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "sdp", "hop", "user_params", "authname" ]
-LIST_HEADER_FIELDS = [ "via", "route", "record_route", "contact" ]
+#LIST_HEADER_FIELDS = [ "via", "route", "record_route", "contact" ]
 
 
 class FormatError(Exception):
@@ -278,9 +280,9 @@ class Rack(collections.namedtuple("Rack", [ "rseq", "cseq", "method" ])):
         return cls(rseq, cseq, method)
 
 
-class Via(collections.namedtuple("Via", [ "addr", "branch" ])):
+class Via(collections.namedtuple("Via", [ "transport", "addr", "branch" ])):
     def print(self):
-        return "SIP/2.0/UDP %s:%d;branch=%s" % (self.addr + (self.branch,))
+        return "SIP/2.0/%s %s;branch=%s" % (self.transport, self.addr, self.branch)
 
 
     @classmethod
@@ -294,7 +296,7 @@ class Via(collections.namedtuple("Via", [ "addr", "branch" ])):
         transport = parser.grab_token()
         parser.grab_whitespace()
         
-        if proto != "SIP" or version != "2.0" or transport != "UDP":
+        if proto != "SIP" or version != "2.0":
             raise Exception("Expected vanilla Via!")
         
         addr = Addr.parse(parser)
@@ -312,7 +314,7 @@ class Via(collections.namedtuple("Via", [ "addr", "branch" ])):
         # FIXME: we can relax this now
         branch = params["branch"]
 
-        return cls(addr, branch)
+        return cls(transport, addr, branch)
 
 
 # TODO: this shouldn't be here
@@ -584,60 +586,9 @@ class Nameaddr(collections.namedtuple("Nameaddr", "uri name params")):
             return Nameaddr(self.uri, self.name, dict(self.params, tag=tag))
 
 
-def print_message(initial_line, headers, body):
-    header_lines = []
-
-    for field, value in headers.items():
-        field = field.replace("_", "-").title()
-
-        if isinstance(value, list):
-            # Some header types cannot be joined into a comma separated list,
-            # such as the authorization ones, since they contain a comma themselves.
-            # So output separate headers always.
-            header_lines.extend(["%s: %s" % (field, v) for v in value])
-        else:
-            header_lines.append("%s: %s" % (field, value))
-
-    lines = [ initial_line ] + header_lines + [ "", body ]
-    return "\r\n".join(lines)
-
-
-def parse_message(msg):
-    lines = msg.split("\r\n")
-    initial_line = lines.pop(0)
-    body = ""
-    headers = { field: [] for field in LIST_HEADER_FIELDS }  # TODO: auth related?
-    last_field = None
-
-    while lines:
-        line = lines.pop(0)
-
-        if not line:
-            body = "\r\n".join(lines)
-            break
-
-        if line.startswith(" "):
-            if not last_field:
-                raise Exception("First header is a continuation!")
-                
-            if isinstance(headers[last_field], list):
-                headers[last_field][-1] += line
-            else:
-                headers[last_field] += line
-        else:
-            field, colon, value = line.partition(":")
-            field = field.strip().replace("-", "_").lower()
-            value = value.strip()
-
-            if field not in headers:
-                headers[field] = value
-            elif isinstance(headers[field], list):
-                headers[field].append(value)
-            else:
-                raise FormatError("Duplicate header received: %s" % field)
-
-    return initial_line, headers, body
-
+class SipMessage(HttpLikeMessage):
+    LIST_HEADER_FIELDS = [ "via", "route", "record_route", "contact" ]
+    
 
 def print_structured_message(params):
     if params["is_response"] is True:
@@ -670,20 +621,24 @@ def print_structured_message(params):
         elif field not in META_HEADER_FIELDS:
             headers[field] = params[field]
 
-    body = ""
+    body = b""
     sdp = params.get("sdp")
     if sdp:
         body = sdp.print()
         headers["content_type"] = "application/sdp"
         headers["content_length"] = len(body)
 
-    return print_message(initial_line, headers, body)
+    message = SipMessage()
+    message.initial_line = initial_line
+    message.headers = headers
+    message.body = body
+    
+    return message
 
 
-def parse_structured_message(msg):
-    initial_line, headers, body = parse_message(msg)
+def parse_structured_message(message):
     p = {}
-    parser = Parser(initial_line)
+    parser = Parser(message.initial_line)
 
     token = parser.grab_token()
     
@@ -722,7 +677,7 @@ def parse_structured_message(msg):
         p["method"] = method
         p["uri"] = uri
 
-    for field, header in headers.items():
+    for field, header in message.headers.items():
         # TODO: refactor a bit!
         if field in ("from", "to"):
             p[field] = Nameaddr.parse(Parser(header))
@@ -767,8 +722,8 @@ def parse_structured_message(msg):
             print("Warning, header field ignored: '%s'!" % field)
 
     sdp = None
-    if body:
-        sdp = Sdp.parse(body)
+    if message.body:
+        sdp = Sdp.parse(message.body)
         
     p["sdp"] = sdp
 

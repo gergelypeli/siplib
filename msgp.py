@@ -588,7 +588,6 @@ class MsgpDispatcher(Loggable):
             h.accept_locally(ok, name)
         elif target == "bello":
             ok = body["ok"]
-            #self.logger.debug("XXX accept remotely: %s" % ok)
             h.accept_remotely(ok)
         else:
             self.logger.error("Invalid handshake hello!")

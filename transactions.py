@@ -157,7 +157,8 @@ class PlainClientTransaction(Transaction):
         if msg.get("via"):
             raise Error("Don't mess with the request Via headers!")
 
-        msg["via"] = [ Via(msg["hop"].local_addr, self.branch) ]
+        hop = msg["hop"]
+        msg["via"] = [ Via(hop.transport, hop.local_addr, self.branch) ]
         super().transmit(msg)
 
 

@@ -265,6 +265,7 @@ class SipEndpoint(Endpoint):
             
                 # These parameters can't go into the user_params, because it
                 # won't be there for future requests, and we should be consistent.
+                self.logger.info("Using hop %s to reach %s." % (hop, uri))
                 self.dialog.setup_outgoing(uri, fr, to, route, hop)
                 self.make_invite(True)
                 

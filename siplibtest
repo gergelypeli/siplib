@@ -43,7 +43,7 @@ SNOM_CRED = ("phone", "38450ead4036feb352c45462d8008511")  # md5(phone:a.switch:
 
 CALLEE_NUMBER = "555"
 
-CALLER_SDP = Sdp.parse("""
+CALLER_SDP = Sdp.parse(b"""
 v=0
 o=jdoe 2890844526 2890842807 IN IP4 10.47.16.5
 s=SDP Seminar
@@ -238,7 +238,7 @@ class TestController(Controller):
 class TestRouting(SimpleRouting):
     def route(self, action):
         ctx = action["ctx"]
-        to_uri = ctx["to"].uri
+        to_uri = ctx["to"].uri._replace(params={})  # TODO: this may be bad
         self.logger.debug("Checking registered SIP contact: %s" % (to_uri,))
         contacts = self.ground.switch.record_manager.lookup_contacts(to_uri)
             
@@ -281,7 +281,10 @@ class TestSwitch(Switch):
     def start(self):
         Switch.start(self)
         
-        hop = Hop("udp", "eth0", self.local_addr, None)
+        hop = Hop("UDP", "eth0", self.local_addr, None)
+        self.transport_manager.add_hop(hop)
+        
+        hop = Hop("TCP", "eth0", self.local_addr, None)
         self.transport_manager.add_hop(hop)
 
 
@@ -312,7 +315,7 @@ class SwitchA(TestSwitch):
         
         # Allow calls from anyone on switch-b as long as they use this hop
         b_uri = Uri(Addr(B_DOMAIN, None), None)
-        hop = Hop('udp', 'eth0', A_ADDR.resolved(), B_ADDR.resolved())
+        hop = Hop('UDP', 'eth0', A_ADDR.resolved(), B_ADDR.resolved())
         self.account_manager.add_account(b_uri, "B", Account.AUTH_BY_HOP, None, None, hops=[ hop ])
         
         # Allow us to register at other places
@@ -327,7 +330,7 @@ class SwitchA(TestSwitch):
         # a random line id.
         snom_uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
         snom_contact = Uri(SNOM_ADDR, SNOM_NUMBER)
-        snom_hop = Hop('udp', 'eth0', A_ADDR.resolved(), SNOM_ADDR.resolved())
+        snom_hop = Hop('UDP', 'eth0', A_ADDR.resolved(), SNOM_ADDR.resolved())
         
         self.record_manager.emulate_registration(snom_uri, snom_contact, 60, snom_hop)
         
@@ -353,7 +356,9 @@ class SwitchB(TestSwitch):
                 self.dial("ringing", action)
                 self.dial("callee", action)
             elif to.uri.user == SNOM_NUMBER:
-                action2 = dict(action, ctx=dict(ctx, uri=Uri(A_ADDR, SNOM_NUMBER)))
+                action2 = deepcopy(action)
+                action2["ctx"]["uri"] = Uri(A_ADDR, SNOM_NUMBER)
+                #action2["ctx"]["uri"] = Uri(A_ADDR, SNOM_NUMBER, params=dict(transport="TCP"))
                 self.dial("sip", action2)
             
             

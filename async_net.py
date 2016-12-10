@@ -447,9 +447,90 @@ class Connection(object):
             self.write_plug = zap.write_slot(self.socket).plug(self.writable)
 
 
+def parse_http_like_header(header, list_header_fields):
+    lines = header.decode().split("\r\n")
+    initial_line = None
+    headers = { field: [] for field in list_header_fields }  # TODO: auth related?
+    last_field = None
+
+    for line in lines:
+        if initial_line is None:
+            initial_line = line
+            continue
+            
+        if line and line[0].isspace():
+            if not last_field:
+                raise Exception("First header is a continuation!")
+                
+            if last_field in list_header_fields:
+                headers[last_field][-1] += line
+            else:
+                headers[last_field] += line
+        else:
+            field, colon, value = line.partition(":")
+            if not colon:
+                raise Exception("Invalid header line: %r" % line)
+                
+            field = field.strip().replace("-", "_").lower()
+            value = value.strip()
+
+            if field not in headers:
+                headers[field] = value
+            elif field in list_header_fields:
+                headers[field].append(value)
+            else:
+                raise Exception("Duplicate header received: %s" % field)
+
+    content_length = headers.get("content_length", "0")
+    
+    try:
+        content_length = int(content_length.strip())
+    except ValueError:
+        raise Exception("Invalid content length received: %s!" % content_length)
+    
+    return initial_line, headers, content_length
+
+
+def print_http_like_header(initial_line, headers, content_length):
+    header_lines = []
+    
+    if content_length:
+        headers["content_length"] = content_length
+    else:
+        headers.pop("content_length", None)
+
+    for field, value in headers.items():
+        field = field.replace("_", "-").title()
+
+        if isinstance(value, list):
+            # Some header types cannot be joined into a comma separated list,
+            # such as the authorization ones, since they contain a comma themselves.
+            # So output separate headers always.
+            header_lines.extend(["%s: %s" % (field, v) for v in value])
+        else:
+            header_lines.append("%s: %s" % (field, value))
+
+    lines = [ initial_line ] + header_lines + [ "", "" ]
+    return "\r\n".join(lines).encode("utf8")
+
+
+class HttpLikeMessage:
+    LIST_HEADER_FIELDS = []
+    
+    def __init__(self, header=None):
+        self.initial_line = None
+        self.headers = None
+        self.body = b""
+        
+        if header is not None:
+            self.initial_line, self.headers, self.body = parse_http_like_header(header, self.LIST_HEADER_FIELDS)
+
+
+    def print(self):
+        return print_http_like_header(self.initial_line, self.headers, len(self.body)) + self.body
+        
 
 # Copy pasted from Connection not to use Message
-# TODO: make it work without socket, add use_socket method!
 class HttpLikeStream:
     """
     Handles sending and receiving HTTP-style messages over an asynchronous socket.
@@ -460,13 +541,14 @@ class HttpLikeStream:
         flushed - called when the output buffer gets empty
     """
 
-    def __init__(self, socket, keepalive_interval=None):
+    def __init__(self, socket, keepalive_interval=None, message_class=HttpLikeMessage):
+        self.message_class = message_class
         self.socket = socket
 
         self.outgoing_buffer = b""
-        self.outgoing_queue = []
+        #self.outgoing_queue = []
         self.incoming_buffer = b""
-        self.incoming_length = 0
+        self.incoming_message = None
         
         self.process_slot = zap.EventSlot()
         self.disconnect_slot = zap.Slot()
@@ -474,7 +556,7 @@ class HttpLikeStream:
         self.flushed_slot = zap.Slot()
 
         self.read_plug = zap.read_slot(self.socket).plug(self.readable)
-        self.write_plug = zap.write_slot(self.socket).plug(self.writable)
+        self.write_plug = None
         
         if keepalive_interval:
             self.time_plug = zap.time_slot(keepalive_interval, repeat=True).plug(self.keepalive)
@@ -501,16 +583,13 @@ class HttpLikeStream:
             self.outgoing_buffer = self.outgoing_buffer[sent:]
 
         if not self.outgoing_buffer:
-            if self.outgoing_queue:
-                self.outgoing_buffer = self.outgoing_queue.pop(0)
-            else:
-                self.write_plug.unplug()
-                self.flushed_slot.zap()
+            self.write_plug.unplug()
+            self.flushed_slot.zap()
 
 
     def check_incoming_message(self):
         """Check and parse messages from the incoming buffer."""
-        if not self.incoming_length:
+        if not self.incoming_message:
             # No header processed yet, look for the next one
 
             while self.incoming_buffer.startswith(b"\r\n"):
@@ -521,37 +600,23 @@ class HttpLikeStream:
 
             if separator:
                 # Found a header, find the message length
-                #self.incoming_buffer = rest
+                self.incoming_buffer = rest
                 #self.logger.info("Incoming message with header %r" % header)
-                header = header.lower()
-                CL = b"\r\ncontent-length"
-                i = header.index(CL)
-                
-                if i < 0:
-                    raise Exception("No Content-Length in message!")
-                    
-                start = i + len(CL)
-                
-                while header[start] in b" \t:":
-                    start += 1
-                
-                end = start
-                
-                while header[end].isdigit():
-                    end += 1
-                    
-                content_length = int(header[start:end])
-                self.incoming_length = len(header) + 4 + content_length
+                self.incoming_message = self.message_class(header)
 
-        if self.incoming_length:
+        if self.incoming_message:
             # If have a header, get the body
+            content_length = self.incoming_message.body
 
-            if len(self.incoming_buffer) >= self.incoming_length:
+            if len(self.incoming_buffer) >= content_length:
                 # Already read the whole body, return the complete message
 
-                message = self.incoming_buffer[:self.incoming_length]
-                self.incoming_buffer = self.incoming_buffer[self.incoming_length:]
-                self.incoming_length = None
+                body = self.incoming_buffer[:content_length]
+                self.incoming_buffer = self.incoming_buffer[content_length:]
+
+                message = self.incoming_message
+                message.body = body
+                self.incoming_message = None
 
                 return message
 
@@ -607,7 +672,8 @@ class HttpLikeStream:
         """Send a message to the peer."""
 
         if self.outgoing_buffer:
-            self.outgoing_queue.append(message)
+            self.logger.warning("Outgoing buffer overflow, dropping message!")
+            self.process_slot.zap(None)
         else:
-            self.outgoing_buffer = message
+            self.outgoing_buffer = message.print()
             self.write_plug = zap.write_slot(self.socket).plug(self.writable)

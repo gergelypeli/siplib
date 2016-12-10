@@ -278,7 +278,7 @@ class Sdp:
             for k, v in c.print():
                 lines.append("%s=%s" % (k, v))
                 
-        return "\n".join(lines) + "\n"
+        return ("\n".join(lines) + "\n").encode("utf8")
         
 
     @classmethod
@@ -288,7 +288,7 @@ class Sdp:
         attributes = []  # one key may appear multiple times, also keep order just in case
         current_channel = None
     
-        for line in s.splitlines():
+        for line in s.decode().splitlines():
             if not line:
                 continue
                 
