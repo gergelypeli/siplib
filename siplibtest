@@ -315,8 +315,9 @@ class SwitchA(TestSwitch):
         
         # Allow calls from anyone on switch-b as long as they use this hop
         b_uri = Uri(Addr(B_DOMAIN, None), None)
-        hop = Hop('UDP', 'eth0', A_ADDR.resolved(), B_ADDR.resolved())
-        self.account_manager.add_account(b_uri, "B", Account.AUTH_BY_HOP, None, None, hops=[ hop ])
+        hop1 = Hop('UDP', 'eth0', A_ADDR.resolved(), B_ADDR.resolved())
+        hop2 = Hop('TCP', 'eth0', A_ADDR.resolved(), B_ADDR._replace(port=None).resolved())
+        self.account_manager.add_account(b_uri, "B", Account.AUTH_BY_HOP, None, None, hops=[ hop1, hop2 ])
         
         # Allow us to register at other places
         self.account_manager.set_our_credentials(*A_CRED)
@@ -357,8 +358,8 @@ class SwitchB(TestSwitch):
                 self.dial("callee", action)
             elif to.uri.user == SNOM_NUMBER:
                 action2 = deepcopy(action)
-                action2["ctx"]["uri"] = Uri(A_ADDR, SNOM_NUMBER)
-                #action2["ctx"]["uri"] = Uri(A_ADDR, SNOM_NUMBER, params=dict(transport="TCP"))
+                #action2["ctx"]["uri"] = Uri(A_ADDR, SNOM_NUMBER)
+                action2["ctx"]["uri"] = Uri(A_ADDR, SNOM_NUMBER, params=dict(transport="TCP"))
                 self.dial("sip", action2)
             
             

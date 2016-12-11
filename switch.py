@@ -173,10 +173,11 @@ class Switch(Loggable):
                 self.logger.debug("Accepting request because account is registered")
                 return False
         elif auth_policy == Account.AUTH_BY_HOP:
-            self.logger.debug("Hop: %r, hops: %r" % (hop, self.account_manager.get_account_hops(from_uri)))
-            hop_unknown = hop not in self.account_manager.get_account_hops(from_uri)
+            allowed_hops = self.account_manager.get_account_hops(from_uri)
+            self.logger.debug("Hop: %s, hops: %s" % (hop, allowed_hops))
+            is_allowed = any(allowed_hop.contains(hop) for allowed_hop in allowed_hops)
             
-            if hop_unknown:
+            if not is_allowed:
                 self.logger.debug("Rejecting request because hop address is not allowed")
                 self.reject_request(params, Status(403, "Forbidden"))
                 return True

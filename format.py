@@ -107,6 +107,17 @@ class Parser:
         return int(number)
 
 
+    def grab_until(self, separator):
+        start = self.pos
+        end = self.text.find(separator, start)
+        
+        if end >= 0:
+            self.pos = end + len(separator)
+            return self.text[start:end]
+        else:
+            return None
+
+
     def can_grab_separator(self, wanted, left_pad=False, right_pad=False):
         pos = self.pos
         
@@ -224,7 +235,20 @@ class Addr(collections.namedtuple("Addr", [ "host", "port" ])):
             socket.inet_aton(self.host)
         except Exception:
             raise Exception("Host address is not numeric!")
-        
+
+
+    def contains(self, other):
+        if not other:
+            return False
+            
+        if self.host and self.host != other.host:
+            return False
+            
+        if self.port and self.port != other.port:
+            return False
+            
+        return True
+
 
 Addr.__new__.__defaults__ = (None,)
 
@@ -332,6 +356,25 @@ class Hop(collections.namedtuple("Hop", [ "transport", "interface", "local_addr"
     def __str__(self):
         return "%s/%s/%s/%s" % (self.transport, self.interface, self.local_addr, self.remote_addr)
 
+
+    def contains(self, other):
+        if not other:
+            return False
+
+        if self.transport and self.transport != other.transport:
+            return False
+            
+        if self.interface and self.interface != other.interface:
+            return False
+            
+        if self.local_addr and not self.local_addr.contains(other.local_addr):
+            return False
+                
+        if self.remote_addr and not self.remote_addr.contains(other.remote_addr):
+            return False
+            
+        return True
+        
 
 def parse_digest(parser):
     token = parser.grab_token()
@@ -490,39 +533,26 @@ class Uri(collections.namedtuple("Uri", "addr user scheme params")):
             scheme = parser.grab_token()
             parser.grab_separator(":")
 
-        # OK, there's no sane way to parse this shit incrementally
-        uric = parser.grab_string(URIC)
-        
         if scheme not in ("sip", "sips"):
+            uric = parser.grab_string(URIC)
             return cls(None, None, scheme, uric)
     
         username = None
         password = None
         
-        if "@" in uric:
-            userinfo, hostport = uric.split("@")
-            
+        userinfo = parser.grab_until("@")
+        
+        if userinfo:
             if ":" in userinfo:
                 username, password = userinfo.split(":")
                 raise Exception("Unexpected password!")  # FIXME
             else:
                 username = userinfo
-        else:
-            hostport = uric
             
-        if hostport.startswith("["):
+        if parser.startswith("["):
             raise Exception("Can't parse IPV6 references yet!")
             
-        if ":" in hostport:
-            host, port = hostport.split(":")
-            try:
-                port = int(port)
-            except Exception:
-                raise Exception("Expected numeric port!")
-        else:
-            host, port = hostport, None
-            
-        addr = Addr(host, port)
+        addr = Addr.parse(parser)
         
         params = parse_semicolon_params(parser) if not bare_scheme else {}
             

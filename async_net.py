@@ -536,7 +536,7 @@ class HttpLikeMessage:
         
 
 # Copy pasted from Connection not to use Message
-class HttpLikeStream:
+class HttpLikeStream(Loggable):
     """
     Handles sending and receiving HTTP-style messages over an asynchronous socket.
     Reports events to its user as:
@@ -547,6 +547,8 @@ class HttpLikeStream:
     """
 
     def __init__(self, socket, keepalive_interval=None, message_class=HttpLikeMessage):
+        Loggable.__init__(self)
+        
         self.socket = socket
         self.message_class = message_class
 
@@ -588,8 +590,13 @@ class HttpLikeStream:
             self.outgoing_buffer = self.outgoing_buffer[sent:]
 
         if not self.outgoing_buffer:
-            self.write_plug.unplug()
+            if self.write_plug:
+                self.write_plug.unplug()
+                
             self.flushed_slot.zap()
+        else:
+            if not self.write_plug:
+                self.write_plug = zap.write_slot(self.socket).plug(self.writable)
 
 
     def check_incoming_message(self):
@@ -681,4 +688,4 @@ class HttpLikeStream:
             self.process_slot.zap(None)
         else:
             self.outgoing_buffer = message.print()
-            self.write_plug = zap.write_slot(self.socket).plug(self.writable)
+            self.writable()

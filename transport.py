@@ -67,6 +67,12 @@ class TcpTransport(Transport):
         socket.setblocking(False)
         self.http_like_stream = HttpLikeStream(socket, message_class=SipMessage)
         self.http_like_stream.process_slot.plug(self.process)
+
+
+    def set_oid(self, oid):
+        Transport.set_oid(self, oid)
+        
+        self.http_like_stream.set_oid(self.oid.add("hls"))
         
         
     def send(self, message, raddr):
