@@ -492,7 +492,7 @@ def parse_http_like_header(header, list_header_fields):
 
 
 def print_http_like_header(initial_line, headers, content_length):
-    header_lines = []
+    lines = [ initial_line ]
     
     if content_length:
         headers["content_length"] = content_length
@@ -506,28 +506,33 @@ def print_http_like_header(initial_line, headers, content_length):
             # Some header types cannot be joined into a comma separated list,
             # such as the authorization ones, since they contain a comma themselves.
             # So output separate headers always.
-            header_lines.extend(["%s: %s" % (field, v) for v in value])
+            lines.extend(["%s: %s" % (field, v) for v in value])
         else:
-            header_lines.append("%s: %s" % (field, value))
+            lines.append("%s: %s" % (field, value))
 
-    lines = [ initial_line ] + header_lines + [ "", "" ]
+    lines.append("")
+    lines.append("")
+    
     return "\r\n".join(lines).encode("utf8")
 
 
 class HttpLikeMessage:
     LIST_HEADER_FIELDS = []
     
-    def __init__(self, header=None):
-        self.initial_line = None
-        self.headers = None
-        self.body = b""
+    def __init__(self, initial_line=None, headers=None, body=None):
+        self.initial_line = initial_line
+        self.headers = headers
+        self.body = body
         
-        if header is not None:
-            self.initial_line, self.headers, self.body = parse_http_like_header(header, self.LIST_HEADER_FIELDS)
+        
+    @classmethod
+    def parse(cls, header):
+        i, h, b = parse_http_like_header(header, cls.LIST_HEADER_FIELDS)
+        return cls(i, h, b)
 
 
     def print(self):
-        return print_http_like_header(self.initial_line, self.headers, len(self.body)) + self.body
+        return print_http_like_header(self.initial_line, self.headers, len(self.body)) + (self.body or b"")
         
 
 # Copy pasted from Connection not to use Message
@@ -542,8 +547,8 @@ class HttpLikeStream:
     """
 
     def __init__(self, socket, keepalive_interval=None, message_class=HttpLikeMessage):
-        self.message_class = message_class
         self.socket = socket
+        self.message_class = message_class
 
         self.outgoing_buffer = b""
         #self.outgoing_queue = []
@@ -602,7 +607,7 @@ class HttpLikeStream:
                 # Found a header, find the message length
                 self.incoming_buffer = rest
                 #self.logger.info("Incoming message with header %r" % header)
-                self.incoming_message = self.message_class(header)
+                self.incoming_message = self.message_class.parse(header)
 
         if self.incoming_message:
             # If have a header, get the body

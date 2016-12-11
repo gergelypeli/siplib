@@ -628,12 +628,7 @@ def print_structured_message(params):
         headers["content_type"] = "application/sdp"
         headers["content_length"] = len(body)
 
-    message = SipMessage()
-    message.initial_line = initial_line
-    message.headers = headers
-    message.body = body
-    
-    return message
+    return SipMessage(initial_line, headers, body)
 
 
 def parse_structured_message(message):

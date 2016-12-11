@@ -54,7 +54,7 @@ class UdpTransport(Transport):
         packet, raddr = self.socket.recvfrom(65535)
         
         header, separator, rest = packet.partition(b"\r\n\r\n")
-        message = SipMessage(header)
+        message = SipMessage.parse(header)
         message.body = rest[:message.body]
 
         self.recved_slot.zap(message, Addr(*raddr))
