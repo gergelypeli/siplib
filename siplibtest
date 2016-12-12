@@ -269,7 +269,6 @@ class TestSwitch(Switch):
         record_manager = TestRecordManager(proxy(self))
         authority = TestAuthority()
         mgc = TestController(media_ports)
-        mgc.add_mgw_addr(mgw_addr)
 
         Switch.__init__(
             self,
@@ -278,10 +277,13 @@ class TestSwitch(Switch):
         )
         
         self.local_addr = local_addr
+        self.mgw_addr = mgw_addr
 
 
     def start(self):
-        Switch.start(self)
+        #Switch.start(self)
+
+        self.mgc.add_mgw_addr(self.mgw_addr)
         
         hop = Hop("UDP", "eth0", self.local_addr, None)
         self.transport_manager.add_hop(hop)
@@ -416,7 +418,6 @@ def main():
     mgw = MediaGateway(MGW_ADDR.resolved())
     mgw.set_oid(Oid("mgw"))
     mgw.set_name(Oid("the-mgw"))
-    mgw.start()
 
     switch_a = SwitchA(A_ADDR.resolved(), MGW_ADDR.resolved(), range(30000, 30020, 2))
     switch_a.set_oid(Oid().add("switch", "a"))

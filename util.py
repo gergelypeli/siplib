@@ -65,13 +65,14 @@ class Loggable(object):
     # be a problem.
     
     def __init__(self):
-        self.logger = None
         self.oid = None
+        self.logger_dict = dict(oid="rogue,%s" % self.__class__)
+        self.logger = logging.LoggerAdapter(logging.getLogger(), self.logger_dict)
         
         
     def set_oid(self, oid):
-        self.logger = logging.LoggerAdapter(logging.getLogger(), dict(oid=oid))
         self.oid = oid
+        self.logger_dict["oid"] = oid
 
 
 def setup_logging():

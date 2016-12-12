@@ -98,14 +98,6 @@ class TransportManager(Loggable):
         self.process_slot = zap.EventSlot()
         
         
-    #def set_oid(self, oid):
-    #    Loggable.set_oid(self, oid)
-        
-    #    # FIXME: oid should be set first!
-    #    for hop, transport in self.transports_by_hop.items():
-    #        transport.set_oid(self.oid.add("hop", str(hop)))
-
-
     def add_transport(self, hop, transport):
         transport.set_oid(self.oid.add("hop", str(hop)))
         transport.recved_slot.plug(self.process_message, hop=hop)

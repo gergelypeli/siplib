@@ -32,6 +32,8 @@ class Error(Exception):
 
 class InviteState(Loggable):
     def __init__(self):
+        Loggable.__init__(self)
+        
         self.message_slot = zap.EventSlot()
         
         self.state = START

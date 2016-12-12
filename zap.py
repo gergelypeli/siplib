@@ -136,6 +136,8 @@ class KernelSlot(Slot):
 
 class Kernel(Loggable):
     def __init__(self):
+        Loggable.__init__(self)
+        
         self.poll = select.poll()
         self.registered_keys = set()
         self.slots_by_key = {}

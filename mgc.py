@@ -196,10 +196,6 @@ class Controller(Loggable):
         self.msgp.set_name(name)
 
 
-    def start(self):
-        self.msgp.start()
-        
-
     def add_mgw_addr(self, addr):
         addr.assert_resolved()
         self.msgp.add_remote_addr(addr)

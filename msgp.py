@@ -376,6 +376,8 @@ class MsgpStream(Loggable):
     class Item(types.SimpleNamespace): pass
     
     def __init__(self):
+        Loggable.__init__(self)
+        
         self.request_slot = zap.EventSlot()
         self.response_slot = zap.EventSlot()
         self.error_slot = zap.Slot()
@@ -699,24 +701,17 @@ class MsgpPeer(MsgpDispatcher):
         if self.listener:
             self.listener.set_oid(self.oid.add("listener"))
 
-        for addr, reconnector in self.reconnectors_by_addr.items():
-            reconnector.set_oid(self.oid.add("reconnector", str(addr)))
-
 
     def set_name(self, name):
         self.name = name
 
 
-    def start(self):
-        for reconnector in self.reconnectors_by_addr.values():
-            reconnector.start()
-            
-
     def add_remote_addr(self, remote_addr):
         reconnector = TcpReconnector(remote_addr, datetime.timedelta(seconds=1))
+        reconnector.set_oid(self.oid.add("reconnector", str(remote_addr)))
         reconnector.connected_slot.plug(self.connected)
-        #reconnector.start()
         self.reconnectors_by_addr[remote_addr] = reconnector
+        reconnector.start()
         
         
     def accepted(self, socket, id):

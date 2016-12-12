@@ -11,10 +11,6 @@ BYTES_PER_SAMPLE = 2
 
 
 class Base(Loggable):
-    def __init__(self):
-        pass
-        
-        
     def msecs(self, ticks, clock):
         return ticks * 1000 // clock
         

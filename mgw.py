@@ -10,13 +10,12 @@ class Error(Exception): pass
 
 
 class Thing(Loggable):
-    def __init__(self, oid, label, owner_sid):
+    def __init__(self, label, owner_sid):
         Loggable.__init__(self)
 
         self.label = label
         self.owner_sid = owner_sid
         self.mgw = None
-        self.set_oid(oid)
         
         
     def set_mgw(self, mgw):
@@ -37,8 +36,8 @@ class Thing(Loggable):
 
     
 class Leg(Thing):
-    def __init__(self, oid, label, owner_sid, type):
-        super().__init__(oid, label, owner_sid)
+    def __init__(self, label, owner_sid, type):
+        super().__init__(label, owner_sid)
         
         self.type = type
         self.forward_slot = zap.EventSlot()
@@ -64,8 +63,8 @@ class PassLeg(Leg):
     pass_legs_by_label = WeakValueDictionary()
     
     
-    def __init__(self, oid, label, owner_sid):
-        super().__init__(oid, label, owner_sid, "pass")
+    def __init__(self, label, owner_sid):
+        super().__init__(label, owner_sid, "pass")
         
         self.other_label = None
         self.filename = None
@@ -140,8 +139,8 @@ class PassLeg(Leg):
         
 
 class NetLeg(Leg):
-    def __init__(self, oid, label, owner_sid):
-        super().__init__(oid, label, owner_sid, "net")
+    def __init__(self, label, owner_sid):
+        Leg.__init__(self, label, owner_sid, "net")
         
         self.local_addr = None
         self.remote_addr = None
@@ -150,14 +149,19 @@ class NetLeg(Leg):
         self.rtp_builder = RtpBuilder()
         self.dtmf_extractor = DtmfExtractor()
         self.dtmf_detected_plug = self.dtmf_extractor.dtmf_detected_slot.plug(self.dtmf_detected)
-        self.dtmf_extractor.set_oid(self.oid.add("dtmf-ex"))
         self.dtmf_injector = DtmfInjector()
-        self.dtmf_injector.set_oid(self.oid.add("dtmf-in"))
         self.recved_plug = None
         
         
+    def set_oid(self, oid):
+        Leg.set_oid(self, oid)
+        
+        self.dtmf_extractor.set_oid(self.oid.add("dtmf-ex"))
+        self.dtmf_injector.set_oid(self.oid.add("dtmf-in"))
+        
+        
     def modify(self, params):
-        super().modify(params)
+        Leg.modify(self, params)
 
         #print("Setting leg: %s" % (params,))
         
@@ -258,8 +262,8 @@ class NetLeg(Leg):
         
 
 class EchoLeg(Leg):
-    def __init__(self, oid, label, owner_sid):
-        super().__init__(oid, label, owner_sid, "echo")
+    def __init__(self, label, owner_sid):
+        Leg.__init__(self, label, owner_sid, "echo")
         
         self.buffer = []
 
@@ -275,8 +279,8 @@ class EchoLeg(Leg):
 
 
 class PlayerLeg(Leg):
-    def __init__(self, oid, label, owner_sid):
-        super().__init__(oid, label, owner_sid, "player")
+    def __init__(self, label, owner_sid):
+        super().__init__(label, owner_sid, "player")
         
         self.rtp_player = None
         self.format = None
@@ -285,7 +289,7 @@ class PlayerLeg(Leg):
 
     def modify(self, params):
         self.logger.debug("Player leg modified: %s" % params)
-        super().modify(params)
+        Leg.modify(self, params)
 
         # This is temporary, don't remember it across calls
         fade = 0
@@ -314,8 +318,8 @@ class PlayerLeg(Leg):
 
 
 class Context(Thing):
-    def __init__(self, oid, label, owner_sid, manager):
-        super().__init__(oid, label, owner_sid)
+    def __init__(self, label, owner_sid, manager):
+        super().__init__(label, owner_sid)
 
         self.manager = manager
         self.legs = []
@@ -373,10 +377,6 @@ class MediaGateway(Loggable):
         self.msgp.set_name(name)
         
         
-    def start(self):
-        self.msgp.start()
-        
-    
     def get_leg(self, label):
         return self.legs_by_label[label]
 
@@ -424,11 +424,11 @@ class MediaGateway(Loggable):
 
     def create_context(self, label, owner_sid, type):
         if type == "proxy":
-            oid = self.oid.add("context").add(label)
-            context = Context(oid, label, owner_sid, proxy(self))
+            context = Context(label, owner_sid, proxy(self))
         else:
             raise Error("Invalid context type %s!" % type)
             
+        context.set_oid(self.oid.add("context").add(label))
         return self.add_thing(self.contexts_by_label, context)
 
 
@@ -447,19 +447,18 @@ class MediaGateway(Loggable):
     # Legs
 
     def create_leg(self, label, owner_sid, type):
-        oid = self.oid.add("leg").add(label)
-        
         if type == "pass":
-            leg = PassLeg(oid, label, owner_sid)
+            leg = PassLeg(label, owner_sid)
         elif type == "net":
-            leg = NetLeg(oid, label, owner_sid)
+            leg = NetLeg(label, owner_sid)
         elif type == "echo":
-            leg = EchoLeg(oid, label, owner_sid)
+            leg = EchoLeg(label, owner_sid)
         elif type == "player":
-            leg = PlayerLeg(oid, label, owner_sid)
+            leg = PlayerLeg(label, owner_sid)
         else:
             raise Error("Invalid leg type '%s'!" % type)
 
+        leg.set_oid(self.oid.add("leg").add(label))
         return self.add_thing(self.legs_by_label, leg)
         
         

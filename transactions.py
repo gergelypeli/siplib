@@ -69,7 +69,7 @@ def generate_branch():
     return BRANCH_MAGIC + uuid.uuid4().hex[:8]
 
     
-class Transaction(object):
+class Transaction:
     WAITING = "WAITING"
     PROVISIONING = "PROVISIONING"
     TRANSMITTING = "TRANSMITTING"

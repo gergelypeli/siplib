@@ -67,12 +67,6 @@ class Switch(Loggable):
         self.ground.set_oid(oid.add("ground"))
 
 
-    def start(self):
-        # Just to delay some operations after oid-s are set
-        
-        self.mgc.start()
-        
-
     def set_name(self, name):
         self.mgc.set_name(name)
         

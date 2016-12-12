@@ -5,6 +5,8 @@ from util import Loggable
 
 class Ground(Loggable):
     def __init__(self, switch, mgc):
+        Loggable.__init__(self)
+
         self.switch = switch
         self.mgc = mgc
         
