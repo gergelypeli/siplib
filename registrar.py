@@ -32,7 +32,7 @@ def generate_tag():
     return uuid.uuid4().hex[:8]
 
 
-RecordContact = collections.namedtuple("RecordContact", [ "expiration", "hop" ])
+RecordContact = collections.namedtuple("RecordContact", [ "uri", "hop", "expiration" ])
 
 
 class Record(object):
@@ -43,24 +43,17 @@ class Record(object):
         self.call_id = None
         self.cseq = None
         
-        self.contacts_by_uri = {}
+        self.contacts = []
 
 
-    def add_contact(self, uri, expiration, hop):
-        self.contacts_by_uri[uri] = RecordContact(expiration, hop)
-        self.record_manager.logger.debug("Registered %s to %s via %s until %s." % (uri, self.record_uri, hop, expiration))
+    def add_contact(self, uri, hop, expiration):
+        self.contacts = [ contact for contact in self.contacts if contact.uri != uri ]
+        self.contacts.append(RecordContact(uri, hop, expiration))
+        self.record_manager.logger.debug("Registered %s from %s via %s until %s." % (self.record_uri, uri, hop, expiration))
         
-
-    def get_contact_uris(self):
-        return list(self.contacts_by_uri.keys())
-        
-
-    def get_contact_hops(self):
-        return [ c.hop for c in self.contacts_by_uri.values() ]
-
 
     def get_contacts(self):
-        return [ (k, v.hop) for k, v in self.contacts_by_uri.items() ]
+        return self.contacts
 
 
     def process_updates(self, params):
@@ -76,14 +69,14 @@ class Record(object):
             expiration = now + datetime.timedelta(seconds=seconds_left)
             hop = params["hop"]
             
-            self.add_contact(uri, expiration, hop)
+            self.add_contact(uri, hop, expiration)
         
-        contact = []
-        for uri, c in self.contacts_by_uri.items():
-            seconds_left = int((c.expiration - now).total_seconds())
-            contact.append(Nameaddr(uri=uri, params=dict(expires=seconds_left)))
+        fetch = []
+        for contact in self.contacts:
+            seconds_left = int((contact.expiration - now).total_seconds())
+            fetch.append(Nameaddr(uri=contact.uri, params=dict(expires=seconds_left)))
 
-        self.send_response(dict(status=Status(200, "OK"), contact=contact), params)
+        self.send_response(dict(status=Status(200, "OK"), contact=fetch), params)
 
 
     def take_request(self, params):
@@ -153,18 +146,27 @@ class RecordManager(Loggable):
             self.records_by_uri[record_uri] = record
             
         return record
+
+
+    def canonicalize_uri(self, uri):
+        return uri._replace(params={})
+                
+        
+    def may_register(self, registering_uri, record_uri):
+        # Third party registrations not supported yet
+        # We'd need to know which account is allowed to register which
+        
+        return registering_uri == record_uri
         
         
     def process_request(self, params):
         if params["method"] != "REGISTER":
             raise Error("RecordManager has nothing to do with this request!")
         
-        registering_uri = params["from"].uri
-        record_uri = params["to"].uri
+        registering_uri = self.canonicalize_uri(params["from"].uri)
+        record_uri = self.canonicalize_uri(params["to"].uri)
         
-        if registering_uri != record_uri:
-            # Third party registrations not supported yet
-            # We'd need to know which account is allowed to register which
+        if not self.may_register(registering_uri, record_uri):
             self.reject_request(params, Status(403, "Forbidden"))
             return
         
@@ -181,40 +183,20 @@ class RecordManager(Loggable):
 
 
     def emulate_registration(self, record_uri, contact_uri, seconds, hop):
+        record_uri = self.canonicalize_uri(record_uri)
         expiration = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
         self.add_record(record_uri).add_contact(contact_uri, expiration, hop)
         
 
-    def lookup_contact_uris(self, record_uri):
-        record = self.records_by_uri.get(record_uri)
-        
-        if record:
-            self.logger.debug("Found contact URIs for '%s'" % (record_uri,))
-            return record.get_contact_uris()
-        else:
-            #self.logger.debug("Not found contact URIs: %s" % (record_uri,))
-            return []
-
-
-    def lookup_contact_hops(self, record_uri):
-        record = self.records_by_uri.get(record_uri)
-        
-        if record:
-            self.logger.debug("Found contact hops for '%s'" % (record_uri,))
-            return record.get_contact_hops()
-        else:
-            #self.logger.debug("Not found contact hops: %s" % (record_uri,))
-            return []
-
-
     def lookup_contacts(self, record_uri):
+        record_uri = self.canonicalize_uri(record_uri)
         record = self.records_by_uri.get(record_uri)
         
         if record:
             self.logger.debug("Found contacts for '%s'" % (record_uri,))
             return record.get_contacts()
         else:
-            #self.logger.debug("Not found contact hops: %s" % (record_uri,))
+            self.logger.debug("Not found contacts for: %s" % (record_uri,))
             return []
 
 

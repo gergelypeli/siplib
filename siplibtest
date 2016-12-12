@@ -240,16 +240,16 @@ class TestController(Controller):
 class TestRouting(SimpleRouting):
     def route(self, action):
         ctx = action["ctx"]
-        to_uri = ctx["to"].uri._replace(params={})  # TODO: this may be bad
+        to_uri = ctx["to"].uri
         self.logger.debug("Checking registered SIP contact: %s" % (to_uri,))
         contacts = self.ground.switch.record_manager.lookup_contacts(to_uri)
             
         if len(contacts) == 1:
-            uri, hop = contacts[0]
+            contact = contacts[0]
             
             out_ctx = {
-                'uri': uri,  # Only update the RURI for dialing out
-                'hop': hop,
+                'uri': contact.uri,  # Only update the RURI for dialing out
+                'hop': contact.hop,
                 'from': ctx["from"],
                 'to': ctx["to"]
             }
@@ -257,7 +257,7 @@ class TestRouting(SimpleRouting):
             out_action = dict(action, ctx=out_ctx)
             self.dial("sip", out_action)
         else:
-            self.logger.debug("Has %d registered SIP contacts: %s" % (len(contacts), to_uri,))
+            self.logger.debug("Has %d registered SIP contacts: %s" % (len(contacts), to_uri))
             raise SipError(Status(404))
 
 

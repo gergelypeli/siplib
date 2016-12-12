@@ -159,15 +159,20 @@ class Switch(Loggable):
         elif auth_policy == Account.AUTH_ALWAYS:
             self.logger.debug("Authenticating request because account always needs it")
         elif auth_policy == Account.AUTH_IF_UNREGISTERED:
-            hop_unknown = hop not in self.record_manager.lookup_contact_hops(from_uri)
+            contacts = self.record_manager.lookup_contacts(from_uri)
+            allowed_hops = [ contact.hop for contact in contacts ]
+
+            self.logger.debug("Hop: %s, hops: %s" % (hop, allowed_hops))
+            is_allowed = any(allowed_hop.contains(hop) for allowed_hop in allowed_hops)
             
-            if hop_unknown:
+            if not is_allowed:
                 self.logger.debug("Authenticating request because account is not registered")
             else:
                 self.logger.debug("Accepting request because account is registered")
                 return False
         elif auth_policy == Account.AUTH_BY_HOP:
             allowed_hops = self.account_manager.get_account_hops(from_uri)
+
             self.logger.debug("Hop: %s, hops: %s" % (hop, allowed_hops))
             is_allowed = any(allowed_hop.contains(hop) for allowed_hop in allowed_hops)
             
