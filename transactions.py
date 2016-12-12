@@ -159,7 +159,7 @@ class PlainClientTransaction(Transaction):
 
         hop = msg["hop"]
         msg["via"] = [ Via(hop.transport, hop.local_addr, self.branch) ]
-        super().transmit(msg)
+        Transaction.transmit(self, msg)
 
 
     def send(self, request):
@@ -184,7 +184,7 @@ class PlainClientTransaction(Transaction):
 
 class PlainServerTransaction(Transaction):
     def __init__(self, manager, branch):
-        super().__init__(manager, branch)
+        Transaction.__init__(self, manager, branch)
         
         self.incoming_via = None
         
@@ -194,7 +194,7 @@ class PlainServerTransaction(Transaction):
             raise Error("Don't mess with the response Via headers!")
             
         msg["via"] = self.incoming_via
-        super().transmit(msg)
+        Transaction.transmit(self, msg)
 
 
     def process(self, request):
@@ -230,7 +230,7 @@ class Bastard(object):
 
 class InviteClientTransaction(PlainClientTransaction):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        PlainClientTransaction.__init__(self, *args, **kwargs)
 
         # Oh my god! They let an INVITE create multiple dialogs! You bastards!
         self.bastards = {}

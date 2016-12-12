@@ -37,7 +37,7 @@ class Thing(Loggable):
     
 class Leg(Thing):
     def __init__(self, label, owner_sid, type):
-        super().__init__(label, owner_sid)
+        Thing.__init__(self, label, owner_sid)
         
         self.type = type
         self.forward_slot = zap.EventSlot()
@@ -64,7 +64,7 @@ class PassLeg(Leg):
     
     
     def __init__(self, label, owner_sid):
-        super().__init__(label, owner_sid, "pass")
+        Leg.__init__(self, label, owner_sid, "pass")
         
         self.other_label = None
         self.filename = None
@@ -93,7 +93,7 @@ class PassLeg(Leg):
 
 
     def modify(self, params):
-        super().modify(params)
+        Leg.modify(self, params)
         
         if "other" in params:
             self.other_label = params["other"]
@@ -280,7 +280,7 @@ class EchoLeg(Leg):
 
 class PlayerLeg(Leg):
     def __init__(self, label, owner_sid):
-        super().__init__(label, owner_sid, "player")
+        Leg.__init__(self, label, owner_sid, "player")
         
         self.rtp_player = None
         self.format = None
@@ -319,7 +319,7 @@ class PlayerLeg(Leg):
 
 class Context(Thing):
     def __init__(self, label, owner_sid, manager):
-        super().__init__(label, owner_sid)
+        Thing.__init__(self, label, owner_sid)
 
         self.manager = manager
         self.legs = []

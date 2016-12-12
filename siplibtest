@@ -222,7 +222,7 @@ class TestAuthority(Authority):
 
 class TestController(Controller):
     def __init__(self, ports):
-        super().__init__()
+        Controller.__init__(self)
         
         # Must use IP4 addresses or FQDN in SDP, so let's go with IP4
         # Media host may be different from the signaling host
@@ -307,7 +307,7 @@ class TestSwitch(Switch):
 
 class SwitchA(TestSwitch):
     def __init__(self, *args):
-        super().__init__(*args)
+        TestSwitch.__init__(self, *args)
         
         # CALLEE lives on switch-b, but registers here to take calls from here
         callee_uri = Uri(Addr(A_DOMAIN, None), CALLEE_NUMBER)
@@ -368,7 +368,7 @@ class SwitchB(TestSwitch):
             
             
     def __init__(self, *args):
-        super().__init__(*args)
+        TestSwitch.__init__(self, *args)
         
         phone_uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
         

@@ -75,7 +75,7 @@ class MediaLeg(MediaThing):
 
 class PassMediaLeg(MediaLeg):
     def __init__(self):
-        super().__init__("pass")
+        MediaLeg.__init__(self, "pass")
         
         self.other = None
         
@@ -90,12 +90,12 @@ class PassMediaLeg(MediaLeg):
 
 class EchoMediaLeg(MediaLeg):
     def __init__(self):
-        super().__init__("echo")
+        MediaLeg.__init__(self, "echo")
 
 
 class PlayerMediaLeg(MediaLeg):
     def __init__(self):
-        super().__init__("player")
+        MediaLeg.__init__(self, "player")
         
 
     def play(self, filename=None, format=None, volume=1, fade=0):  # TODO: rename to refresh?
@@ -111,7 +111,7 @@ class PlayerMediaLeg(MediaLeg):
 
 class NetMediaLeg(MediaLeg):
     def __init__(self):
-        super().__init__("net")
+        MediaLeg.__init__(self, "net")
 
         self.event_slot = zap.EventSlot()
         self.committed = {}

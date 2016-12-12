@@ -1,4 +1,4 @@
-import collections
+from collections import namedtuple, OrderedDict
 import socket
 
 from sdp import Sdp
@@ -206,7 +206,7 @@ class Parser:
         return word
         
 
-class Addr(collections.namedtuple("Addr", [ "host", "port" ])):
+class Addr(namedtuple("Addr", [ "host", "port" ])):
     def __str__(self):
         return self.print()
         
@@ -253,7 +253,7 @@ class Addr(collections.namedtuple("Addr", [ "host", "port" ])):
 Addr.__new__.__defaults__ = (None,)
 
 
-class Status(collections.namedtuple("Status", [ "code", "reason" ])):
+class Status(namedtuple("Status", [ "code", "reason" ])):
     REASONS_BY_CODE = {
         100: "Trying",
         180: "Ringing",
@@ -286,7 +286,7 @@ class Status(collections.namedtuple("Status", [ "code", "reason" ])):
         return super().__new__(cls, code, reason)
 
 
-class Rack(collections.namedtuple("Rack", [ "rseq", "cseq", "method" ])):
+class Rack(namedtuple("Rack", [ "rseq", "cseq", "method" ])):
     def print(self):
         return "%d %d %s" % (self.rseq, self.cseq, self.method)
         
@@ -304,7 +304,7 @@ class Rack(collections.namedtuple("Rack", [ "rseq", "cseq", "method" ])):
         return cls(rseq, cseq, method)
 
 
-class Via(collections.namedtuple("Via", [ "transport", "addr", "branch" ])):
+class Via(namedtuple("Via", [ "transport", "addr", "branch" ])):
     def print(self):
         return "SIP/2.0/%s %s;branch=%s" % (self.transport, self.addr, self.branch)
 
@@ -342,7 +342,7 @@ class Via(collections.namedtuple("Via", [ "transport", "addr", "branch" ])):
 
 
 # TODO: this shouldn't be here
-class Hop(collections.namedtuple("Hop", [ "transport", "interface", "local_addr", "remote_addr" ])):
+class Hop(namedtuple("Hop", [ "transport", "interface", "local_addr", "remote_addr" ])):
     def __new__(cls, transport, interface, local_addr, remote_addr):
         if local_addr:
             local_addr.assert_resolved()
@@ -395,7 +395,7 @@ def parse_digest(parser):
     return params
     
 
-class WwwAuth(collections.namedtuple("WwwAuth",
+class WwwAuth(namedtuple("WwwAuth",
     [ "realm", "nonce", "domain", "opaque", "algorithm", "stale", "qop" ]
 )):
     def __new__(cls, realm, nonce, domain=None, opaque=None, algorithm=None, stale=None, qop=None):
@@ -429,7 +429,7 @@ class WwwAuth(collections.namedtuple("WwwAuth",
         return cls(**params)
         
     
-class Auth(collections.namedtuple("Auth",
+class Auth(namedtuple("Auth",
     [ "realm", "nonce", "username", "uri", "response", "opaque", "algorithm", "qop", "cnonce", "nc" ]
 )):
     def __new__(cls, realm, nonce, username, uri, response, opaque=None, algorithm=None, qop=None, cnonce=None, nc=None):
@@ -466,7 +466,7 @@ class Auth(collections.namedtuple("Auth",
 
 
 def parse_parts(parts):
-    params = collections.OrderedDict()
+    params = OrderedDict()
 
     for part in parts:
         if "=" in part:
@@ -498,7 +498,7 @@ def parse_semicolon_params(parser):
     return params
     
 
-class Uri(collections.namedtuple("Uri", "addr user scheme params")):
+class Uri(namedtuple("Uri", "addr user scheme params")):
     def __new__(cls, addr, user=None, scheme=None, params=None):
         return super().__new__(cls, addr, user, scheme or "sip", params or {})
 
@@ -559,7 +559,7 @@ class Uri(collections.namedtuple("Uri", "addr user scheme params")):
         return cls(addr, username, scheme, params)
 
 
-class Nameaddr(collections.namedtuple("Nameaddr", "uri name params")):
+class Nameaddr(namedtuple("Nameaddr", "uri name params")):
     def __new__(cls, uri, name=None, params=None):
         return super().__new__(cls, uri, name, params or {})
 
@@ -629,7 +629,7 @@ def print_structured_message(params):
     else:
         raise FormatError("Invalid structured message!")
 
-    headers = collections.OrderedDict()
+    headers = OrderedDict()
     mandatory_fields = ["from", "to", "call_id", "cseq", "via"]  # order these nicely
     other_fields = [f for f in params if f not in mandatory_fields]
 
