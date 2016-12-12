@@ -179,6 +179,8 @@ class CallerEndpoint(TestEndpoint):
         address = yield from resolver.wait_resolve("index.hu")
         self.logger.debug("Resolved index.hu asynchronously to: %s" % address)
         
+        yield from self.wait_input("Press any key to dial out!")
+        
         ctx = {
             'from': CALLER_NAMEADDR,
             'to': Nameaddr(Uri(Addr(A_DOMAIN, None), SNOM_NUMBER))
@@ -322,13 +324,13 @@ class SwitchA(TestSwitch):
         # Allow us to register at other places
         self.account_manager.set_our_credentials(*A_CRED)
 
-        if TEST == TEST_DIALOUT:
-            zap.time_slot(2).plug(self.test_snoming)
+        #if TEST == TEST_DIALOUT:
+        #    zap.time_slot(2).plug(self.test_snoming)
         
         
     def test_snoming(self):
         # We need the "support broken registrar" option, otherwise we'd have to guess
-        # a random line id.
+        # a random line id. Also, the hop guessing also works for UDP.
         snom_uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
         snom_contact = Uri(SNOM_ADDR, SNOM_NUMBER)
         snom_hop = Hop('UDP', 'eth0', A_ADDR.resolved(), SNOM_ADDR.resolved())

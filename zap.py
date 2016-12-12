@@ -3,6 +3,7 @@ import weakref
 import heapq
 import datetime
 import collections
+import sys
 
 from util import Loggable, Oid
 
@@ -425,8 +426,16 @@ class Planned(Loggable):  # Oops, we may call base class methods twice
         slot_index, args = yield time_slot(timeout), self.event_slot
         
         return args if slot_index == 1 else None
+
+
+    def wait_input(self, prompt, timeout=None):
+        print(prompt)
         
+        slot_index, args = yield time_slot(timeout), read_slot(sys.stdin)
         
+        return sys.stdin.readline() if slot_index == 1 else None
+
+
     def is_plan_running(self):
         return self.event_plan and self.event_plan.is_running()
         
