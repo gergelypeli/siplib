@@ -1,4 +1,5 @@
 from format import Status, Rack, make_virtual_response
+from sdp import Sdp
 from util import Loggable
 import zap
 
@@ -29,6 +30,19 @@ FINISH = "FINISH"
 class Error(Exception):
     pass
 
+
+def add_sdp(params, sdp):
+    params["content_type"] = "application/sdp"
+    params["body"] = sdp.print()
+    return params
+    
+    
+def get_sdp(params):
+    if params.get("content_type") == "application/sdp":
+        return Sdp.parse(params["body"])
+    else:
+        return None
+        
 
 class InviteState(Loggable):
     def __init__(self):
@@ -140,7 +154,7 @@ class InviteClientState(InviteState):
 
     def make_prack(self, rpr, sdp=None):
         rack = Rack(rpr["rseq"], rpr["cseq"], rpr["method"])
-        return dict(method="PRACK", rack=rack, sdp=sdp)
+        return add_sdp(dict(method="PRACK", rack=rack), sdp)
 
 
     def outgoing(self, message, sdp=None):
@@ -166,7 +180,7 @@ class InviteClientState(InviteState):
             self.request = msg
                 
             if sdp:
-                msg["sdp"] = sdp
+                add_sdp(msg, sdp)
                 return self.send("request with offer", REQUEST_OFFER, msg, None)
             else:
                 return self.send("request without offer", REQUEST_EMPTY, msg, None)
@@ -185,7 +199,7 @@ class InviteClientState(InviteState):
                 pra = self.make_prack(rpr, sdp)
                 return self.send("PRACK with answer", EARLY_SESSION, pra, None)
             elif s == FINAL_OFFER:
-                ack = dict(method="ACK", sdp=sdp)
+                ack = add_sdp(dict(method="ACK"), sdp)
                 
                 return self.send("ACK with answer", FINISH, ack, req)
             else:
@@ -198,7 +212,7 @@ class InviteClientState(InviteState):
 
         method = msg["method"]
         is_response = msg["is_response"]
-        sdp = msg.pop("sdp")
+        sdp = get_sdp(msg)
         status = msg["status"] if is_response else None
         has_reject = status and status.code >= 300
         has_final = status and status.code < 300 and status.code >= 200
@@ -355,13 +369,13 @@ class InviteServerState(InviteState):
         elif has_final:
             if s in (REQUEST_EMPTY, PROVISIONAL_OFFER):
                 if sdp:
-                    msg["sdp"] = sdp
+                    add_sdp(msg, sdp)
                     return self.send("final 2xx with offer", FINAL_OFFER, msg, req)
                 else:
                     return self.abort("final 2xx needs offer")
             elif s in (REQUEST_OFFER, PROVISIONAL_ANSWER):
                 if sdp:
-                    msg["sdp"] = sdp
+                    add_sdp(msg, sdp)
                     return self.send("final 2xx with answer", FINAL_ANSWER, msg, req)
                 else:
                     return self.abort("final 2xx needs answer")
@@ -370,7 +384,7 @@ class InviteServerState(InviteState):
         elif has_prov:  # including rpr
             if s in (REQUEST_EMPTY, PROVISIONAL_OFFER):
                 if sdp:
-                    msg["sdp"] = sdp
+                    add_sdp(msg, sdp)
                     
                     if can_rpr:
                         self.require_100rel(msg)
@@ -382,7 +396,7 @@ class InviteServerState(InviteState):
                     return self.send("prov without offer", REQUEST_EMPTY, msg, req)
             elif s in (REQUEST_OFFER, PROVISIONAL_ANSWER):
                 if sdp:
-                    msg["sdp"] = sdp
+                    add_sdp(msg, sdp)
 
                     if can_rpr:
                         self.require_100rel(msg)
@@ -401,7 +415,7 @@ class InviteServerState(InviteState):
         else:
             if s in (REQUEST_EMPTY, PROVISIONAL_OFFER):
                 if sdp:
-                    msg = dict(status=Status(183), sdp=sdp)
+                    msg = add_sdp(dict(status=Status(183)), sdp)
                     
                     if can_rpr:
                         return self.send("session progress rpr with offer", RELIABLE_OFFER, msg, req)
@@ -409,7 +423,7 @@ class InviteServerState(InviteState):
                         return self.send("session progress with offer", PROVISIONAL_OFFER, msg, req)
             elif s in (REQUEST_OFFER, PROVISIONAL_ANSWER):
                 if sdp:
-                    msg = dict(status=Status(183), sdp=sdp)
+                    msg = add_sdp(dict(status=Status(183)), sdp)
                     
                     if can_rpr:
                         return self.send("session progress rpr with answer", RELIABLE_ANSWER, msg, req)
@@ -417,7 +431,7 @@ class InviteServerState(InviteState):
                         return self.send("session progress with answer", PROVISIONAL_ANSWER, msg, req)
             elif s in (PRACK_OFFER,):
                 if sdp:
-                    msg = dict(status=Status(200), sdp=sdp)
+                    msg = add_sdp(dict(status=Status(200)), sdp)
                     pra = self.unanswered_prack
                     self.unanswered_prack = None
                     
@@ -431,7 +445,7 @@ class InviteServerState(InviteState):
         req = self.request
         
         method = msg["method"]
-        sdp = msg.pop("sdp")
+        sdp = get_sdp(msg)
 
         if method == "INVITE":
             if s == START:

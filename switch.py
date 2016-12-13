@@ -9,6 +9,7 @@ from party_sip import SipEndpoint
 from ground import Ground
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
+from subscript import SubscriptionManager
 from account import Account, AccountManager
 from util import Loggable
 from mgc import Controller
@@ -17,7 +18,7 @@ from mgc import Controller
 class Switch(Loggable):
     def __init__(self,
         transport_manager=None, transaction_manager=None,
-        record_manager=None, authority=None, registration_manager=None,
+        record_manager=None, authority=None, registration_manager=None, subscription_manager=None,
         dialog_manager=None, mgc=None, account_manager=None
     ):
         Loggable.__init__(self)
@@ -35,6 +36,9 @@ class Switch(Loggable):
         self.authority = authority or Authority(
         )
         self.registration_manager = registration_manager or RegistrationManager(
+            proxy(self)
+        )
+        self.subscription_manager = subscription_manager or SubscriptionManager(
             proxy(self)
         )
         self.dialog_manager = dialog_manager or DialogManager(
@@ -60,6 +64,7 @@ class Switch(Loggable):
         self.authority.set_oid(oid.add("authority"))
         self.record_manager.set_oid(oid.add("recman"))
         self.registration_manager.set_oid(oid.add("regman"))
+        self.subscription_manager.set_oid(oid.add("subman"))
         self.transport_manager.set_oid(oid.add("tportman"))
         self.transaction_manager.set_oid(oid.add("tactman"))
         self.dialog_manager.set_oid(oid.add("diaman"))
@@ -95,11 +100,15 @@ class Switch(Loggable):
             self.transaction_manager.send_message(response, msg)
 
 
+    def make_dialog(self):
+        return Dialog(proxy(self.dialog_manager))
+        
+
     def make_party(self, type):
         # No default Routing class to make, must overload this method!
         
         if type == "sip":
-            return SipEndpoint(Dialog(proxy(self.dialog_manager)))
+            return SipEndpoint(self.make_dialog())
         elif type == "bridge":
             return Bridge()
         elif type == "record":
@@ -210,19 +219,24 @@ class Switch(Loggable):
         if processed:
             return
 
+        # No dialogs for registrations
         if method == "REGISTER":
-            # If the From URI was OK, then the To URI is as well, because
-            # we don't support third party registrations now.
             self.record_manager.process_request(params)
             return
 
+        # In dialog requests
         processed = self.dialog_manager.process_request(params)
         if processed:
             return
     
-        if method == "INVITE" and "tag" not in params["to"].params:
-            self.start_sip_call(params)
-            return
+        # Out of dialog requests
+        if "tag" not in params["to"].params:
+            if method == "INVITE":
+                self.start_sip_call(params)
+                return
+            elif method == "SUBSCRIBE":
+                self.subscription_manager.process_request(params)
+                return
     
         self.reject_request(params, Status(400, "Bad request"))
 

@@ -489,9 +489,6 @@ class TransactionManager(Loggable):
             if not invite_tr:
                 raise Error("No transaction to ACK!")
             
-            #branch = generate_branch()
-            #remote_tag = response_params["to"].params["tag"]
-            #sdp = msg.get("sdp")
             invite_tr.create_and_send_ack(generate_branch(), msg)
         elif method == "CANCEL":
             if not related_msg:
@@ -509,7 +506,8 @@ class TransactionManager(Loggable):
             cancel_params["method"] = "CANCEL"
             cancel_params["via"] = None  # ClientTransaction is a bit sensitive for this
             cancel_params["authorization"] = None
-            cancel_params["sdp"] = None
+            cancel_params["content_type"] = None
+            cancel_params["body"] = None
         
             tr.send(cancel_params)
         elif method == "INVITE":

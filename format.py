@@ -1,12 +1,10 @@
 from collections import namedtuple, OrderedDict
 import socket
 
-from sdp import Sdp
 from async_net import HttpLikeMessage
 
 # TODO: use attributes instead for these
-META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "sdp", "hop", "user_params", "authname" ]
-#LIST_HEADER_FIELDS = [ "via", "route", "record_route", "contact" ]
+META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "body", "hop", "user_params", "authname" ]
 
 
 class FormatError(Exception):
@@ -651,12 +649,12 @@ def print_structured_message(params):
         elif field not in META_HEADER_FIELDS:
             headers[field] = params[field]
 
-    body = b""
-    sdp = params.get("sdp")
-    if sdp:
-        body = sdp.print()
-        headers["content_type"] = "application/sdp"
-        headers["content_length"] = len(body)
+    body = params.get("body", b"")
+    #sdp = params.get("sdp")
+    #if sdp:
+    #    body = sdp.print()
+    #    headers["content_type"] = "application/sdp"
+    #    headers["content_length"] = len(body)
 
     return SipMessage(initial_line, headers, body)
 
@@ -746,11 +744,12 @@ def parse_structured_message(message):
         else:
             print("Warning, header field ignored: '%s'!" % field)
 
-    sdp = None
-    if message.body:
-        sdp = Sdp.parse(message.body)
+    #sdp = None
+    #if message.body:
+    #    sdp = Sdp.parse(message.body)
         
-    p["sdp"] = sdp
+    #p["sdp"] = sdp
+    p["body"] = message.body
 
     return p
 

@@ -375,8 +375,6 @@ class SipEndpoint(Endpoint):
         else:
             self.logger.debug("Processing request %s" % method)
 
-        #sdp = msg.get("sdp")
-        
         # Note: must change state before forward, because that can generate
         # a reverse action which should only be processed with the new state!
         
