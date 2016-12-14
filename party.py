@@ -12,6 +12,7 @@ class Party(GroundDweller):
         
         self.call_oid = None
         self.path = None
+        self.finished_slot = zap.Slot()
         
             
     def set_path(self, call_oid, path):
@@ -20,7 +21,7 @@ class Party(GroundDweller):
 
 
     def make_leg(self, li):
-        leg = Leg(self, li)
+        leg = Leg(proxy(self), li)
         
         self.ground.setup_leg(leg, self.oid.add("leg", li))
         
@@ -35,8 +36,13 @@ class Party(GroundDweller):
         raise NotImplementedError()
 
 
-    def may_finish(self):
+    def abort(self):
         raise NotImplementedError()
+        
+
+    def may_finish(self):
+        self.logger.info("Party finished.")
+        self.finished_slot.zap()
 
 
     def do_slot(self, li, action):
@@ -62,7 +68,8 @@ class Endpoint(Party):
     def may_finish(self):
         self.leg.may_finish()
         self.leg = None
-        self.logger.info("Endpoint finished.")
+        
+        Party.may_finish(self)
 
 
     def do(self, action):
@@ -139,7 +146,7 @@ class Bridge(Party):
         self.leg_count += 1
 
         leg = self.make_leg(li)
-        self.legs[li] = proxy(leg)
+        self.legs[li] = leg
         
         return leg
 
@@ -150,15 +157,11 @@ class Bridge(Party):
 
 
     def may_finish(self):
-        # TODO: we must keep the incoming Leg (when we have one) until
-        # we can finish, because removing it may instantly kill us.
-        # So even after anchoring, keep the SlotLeg until this is the only
-        # slot, and this method is called, then remove it here.
-        if len(self.legs) == 1:
-            self.remove_leg(0)
-            self.logger.info("Bridge finished.")
-        else:
+        if self.legs:
             self.logger.debug("Not finishing yet, still have %d legs." % len(self.legs))
+            return
+            
+        Party.may_finish(self)
 
 
     def dial(self, type, action):
@@ -204,6 +207,7 @@ class Routing(Bridge):
             self.routing_concluded = True
             self.logger.warning("Rejecting with status %s" % (status,))
             self.legs[0].forward(dict(type="reject", status=status))
+            self.remove_leg(0)
             
             
     def ring_incoming_leg(self):
@@ -228,7 +232,7 @@ class Routing(Bridge):
             self.hangup_outgoing_legs(except_li=li)
             self.ground.collapse_legs(self.legs[0].oid, self.legs[li].oid, self.queued_leg_actions[li])
             self.remove_leg(li)
-            # The incoming leg is kept to keep us alive for a while
+            self.remove_leg(0)
 
 
     def may_finish(self):
@@ -252,6 +256,7 @@ class Routing(Bridge):
                 raise Exception("Should have handled dial in a subclass!")
             elif type == "hangup":
                 self.hangup_outgoing_legs(None)
+                self.remove_leg(0)
                 self.routing_concluded = True
                 self.may_finish()
             else:
@@ -283,6 +288,7 @@ class Routing(Bridge):
             # Oops, we anchored this leg because it accepted, but now hangs up
             # FIXME: is this still true?
             self.legs[0].forward(action)
+            self.remove_leg(0)
         else:
             raise Exception("Invalid action from outgoing leg %d: %s" % (li, type))
 
@@ -304,8 +310,8 @@ class SimpleRouting(Routing):
             except Exception as e:
                 self.logger.error("Simple routing internal error: %s" % (e,), exc_info=True)
                 self.reject_incoming_leg(Status(500))
-            else:
-                self.may_finish()
+
+            self.may_finish()
         else:
             self.process_leg_action(li, action)
 

@@ -34,7 +34,7 @@ class AccountManager(Loggable):
         account = self.accounts_by_uri.get(uri)
         
         if not account:
-            account = self.accounts_by_uri.get(uri._replace(user=None))
+            account = self.accounts_by_uri.get(uri._replace(username=None))
             
         return account
     

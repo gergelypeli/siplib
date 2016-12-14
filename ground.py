@@ -1,4 +1,4 @@
-from weakref import proxy
+from weakref import proxy, WeakValueDictionary
 
 from util import Loggable
 
@@ -10,10 +10,11 @@ class Ground(Loggable):
         self.switch = switch
         self.mgc = mgc
         
-        self.legs_by_oid = {}
+        self.legs_by_oid = WeakValueDictionary()
         self.targets_by_source = {}
         self.media_contexts_by_span = {}
         self.context_count = 0
+        self.parties_by_oid = {}
         
         
     def generate_context_oid(self):
@@ -41,9 +42,6 @@ class Ground(Loggable):
         
         if linked_leg_oid:
             self.targets_by_source.pop(linked_leg_oid, None)
-            
-        if not self.legs_by_oid:
-            self.logger.info("Back to empty state.")
         
         
     def link_legs(self, leg_oid0, leg_oid1):
@@ -185,12 +183,22 @@ class Ground(Loggable):
         party.set_path(call_oid, path)
         
         pathstr = ",".join(str(x) for x in path) if path else None
-        party.set_oid(call_oid.add(type, pathstr))
-        
+        oid = call_oid.add(type, pathstr)
+        party.set_oid(oid)
+
+        self.parties_by_oid[oid] = party
         party.set_ground(proxy(self))
+        party.finished_slot.plug(self.party_finished, oid=oid)
         
         return party
 
+
+    def party_finished(self, oid):
+        self.parties_by_oid.pop(oid)
+            
+        if not self.parties_by_oid:
+            self.logger.info("Back to empty state.")
+        
 
     def select_hop_slot(self, next_uri):
         return self.switch.select_hop_slot(next_uri)
