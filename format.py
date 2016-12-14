@@ -262,12 +262,14 @@ class Status(namedtuple("Status", [ "code", "reason" ])):
         403: "Forbidden",
         404: "Not Found",
         408: "Request Timeout",
+        423: "Interval Too Brief",
         481: "Transaction Does Not Exist",
         482: "Loop Detected",
         483: "Too Many Hops",
         486: "Busy Here",
         487: "Request Terminated",
         488: "Not Acceptable Here",
+        489: "Bad Event",
         491: "Request Pending",
         500: "Internal Error",
         501: "Not Implemented",
@@ -496,15 +498,15 @@ def parse_semicolon_params(parser):
     return params
     
 
-class Uri(namedtuple("Uri", "addr user scheme params")):
-    def __new__(cls, addr, user=None, scheme=None, params=None):
-        return super().__new__(cls, addr, user, scheme or "sip", params or {})
+class Uri(namedtuple("Uri", "addr username scheme params")):
+    def __new__(cls, addr, username=None, scheme=None, params=None):
+        return super().__new__(cls, addr, username, scheme or "sip", params or {})
 
 
     def __hash__(self):
         # It's unlikely that two URIs differ only in parameters, but even in
         # that case the equality will sort that out, hashing is only a speedup.
-        return hash((self.addr, self.user, self.scheme))
+        return hash((self.addr, self.username, self.scheme))
         
         
     def __str__(self):
@@ -514,7 +516,7 @@ class Uri(namedtuple("Uri", "addr user scheme params")):
     def print(self):
         parts = [ self.addr.print() ] + print_params(self.params)
         rest = ";".join(parts)
-        rest = "%s@%s" % (self.user, rest) if self.user else rest
+        rest = "%s@%s" % (self.username, rest) if self.username else rest
         uri = "%s:%s" % (self.scheme, rest)
 
         return uri
@@ -638,7 +640,7 @@ def print_structured_message(params):
             headers[field] = params[field].print()
         elif field == "cseq":
             headers[field] = "%d %s" % (params[field], params["method"])
-        elif field == "rseq":
+        elif field in ("rseq", "expires"):
             headers[field] = "%d" % params[field]
         elif field in ("contact", "route"):
             headers[field] = [ f.print() for f in params[field] ]
@@ -731,7 +733,7 @@ def parse_structured_message(message):
                     raise FormatError("Mismatching method in CSeq field: %r vs %r" % (p["method"], method))
             else:
                 p["method"] = method  # Necessary for CANCEL responses
-        elif field == "rseq":
+        elif field in ("rseq", "expires"):
             p[field] = int(header)  # TODO
         elif field == "rack":
             p[field] = Rack.parse(Parser(header))

@@ -11,6 +11,7 @@ from party import PlannedEndpoint, SimpleRouting, PlannedRouting
 from sdp import Sdp
 from authority import Authority
 from registrar import RecordManager
+from subscript import SubscriptionManager, EventSource
 from account import Account
 from util import setup_logging, my_exchandler, Oid
 from mgw import MediaGateway
@@ -220,6 +221,45 @@ class TestAuthority(Authority):
     pass
 
 
+class VoicemailEventSource(EventSource):
+    MIN_EXPIRES = 30
+    MAX_EXPIRES = 60
+    
+    def __init__(self):
+        EventSource.__init__(self)
+        
+        self.state = "yes"
+        
+        
+    def get_state(self):
+        body = "Messages-Waiting: %s\r\n" % self.state
+        self.state = "yes" if self.state == "no" else "no"
+
+        return dict(
+            event="message-summary",
+            content_type="application/simple-message-summary",
+            body=body.encode("utf8")
+        )
+        
+
+class TestSubscriptionManager(SubscriptionManager):
+    def identify_event_source(self, params):
+        event = params["event"]
+        to_uri = params["to"].uri._replace(params={})
+        
+        if event == "message-summary" and to_uri.username == "phonebox":
+            return "voicemail", None
+            
+        return None
+        
+        
+    def make_event_source(self, type, label):
+        if type == "voicemail":
+            return VoicemailEventSource()
+        else:
+            return None
+
+
 class TestController(Controller):
     def __init__(self, ports):
         Controller.__init__(self)
@@ -268,11 +308,13 @@ class TestSwitch(Switch):
         
         record_manager = TestRecordManager(proxy(self))
         authority = TestAuthority()
+        subman = TestSubscriptionManager(proxy(self))
         mgc = TestController(media_ports)
 
         Switch.__init__(
             self,
             record_manager=record_manager, authority=authority, registration_manager=None,
+            subscription_manager=subman,
             dialog_manager=None, mgc=mgc, account_manager=None
         )
         
@@ -351,16 +393,16 @@ class SwitchB(TestSwitch):
             ctx = action["ctx"]
             to = ctx["to"]
             
-            if to.uri.user == CALLEE_NUMBER:
+            if to.uri.username == CALLEE_NUMBER:
                 #self.bridge("record")
                 to2 = to._replace(uri=to.uri._replace(user="444"))
                 action2 = dict(action, ctx=dict(ctx, to=to2))
                 self.dial("record", action2)
-            elif to.uri.user == "444":
+            elif to.uri.username == "444":
                 self.dial("unreachable", action)
                 self.dial("ringing", action)
                 self.dial("callee", action)
-            elif to.uri.user == SNOM_NUMBER:
+            elif to.uri.username == SNOM_NUMBER:
                 action2 = deepcopy(action)
                 #action2["ctx"]["uri"] = Uri(A_ADDR, SNOM_NUMBER)
                 action2["ctx"]["uri"] = Uri(A_ADDR, SNOM_NUMBER, params=dict(transport="TCP"))

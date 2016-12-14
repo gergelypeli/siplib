@@ -89,14 +89,6 @@ def setup_logging():
                 logging.CRITICAL: '@'
             }.get(record.levelno, '#')
             
-            #if "/" in record.oid:
-                #record.oid = ".".join(
-                #    x[:1] if not x.isdigit() else x for x in record.oid.split(".")
-                #)
-            #    record.oid = "/".join(
-            #        "%s=%s" % (k[:1], v) for k, v in (x.split("=") for x in record.oid.split("/"))
-            #    )
-            
             return True
     
     logging.config.dictConfig({

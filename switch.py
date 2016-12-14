@@ -252,4 +252,11 @@ class Switch(Loggable):
         if processed:
             return
 
-        self.logger.warning("Ignoring unknown response!")
+        if method == "BYE":
+            # This will happen for bastard dialogs
+            self.logger.debug("No dialog for BYE response, oh well.")
+        elif method == "NOTIFY":
+            # This will happen for final notifications after expiration
+            self.logger.debug("No dialog for NOTIFY response, oh well.")
+        else:
+            self.logger.warning("No dialog for incoming %s response!" % (method,))

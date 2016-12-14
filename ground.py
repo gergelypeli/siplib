@@ -15,7 +15,7 @@ class Ground(Loggable):
         self.media_contexts_by_span = {}
         self.context_count = 0
         
-    
+        
     def generate_context_oid(self):
         context_oid = self.oid.add("context", self.context_count)
         self.context_count += 1

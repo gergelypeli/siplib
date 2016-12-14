@@ -337,11 +337,12 @@ class DialogManager(Loggable):
         
 
     def process_request(self, params):
+        method = params["method"]
         local_tag = params["to"].params.get("tag")
         dialog = self.dialogs_by_local_tag.get(local_tag)
         
         if dialog:
-            self.logger.debug("Found dialog: %s" % (local_tag,))
+            self.logger.debug("Found dialog for %s request: %s" % (method, local_tag,))
             dialog.recv_request(params)
             return True
 
@@ -354,18 +355,13 @@ class DialogManager(Loggable):
         
 
     def process_response(self, params, related_request):
+        method = params["method"]
         local_tag = params["from"].params.get("tag")
         dialog = self.dialogs_by_local_tag.get(local_tag)
         
         if dialog:
-            self.logger.debug("Found dialog: %s" % (local_tag,))
+            self.logger.debug("Found dialog for %s response: %s" % (method, local_tag,))
             dialog.recv_response(params, related_request)
             return True
 
-        if params["method"] == "BYE":
-            # This will happen for bastard dialogs
-            self.logger.debug("No dialog for BYE response, oh well.")
-        else:
-            self.logger.warning("No dialog for incoming response %s" % (local_tag,))
-            
         return False
