@@ -1,3 +1,5 @@
+import datetime
+
 from format import Status
 from transactions import make_simple_response
 from util import Loggable
@@ -7,6 +9,7 @@ import zap
 class Subscription:
     def __init__(self, dialog):
         self.dialog = dialog
+        self.expiration_deadline = None
         self.expiration_plug = None
         
 
@@ -45,7 +48,7 @@ class EventSource(Loggable):
                         res = dict(status=Status(423), expires=self.MIN_EXPIRES)
                         subscription.dialog.send_response(res, params)
                     
-                        if not subscription.expiration_plug:
+                        if not subscription.expiration_deadline:
                             self.subscriptions_by_id.pop(id)
                         
                         return
@@ -53,9 +56,10 @@ class EventSource(Loggable):
                     if expires > self.MAX_EXPIRES:
                         expires = self.MAX_EXPIRES
                     
-                    if subscription.expiration_plug:
+                    if subscription.expiration_deadline:
                         subscription.expiration_plug.unplug()
                     
+                    subscription.expiration_deadline = datetime.datetime.now() + datetime.timedelta(seconds=expires)
                     subscription.expiration_plug = zap.time_slot(expires).plug(self.expired, id=id)
 
                 res = dict(status=Status(200, "OK"), expires=expires)
@@ -65,14 +69,24 @@ class EventSource(Loggable):
                     self.logger.info("Subscribed for %d seconds." % expires)
                     self.notify_one(id)
                 else:
-                    self.logger.info("Unsubscribed.")
+                    if subscription.expiration_deadline:
+                        self.logger.info("Unsubscribed.")
+                    else:
+                        self.logger.info("Polled.")
+                    
                     self.notify_one(id, "timeout")
                     self.subscriptions_by_id.pop(id, None)
             else:
                 self.logger.warning("Ignoring %s request!" % method)
         else:
             if method == "NOTIFY":
-                self.logger.info("Got NOTIFY response.")
+                status = params["status"]
+                
+                if status.code == 200:
+                    self.logger.info("Got NOTIFY response.")
+                else:
+                    self.logger.warning("Got NOTIFY response %d!" % status.code)
+                    self.subscriptions_by_id.pop(id, None)
             else:
                 self.logger.warning("Ignoring %s response!" % method)
                 
@@ -80,7 +94,7 @@ class EventSource(Loggable):
     def get_state(self):
         raise NotImplementedError()
 
-                
+
     def notify_one(self, id, reason=None, state=None):
         subscription = self.subscriptions_by_id[id]
         
@@ -89,11 +103,17 @@ class EventSource(Loggable):
             self.logger.info("Notifying subscription %s." % id)
             state = self.get_state()
         
-        # Must make copies for multiple notifications
+        if not reason:
+            expires = subscription.expiration_deadline - datetime.datetime.now()
+            ss = "active;expires=%d" % expires.total_seconds()
+        else:
+            ss = "terminated;reason=%s" % reason
+            
+        # Must make copies in case of multiple subscriptions
         req = dict(
             state,
             method="NOTIFY",
-            subscription_state="active" if not reason else "terminated;reason=%s" % reason
+            subscription_state=ss
         )
         
         subscription.dialog.send_request(req)

@@ -246,207 +246,6 @@ class TcpReconnector(Reconnector):
         return s
 
 
-class Message(object):
-    """
-    Represents a HTTP-style message.
-    """
-    def __init__(self, initial_line, header_fields=None, body=None):
-        if not initial_line:
-            raise Exception("Empty initial message line")
-
-        self.initial_line = initial_line
-        self.header_fields = header_fields or dict()
-        self.body = body or b""
-
-
-    @classmethod
-    def from_string(cls, s):
-        """Parse a string and return the result."""
-        head, sep, body = s.partition(b"\n\n")
-        lines = head.split(b"\n")
-
-        if not lines:
-            return None
-
-        fields = {}
-
-        for line in lines[1:]:
-            k, s, v = line.partition(b": ")
-            fields[k] = v
-
-        return cls(lines[0], fields, body)
-
-
-    def to_string(self):
-        """Format as a string."""
-        head = [ b"%s: %s" % (k, v) for k, v in self.header_fields.iteritems() if v is not None ]
-
-        return b"\n\n".join([ b"\n".join([ self.initial_line ] + head), self.body ])
-
-
-class Connection(object):
-    """
-    Handles sending and receiving HTTP-style messages over an asynchronous socket.
-    Reports events to its user as:
-        process - called after receiving full messages
-        disconnect - called on network errors
-        exhausted - called when the input direction is closed by the peer
-        flushed - called when the output buffer gets empty
-    """
-
-    def __init__(self, socket, keepalive_interval=None):
-        self.socket = socket
-
-        self.outgoing_buffer = b""
-        self.outgoing_queue = []
-        self.incoming_buffer = b""
-        self.incoming_message = None
-        
-        self.process_slot = zap.EventSlot()
-        self.disconnect_slot = zap.Slot()
-        self.exhausted_slot = zap.Slot()
-        self.flushed_slot = zap.Slot()
-
-        self.read_plug = zap.read_slot(self.socket).plug(self.readable)
-        self.write_plug = zap.write_slot(self.socket).plug(self.writable)
-        
-        if keepalive_interval:
-            self.time_plug = zap.time_slot(keepalive_interval, repeat=True).plug(self.keepalive)
-
-
-    def keepalive(self):
-        if not self.outgoing_buffer:
-            # Send empty lines now and then
-            self.outgoing_buffer = b"\n"
-            self.write_plug = zap.write_slot(self.socket).plug(self.writable)
-
-
-    def writable(self):
-        """Called when the socket becomes writable."""
-        if self.outgoing_buffer:
-            try:
-                sent = self.socket.send(self.outgoing_buffer)
-            except IOError as e:
-                # Note: SCTP sockets doesn't raise the specialized socket.error!
-                self.logger.error("Socket error while sending: %s" % e)
-                self.write_plug.unplug()
-                self.disconnect_slot.zap()
-                return
-
-            self.outgoing_buffer = self.outgoing_buffer[sent:]
-
-        if not self.outgoing_buffer:
-            if self.outgoing_queue:
-                self.outgoing_buffer = self.outgoing_queue.pop(0)
-            else:
-                self.write_plug.unplug()
-                self.flushed_slot.zap()
-
-
-    def check_incoming_message(self):
-        """Check and parse messages from the incoming buffer."""
-        if self.incoming_message is None:
-            # No header processed yet, look for the next one
-
-            while self.incoming_buffer.startswith(b"\n"):
-                # Found a keepalive empty line, get rid of it
-                self.incoming_buffer = self.incoming_buffer[1:]
-
-            header, separator, rest = self.incoming_buffer.partition(b"\n\n")
-
-            if separator:
-                # Found a header, create the Message with no body yet
-                self.incoming_buffer = rest
-                #self.logger.info("Incoming message with header %r" % header)
-                lines = header.split(b"\n")
-
-                msg = Message(lines[0])
-                self.incoming_message = msg
-
-                for line in lines[1:]:
-                    k, v = line.split(b": ")
-                    msg.header_fields[k] = v
-
-        if self.incoming_message is not None:
-            # If have a header, get the body
-
-            length = int(self.incoming_message.header_fields.get(b"Length", 0))
-
-            if len(self.incoming_buffer) >= length:
-                # Already read the whole body, return the complete Message
-
-                msg = self.incoming_message
-                self.incoming_message = None
-
-                msg.body = self.incoming_buffer[:length]
-                self.incoming_buffer = self.incoming_buffer[length:]
-
-                return msg
-
-        # No complete Message yet
-        return None
-
-
-    def readable(self):
-        """Called when the socket becomes readable."""
-        exhausted = False
-        disconnected = False
-
-        while True:
-            recved = None
-
-            try:
-                recved = self.socket.recv(65536)
-            except socket.error as e:
-                if e.errno == errno.EAGAIN:
-                    break
-
-                self.logger.error("Socket error while receiving: %s" % e)
-                self.read_plug.unplug()
-                disconnected = True
-                break
-
-            if not recved:
-                self.read_plug.unplug()
-                exhausted = True
-                break
-
-            self.incoming_buffer += recved
-
-        # Since the user will get no further notifications if some incoming messages remain
-        # buffered, all available messages must be got. To help the user not to forget this,
-        # we'll return all available messages in a list.
-        while True:
-            msg = self.check_incoming_message()
-
-            if msg:
-                self.process_slot.zap(msg)
-            else:
-                break
-
-        if exhausted:
-            self.exhausted_slot.zap()
-
-        if disconnected:
-            self.disconnect_slot.zap()
-
-
-    def put_message(self, message):
-        """Send a Message object to the peer."""
-        if message.body:
-            message.header_fields[b"Length"] = len(message.body)
-        else:
-            message.header_fields.pop(b"Length", None)
-
-        buffer = message.to_string()
-
-        if self.outgoing_buffer:
-            self.outgoing_queue.append(buffer)
-        else:
-            self.outgoing_buffer = buffer
-            self.write_plug = zap.write_slot(self.socket).plug(self.writable)
-
-
 def parse_http_like_header(header, list_header_fields):
     lines = header.decode().split("\r\n")
     initial_line = None
@@ -494,12 +293,15 @@ def parse_http_like_header(header, list_header_fields):
 def print_http_like_header(initial_line, headers, content_length):
     lines = [ initial_line ]
     
-    if content_length:
-        headers["content_length"] = content_length
-    else:
-        headers.pop("content_length", None)
+    #if content_length:
+    #    headers["content_length"] = content_length
+    #else:
+    #    headers.pop("content_length", None)
 
     for field, value in headers.items():
+        if field == "content_length":
+            continue  # This happens when printing a just parsed package
+            
         field = field.replace("_", "-").title()
 
         if isinstance(value, list):
@@ -510,6 +312,7 @@ def print_http_like_header(initial_line, headers, content_length):
         else:
             lines.append("%s: %s" % (field, value))
 
+    lines.append("Content-Length: %d" % content_length)
     lines.append("")
     lines.append("")
     
