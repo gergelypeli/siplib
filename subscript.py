@@ -157,7 +157,8 @@ class MessageSummaryEventSource(EventSource):
             new = ms.get(mcc, 0)
             old = ms.get("%s_old" % mcc, 0)
             
-            body += "%s-Message: %d/%d\r\n" % (mcc.title(), new, old)
+            if new or old:
+                body += "%s-Message: %d/%d\r\n" % (mcc.title(), new, old)
         
         return dict(
             event="message-summary",
@@ -177,6 +178,26 @@ class DialogEventSource(EventSource):
     def get_dialog_state(self):
         raise NotImplementedError()
 
+
+    def side_lines(self, side, info):
+        lines = []
+        side_info = info.get(side)
+
+        if side_info is not None:
+            lines.append('<%s>' % side)
+        
+            identity = side_info.get("identity")
+            if identity:
+                lines.append('<identity display="%s">%s</identity>' % (identity.name, identity.uri))
+        
+            target = side_info.get("target")
+            if target:
+                lines.append('<target uri="%s"/>' % (target,))
+            
+            lines.append('</%s>' % side)
+            
+        return lines
+
         
     def get_state(self):
         ds = self.get_dialog_state()
@@ -188,9 +209,15 @@ class DialogEventSource(EventSource):
         
         for id, info in ds.items():
             direction = "initiator" if info["is_outgoing"] else "recipient"
+            lines.append('<dialog id="%s" direction="%s">' % (id, direction))
+            
             state = "confirmed" if info["is_confirmed"] else "early"
-            line = '<dialog id="%s" direction="%s"><state>%s</state></dialog>\n' % (id, direction, state)
-            lines.append(line)
+            lines.append('<state>%s</state>' % state)
+            
+            lines.extend(self.side_lines("local", info))
+            lines.extend(self.side_lines("remote", info))
+            
+            lines.append('</dialog>')
             
         lines.append('</dialog-info>')
 

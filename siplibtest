@@ -252,10 +252,21 @@ class BusylampEventSource(DialogEventSource):
         
         
     def get_dialog_state(self):
+        lol = dict(
+            local=dict(
+                identity=Nameaddr(Uri(Addr("a.switch"), "localaor"), "Local"),
+                target=Uri(Addr("a.switch"), "localtarget")
+            ),
+            remote=dict(
+                identity=Nameaddr(Uri(Addr("a.switch"), "remoteaor"), "Remote"),
+                target=Uri(Addr("a.switch"), "remotetarget")
+            )
+        )
+        
         if self.state % 3 == 0:
             return dict()
         elif self.state % 3 == 1:
-            return dict(one=dict(is_outgoing=False, is_confirmed=False))
+            return dict(one=dict(is_outgoing=False, is_confirmed=False, **lol))
         else:
             return dict(one=dict(is_outgoing=False, is_confirmed=True))
             
