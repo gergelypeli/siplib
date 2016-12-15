@@ -10,8 +10,7 @@ from util import Loggable
 __all__ = [
     'lookup_host_alias',
     'Listener', 'TcpListener', 'UnixListener',
-    'Reconnector', 'TcpReconnector',
-    'Message', 'Connection'
+    'Reconnector', 'TcpReconnector'
 ]
 
 

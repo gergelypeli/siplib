@@ -14,15 +14,16 @@ class Subscription:
         
 
 class EventSource(Loggable):
-    MIN_EXPIRES = 30
-    MAX_EXPIRES = 60
-    
     def __init__(self):
         Loggable.__init__(self)
         
         self.subscriptions_by_id = {}
         self.last_subscription_id = 0
 
+
+    def get_expiry_range(self):
+        return 30, 60
+        
 
     def add_subscription(self, dialog):
         self.last_subscription_id += 1
@@ -43,9 +44,11 @@ class EventSource(Loggable):
                 subscription = self.subscriptions_by_id[id]
 
                 expires = params.get("expires", 0)
+                min_expires, max_expires = self.get_expiry_range()
+                
                 if expires > 0:
-                    if expires < self.MIN_EXPIRES:
-                        res = dict(status=Status(423), expires=self.MIN_EXPIRES)
+                    if expires < min_expires:
+                        res = dict(status=Status(423), expires=min_expires)
                         subscription.dialog.send_response(res, params)
                     
                         if not subscription.expiration_plug:
@@ -53,8 +56,8 @@ class EventSource(Loggable):
                         
                         return
                     
-                    if expires > self.MAX_EXPIRES:
-                        expires = self.MAX_EXPIRES
+                    if expires > max_expires:
+                        expires = max_expires
                     
                     if subscription.expiration_plug:
                         subscription.expiration_plug.unplug()
@@ -136,6 +139,68 @@ class EventSource(Loggable):
         self.subscriptions_by_id.pop(id)
 
 
+class MessageSummaryEventSource(EventSource):
+    # RFC 3458
+    MESSAGE_CONTEXT_CLASSES = [ "voice", "fax", "pager", "multimedia", "text" ]
+    
+    def get_message_state(self):
+        raise NotImplementedError()
+        
+        
+    def get_state(self):
+        ms = self.get_message_state()
+        
+        waiting = "yes" if any(ms.values()) else "no"
+        body = "Messages-Waiting: %s\r\n" % waiting
+
+        for mcc in self.MESSAGE_CONTEXT_CLASSES:
+            new = ms.get(mcc, 0)
+            old = ms.get("%s_old" % mcc, 0)
+            
+            body += "%s-Message: %d/%d\r\n" % (mcc.title(), new, old)
+        
+        return dict(
+            event="message-summary",
+            content_type="application/simple-message-summary",
+            body=body.encode("utf8")
+        )
+
+
+class DialogEventSource(EventSource):
+    def __init__(self, entity):
+        EventSource.__init__(self)
+        
+        self.entity = entity
+        self.version = 0
+        
+        
+    def get_dialog_state(self):
+        raise NotImplementedError()
+
+        
+    def get_state(self):
+        ds = self.get_dialog_state()
+        lines = []
+        
+        lines.append('<?xml version="1.0"?>')
+        lines.append('<dialog-info xmlns="urn:ietf:params:xml:ns:dialog-info" version="%d" state="full" entity="%s">' % (self.version, self.entity))
+        self.version += 1
+        
+        for id, info in ds.items():
+            direction = "initiator" if info["is_outgoing"] else "recipient"
+            state = "confirmed" if info["is_confirmed"] else "early"
+            line = '<dialog id="%s" direction="%s"><state>%s</state></dialog>\n' % (id, direction, state)
+            lines.append(line)
+            
+        lines.append('</dialog-info>')
+
+        return dict(
+            event="dialog",
+            content_type="application/dialog-info+xml",
+            body="\n".join(lines).encode("utf8")
+        )
+
+
 class SubscriptionManager(Loggable):
     def __init__(self, switch):
         Loggable.__init__(self)
@@ -158,21 +223,23 @@ class SubscriptionManager(Loggable):
         raise NotImplementedError()
 
 
-    def make_event_source(self, type, label):
+    def make_event_source(self, type, uri):
         raise NotImplementedError()
 
 
-    def get_event_source(self, type, label):
-        es = self.event_sources_by_id.get((type, label))
+    def get_event_source(self, type, uri):
+        uri_str = uri.print()
+        key = (type, uri_str)
+        es = self.event_sources_by_id.get(key)
         
         if not es:
-            self.logger.debug("Creating event source: %s=%s." % (type, label))
-            es = self.make_event_source(type, label)
+            self.logger.debug("Creating event source: %s=%s." % (type, uri_str))
+            es = self.make_event_source(type, uri)
             if not es:
                 raise Exception("Couldn't make event source of type %s!" % type)
                 
-            es.set_oid(self.oid.add(type, label))
-            self.event_sources_by_id[(type, label)] = es
+            es.set_oid(self.oid.add(type, uri_str))
+            self.event_sources_by_id[key] = es
             
         return es
 
@@ -181,14 +248,14 @@ class SubscriptionManager(Loggable):
         if params["method"] != "SUBSCRIBE":
             raise Exception("SubscriptionManager has nothing to do with this request!")
         
-        type, label = self.identify_event_source(params) or (None, None)
+        type, uri = self.identify_event_source(params) or (None, None)
         
         if not type:
             self.logger.warning("Ignoring subscription for unknown event source!")
             self.reject_request(params, Status(404))
             return
         
-        es = self.get_event_source(type, label)
+        es = self.get_event_source(type, uri)
         dialog = self.switch.make_dialog()
         es.add_subscription(dialog)
         dialog.recv_request(params)

@@ -11,7 +11,7 @@ from party import PlannedEndpoint, SimpleRouting, PlannedRouting
 from sdp import Sdp
 from authority import Authority
 from registrar import RecordManager
-from subscript import SubscriptionManager, EventSource
+from subscript import SubscriptionManager, MessageSummaryEventSource, DialogEventSource
 from account import Account
 from util import setup_logging, my_exchandler, Oid
 from mgw import MediaGateway
@@ -221,77 +221,65 @@ class TestAuthority(Authority):
     pass
 
 
-class VoicemailEventSource(EventSource):
-    MIN_EXPIRES = 30
-    MAX_EXPIRES = 60
-    
+class VoicemailEventSource(MessageSummaryEventSource):
     def __init__(self):
-        EventSource.__init__(self)
-        
-        self.state = "yes"
-        
-        
-    def get_state(self):
-        body = "Messages-Waiting: %s\r\n" % self.state
-        self.state = "yes" if self.state == "no" else "no"
-
-        return dict(
-            event="message-summary",
-            content_type="application/simple-message-summary",
-            body=body.encode("utf8")
-        )
-
-
-class BusylampEventSource(EventSource):
-    MIN_EXPIRES = 30
-    MAX_EXPIRES = 60
-    
-    def __init__(self):
-        EventSource.__init__(self)
+        MessageSummaryEventSource.__init__(self)
         
         self.state = 0
-        zap.time_slot(5, True).plug(self.busy)
+        zap.time_slot(5, True).plug(self.fake)
         
         
-    def busy(self):
+    def fake(self):
         self.notify_all()
-        
-        
-    def get_state(self):
-        body = """
-<?xml version="1.0"?>
-<dialog-info xmlns="urn:ietf:params:xml:ns:dialog-info" version="%d" state="full" entity="%s">
-<dialog id="1" direction="recipient"><state>%s</state></dialog>
-</dialog-info>
-""" % (self.state, "sip:201@a.switch", [ "terminated", "early", "confirmed" ][self.state % 3])
         self.state += 1
 
-        return dict(
-            event="dialog",
-            content_type="application/dialog-info+xml",
-            body=body.strip().encode("utf8")
-        )
         
+    def get_message_state(self):
+        return dict(voice=self.state % 2, voice_old=self.state / 2 % 2)
+
+
+class BusylampEventSource(DialogEventSource):
+    def __init__(self, uri):
+        DialogEventSource.__init__(self, uri)
+        
+        self.state = 0
+        zap.time_slot(5, True).plug(self.fake)
+        
+        
+    def fake(self):
+        self.notify_all()
+        self.state += 1
+        
+        
+    def get_dialog_state(self):
+        if self.state % 3 == 0:
+            return dict()
+        elif self.state % 3 == 1:
+            return dict(one=dict(is_outgoing=False, is_confirmed=False))
+        else:
+            return dict(one=dict(is_outgoing=False, is_confirmed=True))
+            
 
 class TestSubscriptionManager(SubscriptionManager):
     def identify_event_source(self, params):
         event = params["event"]
+        from_uri = params["from"].uri._replace(params={})
         to_uri = params["to"].uri._replace(params={})
         
         if event == "message-summary" and to_uri.username == "phonebox":
-            return "voicemail", None
+            return "voicemail", from_uri
             
         if event == "dialog":
-            return "busylamp", None
+            return "busylamp", to_uri
             
         return None
         
         
-    def make_event_source(self, type, label):
+    def make_event_source(self, type, uri):
         if type == "voicemail":
             return VoicemailEventSource()
         elif type == "busylamp":
-            return BusylampEventSource()
+            return BusylampEventSource(uri)
         else:
             return None
 
