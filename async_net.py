@@ -279,7 +279,7 @@ def parse_http_like_header(header, list_header_fields):
             else:
                 raise Exception("Duplicate header received: %s" % field)
 
-    content_length = headers.get("content_length", "0")
+    content_length = headers.pop("content_length", "0")
     
     try:
         content_length = int(content_length.strip())
@@ -292,15 +292,7 @@ def parse_http_like_header(header, list_header_fields):
 def print_http_like_header(initial_line, headers, content_length):
     lines = [ initial_line ]
     
-    #if content_length:
-    #    headers["content_length"] = content_length
-    #else:
-    #    headers.pop("content_length", None)
-
     for field, value in headers.items():
-        if field == "content_length":
-            continue  # This happens when printing a just parsed package
-            
         field = field.replace("_", "-").title()
 
         if isinstance(value, list):
@@ -311,7 +303,9 @@ def print_http_like_header(initial_line, headers, content_length):
         else:
             lines.append("%s: %s" % (field, value))
 
+    # Mandatory for TCP
     lines.append("Content-Length: %d" % content_length)
+        
     lines.append("")
     lines.append("")
     

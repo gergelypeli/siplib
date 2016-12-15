@@ -630,10 +630,11 @@ def print_structured_message(params):
         raise FormatError("Invalid structured message!")
 
     headers = OrderedDict()
-    mandatory_fields = ["from", "to", "call_id", "cseq", "via"]  # order these nicely
-    other_fields = [f for f in params if f not in mandatory_fields]
+    mandatory_fields = [ "from", "to", "via", "call_id", "cseq" ]  # order these nicely
+    last_fields = [ f for f in [ "content_type" ] if f in params ]
+    other_fields = [ f for f in params if f not in mandatory_fields + last_fields ]
 
-    for field in mandatory_fields + other_fields:
+    for field in mandatory_fields + other_fields + last_fields:
         if params[field] is None:
             pass
         elif field in ("from", "to", "www_authenticate", "authorization", "rack"):

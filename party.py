@@ -389,8 +389,6 @@ class SimpleBridge(Bridge):
             self.remove_leg(0)
             
         Bridge.may_finish(self)
-        # Since only the legs held a reference to self, we may be destroyed
-        # as soon as this method returns.
             
 
     def do_slot(self, li, action):
