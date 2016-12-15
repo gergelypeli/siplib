@@ -240,6 +240,37 @@ class VoicemailEventSource(EventSource):
             content_type="application/simple-message-summary",
             body=body.encode("utf8")
         )
+
+
+class BusylampEventSource(EventSource):
+    MIN_EXPIRES = 30
+    MAX_EXPIRES = 60
+    
+    def __init__(self):
+        EventSource.__init__(self)
+        
+        self.state = 0
+        zap.time_slot(5, True).plug(self.busy)
+        
+        
+    def busy(self):
+        self.notify_all()
+        
+        
+    def get_state(self):
+        body = """
+<?xml version="1.0"?>
+<dialog-info xmlns="urn:ietf:params:xml:ns:dialog-info" version="%d" state="full" entity="%s">
+<dialog id="1" direction="recipient"><state>%s</state></dialog>
+</dialog-info>
+""" % (self.state, "sip:201@a.switch", [ "terminated", "early", "confirmed" ][self.state % 3])
+        self.state += 1
+
+        return dict(
+            event="dialog",
+            content_type="application/dialog-info+xml",
+            body=body.strip().encode("utf8")
+        )
         
 
 class TestSubscriptionManager(SubscriptionManager):
@@ -250,12 +281,17 @@ class TestSubscriptionManager(SubscriptionManager):
         if event == "message-summary" and to_uri.username == "phonebox":
             return "voicemail", None
             
+        if event == "dialog":
+            return "busylamp", None
+            
         return None
         
         
     def make_event_source(self, type, label):
         if type == "voicemail":
             return VoicemailEventSource()
+        elif type == "busylamp":
+            return BusylampEventSource()
         else:
             return None
 

@@ -48,7 +48,7 @@ class EventSource(Loggable):
                         res = dict(status=Status(423), expires=self.MIN_EXPIRES)
                         subscription.dialog.send_response(res, params)
                     
-                        if not subscription.expiration_deadline:
+                        if not subscription.expiration_plug:
                             self.subscriptions_by_id.pop(id)
                         
                         return
@@ -56,24 +56,27 @@ class EventSource(Loggable):
                     if expires > self.MAX_EXPIRES:
                         expires = self.MAX_EXPIRES
                     
-                    if subscription.expiration_deadline:
+                    if subscription.expiration_plug:
                         subscription.expiration_plug.unplug()
                     
                     subscription.expiration_deadline = datetime.datetime.now() + datetime.timedelta(seconds=expires)
                     subscription.expiration_plug = zap.time_slot(expires).plug(self.expired, id=id)
+                    
+                    res = dict(status=Status(200, "OK"), expires=expires)
+                    subscription.dialog.send_response(res, params)
 
-                res = dict(status=Status(200, "OK"), expires=expires)
-                subscription.dialog.send_response(res, params)
-
-                if expires > 0:
                     self.logger.info("Subscribed for %d seconds." % expires)
                     self.notify_one(id)
                 else:
-                    if subscription.expiration_deadline:
+                    if subscription.expiration_plug:
                         self.logger.info("Unsubscribed.")
+                        subscription.expiration_plug.unplug()
                     else:
                         self.logger.info("Polled.")
-                    
+
+                    res = dict(status=Status(200, "OK"), expires=expires)
+                    subscription.dialog.send_response(res, params)
+
                     self.notify_one(id, "timeout")
                     self.subscriptions_by_id.pop(id, None)
             else:
@@ -130,7 +133,7 @@ class EventSource(Loggable):
     def expired(self, id):
         self.logger.info("Expired subscription %s." % id)
         self.notify_one(id, "timeout")
-        self.subscriptions_by_id.pop(id, None)
+        self.subscriptions_by_id.pop(id)
 
 
 class SubscriptionManager(Loggable):
@@ -182,7 +185,7 @@ class SubscriptionManager(Loggable):
         
         if not type:
             self.logger.warning("Ignoring subscription for unknown event source!")
-            self.reject_request(params, Status(489))
+            self.reject_request(params, Status(404))
             return
         
         es = self.get_event_source(type, label)
