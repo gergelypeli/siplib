@@ -332,7 +332,8 @@ class Plan(Loggable):
                 self.logger.warning("Plan aborted with %s." % e)
                 self.finished(e)
             else:
-                self.logger.warning("Plan aborted.")
+                # FIXME: commented out for stupid file logging reasons only
+                #self.logger.warning("Plan aborted.")
                 self.finished(None)
 
 

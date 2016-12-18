@@ -146,32 +146,28 @@ class RecordManager(Loggable):
         return record
 
 
-    def canonicalize_uri(self, uri):
-        return uri._replace(params={})
+    def canonicalize_record_uri(self, uri):
+        return uri._replace(scheme="any", params={})
                 
         
     def may_register(self, registering_uri, record_uri):
         # Third party registrations not supported yet
         # We'd need to know which account is allowed to register which
         
-        return registering_uri == record_uri
+        return self.canonicalize_record_uri(registering_uri) == record_uri
         
         
     def process_request(self, params):
         if params["method"] != "REGISTER":
             raise Error("RecordManager has nothing to do with this request!")
         
-        registering_uri = self.canonicalize_uri(params["from"].uri)
-        record_uri = self.canonicalize_uri(params["to"].uri)
+        registering_uri = params["from"].uri
+        record_uri = self.canonicalize_record_uri(params["to"].uri)
         
         if not self.may_register(registering_uri, record_uri):
             self.reject_request(params, Status(403, "Forbidden"))
             return
         
-        if record_uri.scheme != "sip":
-            self.reject_request(params, Status(404, "Not Found"))
-            return
-            
         record = self.add_record(record_uri)
         record.recv_request(params)
         
@@ -181,13 +177,13 @@ class RecordManager(Loggable):
 
 
     def emulate_registration(self, record_uri, contact_uri, seconds, hop):
-        record_uri = self.canonicalize_uri(record_uri)
+        record_uri = self.canonicalize_record_uri(record_uri)
         expiration = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
         self.add_record(record_uri).add_contact(contact_uri, expiration, hop)
         
 
     def lookup_contacts(self, record_uri):
-        record_uri = self.canonicalize_uri(record_uri)
+        record_uri = self.canonicalize_record_uri(record_uri)
         record = self.records_by_uri.get(record_uri)
         
         if record:

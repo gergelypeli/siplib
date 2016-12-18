@@ -184,6 +184,10 @@ class Ground(Loggable):
         
         pathstr = ",".join(str(x) for x in path) if path else None
         oid = call_oid.add(type, pathstr)
+        
+        if oid in self.parties_by_oid:
+            raise Exception("Duplicate party oid: %s" % oid)
+            
         party.set_oid(oid)
 
         self.parties_by_oid[oid] = party

@@ -385,6 +385,9 @@ class SipEndpoint(Endpoint):
                     "from": msg["from"],
                     "to": msg["to"]
                 }
+
+                #src = dict(msg, type="sip")
+                #ctx = dict(src=src)
                 
                 self.make_invite(False)
                 msg, sdp, is_answer = self.invite.incoming(msg)

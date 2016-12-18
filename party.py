@@ -1,7 +1,7 @@
 from weakref import proxy
 
 from ground import GroundDweller, Leg
-from format import SipError, Status
+from format import Status
 import zap
 
 
@@ -41,8 +41,12 @@ class Party(GroundDweller):
         
 
     def may_finish(self):
-        self.logger.info("Party finished.")
-        self.finished_slot.zap()
+        # FIXME: hm, it's currently possible that we get here multiple times,
+        # can't we do something about it?
+        if self.finished_slot:
+            self.logger.info("Party finished.")
+            self.finished_slot.zap()
+            self.finished_slot = None
 
 
     def do_slot(self, li, action):
@@ -130,6 +134,11 @@ class Bridge(Party):
         
         self.leg_count = 0
         self.legs = {}
+        self.queued_leg_actions = {}
+
+        self.is_ringing = False  # if a ring action was sent to the incoming leg
+        self.is_anchored = False  # if a routing decision was made on the outgoing legs
+        self.is_accepted = False  # if an accept was sent to the incoming leg
         
             
     def start(self):
@@ -147,6 +156,7 @@ class Bridge(Party):
 
         leg = self.make_leg(li)
         self.legs[li] = leg
+        self.queued_leg_actions[li] = []
         
         return leg
 
@@ -156,12 +166,9 @@ class Bridge(Party):
         leg.may_finish()
 
 
-    def may_finish(self):
-        if self.legs:
-            self.logger.debug("Not finishing yet, still have %d legs." % len(self.legs))
-            return
-            
-        Party.may_finish(self)
+    def queue_leg_action(self, li, action):
+        self.logger.debug("Queueing %s from leg %s." % (action["type"], li))
+        self.queued_leg_actions[li].append(action)
 
 
     def dial(self, type, action):
@@ -180,142 +187,186 @@ class Bridge(Party):
         leg.forward(action)
 
 
-
-
-class Routing(Bridge):
-    def __init__(self):
-        Bridge.__init__(self)
-
-        self.incoming_leg_rang = False
-        self.routing_concluded = False
-        self.queued_leg_actions = {}
-
-
-    def add_leg(self):
-        leg = Bridge.add_leg(self)
-        self.queued_leg_actions[leg.number] = []
-        return leg
-        
-
-    def queue_leg_action(self, li, action):
-        self.logger.debug("Queueing %s from leg %s." % (action["type"], li))
-        self.queued_leg_actions[li].append(action)
-
-
-    def reject_incoming_leg(self, status):
-        if not self.routing_concluded:
-            self.routing_concluded = True
-            self.logger.warning("Rejecting with status %s" % (status,))
-            self.legs[0].forward(dict(type="reject", status=status))
-            self.remove_leg(0)
-            
-            
-    def ring_incoming_leg(self):
-        if not self.incoming_leg_rang:
-            self.incoming_leg_rang = True
-            self.logger.debug("Sending artificial ringback.")
-            self.legs[0].forward(dict(type="ring"))
-
-
-    def hangup_outgoing_legs(self, except_li):
+    def hangup_outgoing_legs(self, except_li=None):
         for li, leg in list(self.legs.items()):
             if li not in (0, except_li):
-                self.logger.debug("Hanging up leg %s" % li)
+                self.logger.debug("Hanging up outgoing leg %s" % li)
                 leg.forward(dict(type="hangup"))
                 self.remove_leg(li)
 
 
+    def ring_incoming_leg(self):
+        if self.is_ringing:
+            return
+            
+        self.is_ringing = True
+        self.logger.debug("Sending artificial ringback.")
+        self.legs[0].forward(dict(type="ring"))
+
+
+    def accept_incoming_leg(self):
+        if self.is_accepted:
+            return
+            
+        self.is_accepted = True
+        self.logger.warning("Accepting.")
+        self.legs[0].forward(dict(type="accept"))
+            
+
+    def reject_incoming_leg(self, status):
+        if self.is_accepted:
+            raise Exception("Incoming leg already accepted!")
+            
+        self.logger.warning("Rejecting with status %s" % (status,))
+        self.legs[0].forward(dict(type="reject", status=status))
+        self.remove_leg(0)
+            
+
     def anchor_outgoing_leg(self, li):
-        if not self.routing_concluded:
-            self.routing_concluded = True
-            self.logger.debug("Anchored to leg %d." % li)
-            self.hangup_outgoing_legs(except_li=li)
-            self.ground.collapse_legs(self.legs[0].oid, self.legs[li].oid, self.queued_leg_actions[li])
-            self.remove_leg(li)
-            self.remove_leg(0)
+        if self.is_anchored:
+            raise Exception("An outgoing leg already anchored!")
+            
+        self.is_anchored = True
+        self.logger.debug("Anchored to outgoing leg %d." % li)
+        self.hangup_outgoing_legs(except_li=li)
+            
+        # FIXME: here we really need async action forwarding, because we don't want
+        # responses to these actions to arrive immediately. A Routing may want to remove
+        # itself from Ground before those responses arrive!
+        for action in self.queued_leg_actions[li]:
+            self.legs[0].forward(action)
+                
+            #self.ground.collapse_legs(self.legs[0].oid, self.legs[li].oid, self.queued_leg_actions[li])
+            #self.remove_leg(li)
+            #self.remove_leg(0)
 
 
     def may_finish(self):
-        if not self.routing_concluded:
-            if len(self.legs) >= 2:
-                return  # Give us some more time
-                
-            # No outgoing legs, no conclusion, no happy ending
-            self.logger.error("Routing gave up before reaching a conclusion!")
-            self.reject_incoming_leg(Status(500))
-            
-        return Bridge.may_finish(self)
+        # For a clean finish we need either the incoming leg with some outgoing one,
+        # or no legs at all. Every other case is an error, and we clean it up here.
         
+        if 0 in self.legs:
+            if len(self.legs) > 1:
+                return
+            else:
+                # No outgoing legs? We surely won't dial by ourselves, so terminate here.
+                self.logger.error("Routing ended without outgoing legs!")
+                
+                if self.is_accepted:
+                    # We once sent an accept, so now we can forward the hangup
+                    self.legs[0].forward(dict(type="hangup"))
+                    self.remove_leg(0)
+                else:
+                    # Havent accepted yet, so send a reject instead
+                    self.reject_incoming_leg(Status(500))
+        else:
+            if self.legs:
+                # No incoming leg, no fun
+                self.logger.error("Routing ended without incoming leg!")
+                self.hangup_outgoing_legs()
+                
+        Party.may_finish(self)
+        
+        
+    def process_dial(self, action):
+        self.reject_incoming_leg(Status(604))
+
 
     def process_leg_action(self, li, action):
         type = action["type"]
         self.logger.debug("Got %s from leg %d." % (type, li))
 
+        if 0 not in self.legs:
+            raise Exception("Lost the incoming leg!")
+
         if li == 0:
-            if type == "dial":
-                raise Exception("Should have handled dial in a subclass!")
-            elif type == "hangup":
-                self.hangup_outgoing_legs(None)
-                self.remove_leg(0)
-                self.routing_concluded = True
-                self.may_finish()
-            else:
-                raise Exception("Invalid action from incoming leg: %s" % type)
+            # Actions from the incoming leg
             
-            return
-
-        if type == "reject":
-            # FIXME: we probably shouldn't just forward the last rejection status
-            self.remove_leg(li)
-
-            if len(self.legs) == 1:
-                self.reject_incoming_leg(action["status"])
-
-            self.may_finish()
-        elif type == "ring":
-            if action.get("session"):
-                action["type"] = "session"
-                self.queue_leg_action(li, action)
-                
-            self.ring_incoming_leg()
-        elif type == "session":
-            self.queue_leg_action(li, action)
-        elif type == "accept":
-            self.queue_leg_action(li, action)
-            self.anchor_outgoing_leg(li)
-            self.may_finish()
-        elif type == "hangup":
-            # Oops, we anchored this leg because it accepted, but now hangs up
-            # FIXME: is this still true?
-            self.legs[0].forward(action)
-            self.remove_leg(0)
+            if type == "dial":
+                # Let's be nice and factor this out for the sake of simplicity
+                try:
+                    self.process_dial(action)
+                except Exception as e:
+                    self.logger.error("Dial processing error: %s" % (e,), exc_info=True)
+                    self.reject_incoming_leg(Status(500))
+                    self.hangup_outgoing_legs()
+                #raise Exception("Should have handled dial in a subclass!")
+            elif type == "hangup":
+                self.remove_leg(0)
+                self.hangup_outgoing_legs(None)
+            elif self.is_anchored:
+                out_li = max(self.legs.keys())
+                self.legs[out_li].forward(action)
+            else:
+                # The user accepted the incoming leg, and didn't handle the consequences.
+                raise Exception("Unexpected action from unanchored incoming leg: %s" % type)
         else:
-            raise Exception("Invalid action from outgoing leg %d: %s" % (li, type))
+            # Actions from an outgoing leg
 
+            # First the important actions
+            if type == "reject":
+                # FIXME: we probably shouldn't just forward the last rejection status.
+                # But we should definitely reject here explicitly, because the may_finish
+                # cleanup rejects with 500 always.
+                self.remove_leg(li)
 
+                if len(self.legs) == 1:
+                    # And only that, so time to give up
+                    self.reject_incoming_leg(action["status"])
+            elif type == "accept":
+                if self.is_anchored:
+                    self.legs[0].forward(action)
+                else:
+                    self.queue_leg_action(li, action)
+                    self.anchor_outgoing_leg(li)
+            elif type == "hangup":
+                self.remove_leg(li)
+            
+                if self.is_anchored:
+                    # Clean up properly in this case
+                    self.legs[0].forward(action)
+                    self.remove_leg(0)
+                else:
+                    # Somebody was lazy here, dialed out, even if an accept came in it
+                    # didn't anchor the leg, and now it's hanging up. If this was the last
+                    # outgoing leg, may_finish will clean up this mess.
+                    pass
+            else:
+                # The less important actions
+            
+                if type == "ring":
+                    # This is kinda special because we have a flag for it partially
+                    self.ring_incoming_leg()
+            
+                    if action.get("session"):
+                        action["type"] = "session"
+                        type = "session"
 
-
-class SimpleRouting(Routing):
-    def route(self, dial_action):
-        raise NotImplementedError()
+                if type != "ring":
+                    if self.is_anchored:
+                        self.legs[0].forward(action)
+                    else:
+                        self.queue_leg_action(li, action)
+            
+        self.may_finish()
 
 
     def do_slot(self, li, action):
-        if li == 0 and action["type"] == "dial":
-            try:
-                self.route(action)
-            except SipError as e:
-                self.logger.error("Simple routing SIP error: %s" % (e.status,))
-                self.reject_incoming_leg(e.status)
-            except Exception as e:
-                self.logger.error("Simple routing internal error: %s" % (e,), exc_info=True)
-                self.reject_incoming_leg(Status(500))
-
-            self.may_finish()
-        else:
-            self.process_leg_action(li, action)
+        self.process_leg_action(li, action)
 
 
+class Routing(Bridge):
+    def anchor_outgoing_leg(self, li):
+        # FIXME: workaround until async action processing is implemented
+        queued_actions = self.queued_leg_actions[li]
+        self.queued_leg_actions[li] = []
+        
+        Bridge.anchor_outgoing_leg(self, li)
+        
+        self.ground.collapse_legs(self.legs[0].oid, self.legs[li].oid, queued_actions)
+        self.remove_leg(li)
+        self.remove_leg(0)
+        # After having no legs, may_finish will terminate us as soon as it can
 
 
 class PlannedRouting(zap.Planned, Routing):
@@ -353,16 +404,9 @@ class PlannedRouting(zap.Planned, Routing):
         self.event_slot.plug(self.process_leg_action)
         
         if exception:
-            try:
-                raise exception
-            except SipError as e:
-                self.logger.error("Routing plan aborted with SIP error: %s" % e)
-                self.reject_incoming_leg(e.status)
-                self.hangup_outgoing_legs(None)
-            except Exception as e:
-                self.logger.error("Routing plan aborted with exception: %s" % e)
-                self.reject_incoming_leg(Status(500))
-                self.hangup_outgoing_legs(None)
+            self.logger.error("Routing plan aborted with exception: %s" % exception)
+            self.reject_incoming_leg(Status(500))
+            self.hangup_outgoing_legs(None)
             
         self.may_finish()
         
@@ -372,44 +416,46 @@ class PlannedRouting(zap.Planned, Routing):
         self.send_event(li, action)
 
 
-
-
 class SimpleBridge(Bridge):
-    def __init__(self):
-        Bridge.__init__(self)
+    def process_dial(self, action):
+        self.dial("routing", action)
+        
+        
+#    def __init__(self):
+#        Bridge.__init__(self)
 
         
-    def may_finish(self):
-        if 1 in self.legs:
-            self.logger.debug("Releasing outgoing leg.")
-            self.remove_leg(1)
-
-        if 0 in self.legs:
-            self.logger.debug("Releasing incoming leg.")
-            self.remove_leg(0)
+#    def may_finish(self):
+#        if 1 in self.legs:
+#            self.logger.debug("Releasing outgoing leg.")
+#            self.remove_leg(1)
+#
+#        if 0 in self.legs:
+#            self.logger.debug("Releasing incoming leg.")
+#            self.remove_leg(0)
+#            
+#        Bridge.may_finish(self)
             
-        Bridge.may_finish(self)
-            
 
-    def do_slot(self, li, action):
-        type = action["type"]
-
-        if li == 0 and type == "dial":
-            self.dial("routing", action)  # TODO: this used to make thing with (... self.path, "routing")
-            return
-        
-        if li == 0:
-            leg = self.legs[1]
-            direction = "forward"
-        else:
-            leg = self.legs[0]
-            direction = "backward"
-        
-        self.logger.debug("Bridging %s %s" % (type, direction))
-        leg.forward(action)
-
-        if type in ("hangup", "reject"):
-            self.may_finish()
+#    def do_slot(self, li, action):
+#        type = action["type"]
+#
+#        if li == 0 and type == "dial":
+#            self.dial("routing", action)  # TODO: this used to make thing with (... self.path, "routing")
+#            return
+#        
+#        if li == 0:
+#            leg = self.legs[1]
+#            direction = "forward"
+#        else:
+#            leg = self.legs[0]
+#            direction = "backward"
+#        
+#        self.logger.debug("Bridging %s %s" % (type, direction))
+#        leg.forward(action)
+#
+#        if type in ("hangup", "reject"):
+#            self.may_finish()
 
     
 class RecordingBridge(SimpleBridge):

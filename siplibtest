@@ -6,8 +6,8 @@ from copy import deepcopy
 import sys
 from weakref import proxy
 
-from format import Addr, Uri, Nameaddr, Status, SipError, Hop
-from party import PlannedEndpoint, SimpleRouting, PlannedRouting
+from format import Addr, Uri, Nameaddr, Status, Hop
+from party import PlannedEndpoint, PlannedRouting, Bridge, Routing
 from sdp import Sdp
 from authority import Authority
 from registrar import RecordManager
@@ -301,29 +301,44 @@ class TestController(Controller):
         self.media_addresses.add(addr)
         
         
-class TestRouting(SimpleRouting):
-    def route(self, action):
+class TestLine(Bridge):
+    def process_dial(self, action):
         ctx = action["ctx"]
-        to_uri = ctx["to"].uri
-        self.logger.debug("Checking registered SIP contact: %s" % (to_uri,))
-        contacts = self.ground.switch.record_manager.lookup_contacts(to_uri)
+        self.addr = ctx.pop("line_addr", None)
+        self.username = ctx.pop("line_username", None)
+        
+        src_username = ctx["src_username"]
+        src_addr = ctx["src_addr"]
+        src_name = ctx["src_name"]
+        
+        dst_username = ctx["dst_username"]
+        dst_addr = ctx["dst_addr"]
+        
+        if self.username != dst_username or self.addr != dst_addr:
+            self.dial("routing", action)
+            return
             
+        record_uri = Uri(dst_addr, dst_username)
+        self.logger.debug("Checking registered SIP contact: %s" % (record_uri,))
+        contacts = self.ground.switch.record_manager.lookup_contacts(record_uri)
+        
         if len(contacts) == 1:
             contact = contacts[0]
-            
-            out_ctx = {
-                'uri': contact.uri,  # Only update the RURI for dialing out
+        
+            dst = {
+                'uri': contact.uri,
                 'hop': contact.hop,
-                'from': ctx["from"],
-                'to': ctx["to"]
+                'from': Nameaddr(Uri(src_addr, src_username), src_name),
+                'to': Nameaddr(Uri(dst_addr, dst_username)),
+                'route': []
             }
-            
-            out_action = dict(action, ctx=out_ctx)
-            self.dial("sip", out_action)
+        
+            self.dial("sip", dict(action, ctx=dst))
         else:
-            self.logger.debug("Has %d registered SIP contacts: %s" % (len(contacts), to_uri))
-            raise SipError(Status(404))
-
+            self.logger.debug("Has %d registered SIP contacts: %s" % (len(contacts), record_uri))
+            self.reject_incoming_leg(Status(404))
+            self.may_finish()
+    
 
 class TestSwitch(Switch):
     def __init__(self, local_addr, mgw_addr, media_ports):
@@ -359,19 +374,52 @@ class TestSwitch(Switch):
 
 
     def make_party(self, type):
-        if type == "routing":
-            return TestRouting()
+        if type == "caller":
+            return CallerEndpoint()
         elif type == "callee":
             return CalleeEndpoint()
         elif type == "unreachable":
             return UnreachableEndpoint()
         elif type == "ringing":
             return RingingEndpoint()
+        elif type == "line":
+            return TestLine()
         else:
             return Switch.make_party(self, type)
 
 
+def mkctx(ctx):
+    ctx["received"] = True
+    
+    ctx["src_addr"] = ctx["from"].uri.addr
+    ctx["src_username"] = ctx["from"].uri.username
+    ctx["src_name"] = ctx["from"].name
+
+    ctx["dst_addr"] = ctx["to"].uri.addr
+    ctx["dst_username"] = ctx["to"].uri.username
+    ctx["dst_name"] = ctx["to"].name
+    
+
 class SwitchA(TestSwitch):
+    class ARouting(Routing):
+        def process_dial(self, action):
+            ctx = action["ctx"]
+            
+            if "received" not in ctx:
+                mkctx(ctx)
+                
+                ctx["line_addr"] = ctx["from"].uri.addr
+                ctx["line_username"] = ctx["from"].uri.username
+            
+                self.dial("line", action)
+                return
+
+            ctx["line_addr"] = ctx["to"].uri.addr
+            ctx["line_username"] = ctx["to"].uri.username
+
+            self.dial("line", action)
+            
+
     def __init__(self, *args):
         TestSwitch.__init__(self, *args)
         
@@ -395,6 +443,13 @@ class SwitchA(TestSwitch):
         #if TEST == TEST_DIALOUT:
         #    zap.time_slot(2).plug(self.test_snoming)
         
+
+    def make_party(self, type):
+        if type == "routing":
+            return self.ARouting()
+        else:
+            return TestSwitch.make_party(self, type)
+
         
     def test_snoming(self):
         # We need the "support broken registrar" option, otherwise we'd have to guess
@@ -409,28 +464,48 @@ class SwitchA(TestSwitch):
 
 
 class SwitchB(TestSwitch):
-    class Routing(PlannedRouting):
+    class BRouting(PlannedRouting):
         def plan(self):
             self.logger.debug("Routing plan started.")
-            
             li, action = yield from self.wait_leg_action()
             ctx = action["ctx"]
-            to = ctx["to"]
             
-            if to.uri.username == CALLEE_NUMBER:
-                #self.bridge("record")
-                to2 = to._replace(uri=to.uri._replace(user="444"))
-                action2 = dict(action, ctx=dict(ctx, to=to2))
-                self.dial("record", action2)
-            elif to.uri.username == "444":
+            if "received" not in ctx:
+                mkctx(ctx)
+                
+                ctx["line_addr"] = ctx["from"].uri.addr
+                ctx["line_username"] = ctx["from"].uri.username
+            
+                self.dial("line", action)
+                return
+
+            src_username = ctx["src_username"]
+            src_addr = ctx["src_addr"]
+            src_name = ctx["src_name"]
+        
+            dst_username = ctx["dst_username"]
+            dst_addr = ctx["dst_addr"]
+            
+            if dst_username == CALLEE_NUMBER:
+                ctx["dst_username"] = "444"
+                self.dial("record", action)
+            elif dst_username == "444":
                 self.dial("unreachable", action)
                 self.dial("ringing", action)
                 self.dial("callee", action)
-            elif to.uri.username == SNOM_NUMBER:
-                action2 = deepcopy(action)
+            elif dst_username == SNOM_NUMBER:
+                dst = {
+                    'uri': Uri(A_ADDR, SNOM_NUMBER),
+                    #'hop': contact.hop,
+                    'from': Nameaddr(Uri(src_addr, src_username), src_name),
+                    'to': Nameaddr(Uri(dst_addr, dst_username)),  # FIXME: shouldn't be our addr!
+                    'route': []
+                }
+                
+                #action2 = deepcopy(action)
                 #action2["ctx"]["uri"] = Uri(A_ADDR, SNOM_NUMBER)
-                action2["ctx"]["uri"] = Uri(A_ADDR, SNOM_NUMBER, params=dict(transport="TCP"))
-                self.dial("sip", action2)
+                #action2["ctx"]["uri"] = Uri(A_ADDR, SNOM_NUMBER, params=dict(transport="TCP"))
+                self.dial("sip", dict(action, ctx=dst))
             
             
     def __init__(self, *args):
@@ -451,9 +526,7 @@ class SwitchB(TestSwitch):
 
     def make_party(self, type):
         if type == "routing":
-            return self.Routing()
-        elif type == "caller":
-            return CallerEndpoint()
+            return self.BRouting()
         else:
             return TestSwitch.make_party(self, type)
 
