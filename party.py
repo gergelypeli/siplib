@@ -226,19 +226,32 @@ class Bridge(Party):
         if self.is_anchored:
             raise Exception("An outgoing leg already anchored!")
             
-        self.is_anchored = True
         self.logger.debug("Anchored to outgoing leg %d." % li)
         self.hangup_outgoing_legs(except_li=li)
-            
+        
+        self.ground.legs_anchored(self.legs[0].oid, self.legs[li].oid)
+        self.is_anchored = True
+
         # FIXME: here we really need async action forwarding, because we don't want
         # responses to these actions to arrive immediately. A Routing may want to remove
         # itself from Ground before those responses arrive!
         for action in self.queued_leg_actions[li]:
             self.legs[0].forward(action)
-                
-            #self.ground.collapse_legs(self.legs[0].oid, self.legs[li].oid, self.queued_leg_actions[li])
-            #self.remove_leg(li)
-            #self.remove_leg(0)
+
+
+    def unanchor_legs(self):
+        if not self.is_anchored:
+            raise Exception("Legs were not anchored!")
+        
+        if len(self.legs) != 2:
+            raise Exception("Not two legs are anchored!")
+        
+        self.is_anchored = False
+        oids = [ leg.oid for leg in self.legs.values() ]
+        self.ground.legs_unanchored(oids[0], oids[1])
+
+        # Let other Party-s still use media once we're no longer present.
+        self.ground.collapse_legs(oids[0], oids[1])
 
 
     def may_finish(self):
@@ -292,8 +305,11 @@ class Bridge(Party):
                     self.hangup_outgoing_legs()
                 #raise Exception("Should have handled dial in a subclass!")
             elif type == "hangup":
+                if self.is_anchored:
+                    self.unanchor_legs()
+                    
                 self.remove_leg(0)
-                self.hangup_outgoing_legs(None)
+                self.hangup_outgoing_legs()
             elif self.is_anchored:
                 out_li = max(self.legs.keys())
                 self.legs[out_li].forward(action)
@@ -305,6 +321,9 @@ class Bridge(Party):
 
             # First the important actions
             if type == "reject":
+                if self.is_anchored:
+                    self.unanchor_legs()
+                    
                 # FIXME: we probably shouldn't just forward the last rejection status.
                 # But we should definitely reject here explicitly, because the may_finish
                 # cleanup rejects with 500 always.
@@ -320,13 +339,15 @@ class Bridge(Party):
                     self.queue_leg_action(li, action)
                     self.anchor_outgoing_leg(li)
             elif type == "hangup":
-                self.remove_leg(li)
-            
                 if self.is_anchored:
+                    self.unanchor_legs()
+                    
                     # Clean up properly in this case
+                    self.remove_leg(li)
                     self.legs[0].forward(action)
                     self.remove_leg(0)
                 else:
+                    self.remove_leg(li)
                     # Somebody was lazy here, dialed out, even if an accept came in it
                     # didn't anchor the leg, and now it's hanging up. If this was the last
                     # outgoing leg, may_finish will clean up this mess.
@@ -357,15 +378,22 @@ class Bridge(Party):
 
 class Routing(Bridge):
     def anchor_outgoing_leg(self, li):
-        # FIXME: workaround until async action processing is implemented
-        queued_actions = self.queued_leg_actions[li]
-        self.queued_leg_actions[li] = []
+        # We overload this method completely. Skip the anchoring thing in Bridge,
+        # because we collapse instead of unanchoring. And the queued actions should
+        # only be sent once we're out of the game.
         
-        Bridge.anchor_outgoing_leg(self, li)
+        self.logger.debug("Routing anchored to outgoing leg %d." % li)
+        self.hangup_outgoing_legs(except_li=li)
         
-        self.ground.collapse_legs(self.legs[0].oid, self.legs[li].oid, queued_actions)
+        self.ground.collapse_legs(self.legs[0].oid, self.legs[li].oid)
+        
+        # After collapsing we can still send actions out, but the responses will skip us
+        for action in self.queued_leg_actions[li]:
+            self.legs[0].forward(action)
+        
         self.remove_leg(li)
         self.remove_leg(0)
+        
         # After having no legs, may_finish will terminate us as soon as it can
 
 

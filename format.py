@@ -263,7 +263,7 @@ class Status(namedtuple("Status", [ "code", "reason" ])):
         404: "Not Found",
         408: "Request Timeout",
         423: "Interval Too Brief",
-        481: "Transaction Does Not Exist",
+        481: "Call/Transaction Does Not Exist",
         482: "Loop Detected",
         483: "Too Many Hops",
         486: "Busy Here",

@@ -85,7 +85,8 @@ class Record(object):
         cseq = params["cseq"]
 
         if call_id == self.call_id and cseq <= self.cseq:
-            self.send_response(dict(status=Status(400, "Whatever")), params)
+            # The RFC suggests 500, but that's a bit weird
+            self.send_response(dict(status=Status(500, "Lower CSeq Is Not Our Fault")), params)
             return None
 
         self.call_id = call_id

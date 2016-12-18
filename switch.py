@@ -224,11 +224,6 @@ class Switch(Loggable):
             self.record_manager.process_request(params)
             return
 
-        # In dialog requests
-        processed = self.dialog_manager.process_request(params)
-        if processed:
-            return
-    
         # Out of dialog requests
         if "tag" not in params["to"].params:
             if method == "INVITE":
@@ -238,7 +233,14 @@ class Switch(Loggable):
                 self.subscription_manager.process_request(params)
                 return
     
-        self.reject_request(params, Status(400, "Bad request"))
+            self.reject_request(params, Status(501, "Method Not Implemented"))
+        else:
+            # In dialog requests
+            processed = self.dialog_manager.process_request(params)
+            if processed:
+                return
+    
+            self.reject_request(params, Status(481, "Dialog Does Not Exist"))
 
 
     def process_response(self, params, related_request):
