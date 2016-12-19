@@ -226,7 +226,7 @@ class VoicemailEventSource(MessageSummaryEventSource):
         MessageSummaryEventSource.__init__(self)
         
         self.state = 0
-        zap.time_slot(5, True).plug(self.fake)
+        zap.time_slot(30, True).plug(self.fake)
         
         
     def fake(self):
@@ -243,7 +243,7 @@ class BusylampEventSource(DialogEventSource):
         DialogEventSource.__init__(self, uri)
         
         self.state = 0
-        zap.time_slot(5, True).plug(self.fake)
+        zap.time_slot(30, True).plug(self.fake)
         
         
     def fake(self):

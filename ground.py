@@ -3,6 +3,10 @@ from weakref import proxy, WeakValueDictionary
 from util import Loggable
 
 
+# FIXME: currently we can't tell how many channels do we have to deal with
+GUESSED_CHANNEL_COUNT = 2
+
+
 class Ground(Loggable):
     def __init__(self, switch, mgc):
         Loggable.__init__(self)
@@ -41,12 +45,13 @@ class Ground(Loggable):
         self.legs_by_oid.pop(leg_oid)
         linked_leg_oid = self.targets_by_source.pop(leg_oid, None)
         
-        # To make collapsing easier, we allow the collapsed legs to point outside
-        # even when those legs no longer point inside. So only remove symmetrical
-        # backreferences.
-        
-        if self.targets_by_source.get(linked_leg_oid) == leg_oid:
+        if linked_leg_oid:
             self.targets_by_source.pop(linked_leg_oid)
+            
+        # And clean up the anchor infos, too
+        anchored_leg_oid = self.leg_oids_by_anchor.pop(leg_oid, None)
+        if anchored_leg_oid:
+            self.leg_oids_by_anchor.pop(anchored_leg_oid)
         
         
     def link_legs(self, leg_oid0, leg_oid1):
@@ -66,8 +71,38 @@ class Ground(Loggable):
         self.targets_by_source[leg_oid0] = leg_oid1
         self.targets_by_source[leg_oid1] = leg_oid0
         
-        
-    def collapse_legs(self, leg_oid0, leg_oid1, queued_actions=None):
+        # Create new contexts if necessary
+        for ci in range(GUESSED_CHANNEL_COUNT):
+            smleg = self.find_facing_media_leg(leg_oid1, ci)
+            tmleg = self.find_facing_media_leg(leg_oid0, ci)
+            
+            if smleg and tmleg:
+                self.logger.info("Media legs became facing after linking, must add context.")
+                self.add_context(smleg, tmleg)
+    
+    
+    def unlink_legs(self, leg_oid0):
+        if leg_oid0 not in self.legs_by_oid:
+            raise Exception("Leg does not exist: %s!" % leg_oid0)
+            
+        leg_oid1 = self.targets_by_source.get(leg_oid0)
+        if not leg_oid1:
+            raise Exception("Leg not linked: %s!" % leg_oid0)
+            
+        # Remove unlucky contexts
+        for ci in range(GUESSED_CHANNEL_COUNT):
+            smleg = self.find_facing_media_leg(leg_oid1, ci)
+            tmleg = self.find_facing_media_leg(leg_oid0, ci)
+            
+            if smleg and tmleg:
+                self.logger.info("Media legs became separated after unlinking, must remove context.")
+                self.remove_context(smleg, tmleg)
+            
+        self.targets_by_source.pop(leg_oid0)
+        self.targets_by_source.pop(leg_oid1)
+
+
+    def collapse_legs(self, leg_oid0, leg_oid1, queue0=None, queue1=None):
         prev_leg_oid = self.targets_by_source[leg_oid0]
         if not prev_leg_oid:
             raise Exception("No previous leg before collapsed leg %s!" % leg_oid0)
@@ -76,36 +111,55 @@ class Ground(Loggable):
         if not next_leg_oid:
             raise Exception("No next leg after collapsed leg %s!" % leg_oid1)
         
-        # Let the inside legs point outside to allow last minute action forwarding
-        #self.targets_by_source[leg_oid0] = None
-        #self.targets_by_source[leg_oid1] = None
+        self.logger.info("Collapsing legs.")
         
+        # Do this explicitly, because breaking it down to two unlinks and a link
+        # may unnecessarily remove and recreate contexts.
+        
+        for ci in range(GUESSED_CHANNEL_COUNT):
+            # Source, Target, Previous, Next
+            smleg = self.legs_by_oid[leg_oid0].get_media_leg(ci)
+            tmleg = self.legs_by_oid[leg_oid1].get_media_leg(ci)
+            
+            if not smleg and not tmleg:
+                self.logger.info("Channel %d is unaffected." % ci)
+                continue
+            
+            self.logger.info("Channel %d needs context changes." % ci)
+            pmleg = self.find_facing_media_leg(leg_oid0, ci)
+            nmleg = self.find_facing_media_leg(leg_oid1, ci)
+            
+            # Remove previous context if necessary
+            if pmleg and smleg:
+                self.remove_context(pmleg, smleg)
+                
+            # Remove next context if necessary
+            if tmleg and nmleg:
+                self.remove_context(tmleg, nmleg)
+            
+            # Create collapsed context if necessary
+            if pmleg and nmleg:
+                self.add_context(pmleg, nmleg)
+        
+        self.targets_by_source.pop(leg_oid0)
+        self.targets_by_source.pop(leg_oid1)
         self.targets_by_source[prev_leg_oid] = next_leg_oid
         self.targets_by_source[next_leg_oid] = prev_leg_oid
         
-        # FIXME: this is no longer needed, Party does this.
-        if queued_actions:
-            for action in queued_actions:
-                self.logger.debug("Forwarding queued action %s" % action["type"])
+        #self.unlink_legs(prev_leg_oid)
+        #self.unlink_legs(next_leg_oid)
+        #self.link_legs(prev_leg_oid, next_leg_oid)
+
+        if queue0:
+            for action in queue0:
+                self.logger.debug("Forwarding queued action to previous leg: %s" % action["type"])
                 self.legs_by_oid[prev_leg_oid].do(action)
-        
-        
-    def insert_legs(self, my_oid, first_oid, second_oid, queued_actions=None):
-        prev_oid = self.targets_by_source[my_oid]
-        if not prev_oid:
-            raise Exception("No previous leg before insert leg %s!" % my_oid)
-            
-        self.targets_by_source[prev_oid] = first_oid
-        self.targets_by_source[first_oid] = prev_oid
 
-        self.targets_by_source[second_oid] = my_oid
-        self.targets_by_source[my_oid] = second_oid
+        if queue1:
+            for action in queue1:
+                self.logger.debug("Forwarding queued action to next leg: %s" % action["type"])
+                self.legs_by_oid[next_leg_oid].do(action)
 
-        if queued_actions:
-            for action in queued_actions:
-                self.logger.debug("Forwarding queued action %s" % action["type"])
-                self.legs_by_oid[first_oid].do(action)
-        
         
     def forward(self, leg_oid, action):
         target = self.targets_by_source.get(leg_oid)
@@ -239,7 +293,7 @@ class Ground(Loggable):
         self.remove_context(smleg, tmleg)
         
         if rmleg:
-            self.logger.debug("Disappeared media leg shadowed a similar leg, must create context.")
+            self.logger.debug("Disappeared media leg shadowed a similar leg, must add context.")
             self.add_context(rmleg, tmleg)
         
 

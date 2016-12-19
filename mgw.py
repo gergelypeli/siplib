@@ -41,7 +41,7 @@ class Leg(Thing):
         
         self.type = type
         self.forward_slot = zap.EventSlot()
-        self.logger.debug("Created %s leg" % self.type)
+        #self.logger.debug("Created %s leg" % self.type)
         
         
     def __del__(self):
@@ -324,7 +324,7 @@ class Context(Thing):
         self.manager = manager
         self.legs = []
         self.forward_plugs = []
-        self.logger.debug("Created context")
+        #self.logger.debug("Created context")
         
         
     def __del__(self):
@@ -429,6 +429,7 @@ class MediaGateway(Loggable):
             raise Error("Invalid context type %s!" % type)
             
         context.set_oid(self.oid.add("context").add(label))
+        self.logger.info("Created context %s" % context.oid)
         return self.add_thing(self.contexts_by_label, context)
 
 
@@ -459,6 +460,7 @@ class MediaGateway(Loggable):
             raise Error("Invalid leg type '%s'!" % type)
 
         leg.set_oid(self.oid.add("leg").add(label))
+        self.logger.info("Created leg %s" % leg.oid)
         return self.add_thing(self.legs_by_label, leg)
         
         

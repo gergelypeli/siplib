@@ -247,11 +247,23 @@ class Bridge(Party):
             raise Exception("Not two legs are anchored!")
         
         self.is_anchored = False
-        oids = [ leg.oid for leg in self.legs.values() ]
-        self.ground.legs_unanchored(oids[0], oids[1])
+        oli = max(self.legs.keys())
+        self.ground.legs_unanchored(self.legs[0].oid, self.legs[oli].oid)
 
+
+    def collapse_unanchored_legs(self, queue0, queue1):
         # Let other Party-s still use media once we're no longer present.
-        self.ground.collapse_legs(oids[0], oids[1])
+        if self.is_anchored:
+            raise Exception("Legs still anchored!")
+        
+        if len(self.legs) != 2:
+            raise Exception("Not two legs were unanchored!")
+        
+        oli = max(self.legs.keys())
+        self.ground.collapse_legs(self.legs[0].oid, self.legs[oli].oid, queue0, queue1)
+        
+        self.remove_leg(0)
+        self.remove_leg(oli)
 
 
     def may_finish(self):
@@ -307,9 +319,10 @@ class Bridge(Party):
             elif type == "hangup":
                 if self.is_anchored:
                     self.unanchor_legs()
-                    
-                self.remove_leg(0)
-                self.hangup_outgoing_legs()
+                    self.collapse_unanchored_legs([], [ action ])
+                else:
+                    self.hangup_outgoing_legs()
+                    self.remove_leg(0)
             elif self.is_anchored:
                 out_li = max(self.legs.keys())
                 self.legs[out_li].forward(action)
@@ -321,17 +334,20 @@ class Bridge(Party):
 
             # First the important actions
             if type == "reject":
-                if self.is_anchored:
-                    self.unanchor_legs()
-                    
                 # FIXME: we probably shouldn't just forward the last rejection status.
                 # But we should definitely reject here explicitly, because the may_finish
                 # cleanup rejects with 500 always.
-                self.remove_leg(li)
+                
+                if self.is_anchored:
+                    self.unanchor_legs()
+                    self.collapse_unanchored_legs([ action ], [])
+                else:
+                    self.remove_leg(li)
 
-                if len(self.legs) == 1:
-                    # And only that, so time to give up
-                    self.reject_incoming_leg(action["status"])
+                    if len(self.legs) == 1:
+                        # No more incoming legs, so time to give up
+                        self.legs[0].forward(action)
+                        self.remove_leg(0)
             elif type == "accept":
                 if self.is_anchored:
                     self.legs[0].forward(action)
@@ -341,11 +357,7 @@ class Bridge(Party):
             elif type == "hangup":
                 if self.is_anchored:
                     self.unanchor_legs()
-                    
-                    # Clean up properly in this case
-                    self.remove_leg(li)
-                    self.legs[0].forward(action)
-                    self.remove_leg(0)
+                    self.collapse_unanchored_legs([ action ], [])
                 else:
                     self.remove_leg(li)
                     # Somebody was lazy here, dialed out, even if an accept came in it
@@ -384,15 +396,7 @@ class Routing(Bridge):
         
         self.logger.debug("Routing anchored to outgoing leg %d." % li)
         self.hangup_outgoing_legs(except_li=li)
-        
-        self.ground.collapse_legs(self.legs[0].oid, self.legs[li].oid)
-        
-        # After collapsing we can still send actions out, but the responses will skip us
-        for action in self.queued_leg_actions[li]:
-            self.legs[0].forward(action)
-        
-        self.remove_leg(li)
-        self.remove_leg(0)
+        self.collapse_unanchored_legs(self.queued_leg_actions[li], [])
         
         # After having no legs, may_finish will terminate us as soon as it can
 
