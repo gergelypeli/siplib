@@ -4,7 +4,7 @@ from format import Status
 from transport import TransportManager
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
-from party import Bridge, RecordingBridge
+from party import Bridge, RecordingBridge, Routing
 from party_sip import SipEndpoint
 from ground import Ground
 from authority import Authority
@@ -105,9 +105,9 @@ class Switch(Loggable):
         
 
     def make_party(self, type):
-        # No default Routing class to make, must overload this method!
-        
-        if type == "sip":
+        if type == "routing":
+            return Routing()  # this does nothing useful, though
+        elif type == "sip":
             return SipEndpoint(self.make_dialog())
         elif type == "bridge":
             return Bridge()
@@ -117,17 +117,19 @@ class Switch(Loggable):
             raise Exception("Unknown party type '%s'!" % type)
 
 
-    def start_call(self, incoming_type):
+    def start_call(self, incoming_type, incoming_params=None):
         call_oid = self.oid.add("call", self.call_count)
+        call_info = dict(oid=call_oid, routing_count=0)
         self.call_count += 1
 
-        incoming_party = self.ground.make_party(incoming_type, call_oid, [ 0 ])
-        incoming_leg = incoming_party.start()
+        incoming_party = self.ground.make_party(incoming_type, incoming_params, call_info)
+        incoming_party.start()
+        incoming_party.set_call_info(call_info)
         
-        routing = self.ground.make_party("routing", call_oid, [])
-        routing_leg = routing.start()
-        
-        self.ground.link_legs(incoming_leg.oid, routing_leg.oid)
+        #routing = self.ground.make_party("routing", call_oid, [])
+        #routing_leg = routing.start()
+
+        #self.ground.link_legs(incoming_leg.oid, routing_leg.oid)
         
         return incoming_party
 

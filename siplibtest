@@ -68,6 +68,10 @@ MEDIA_HOST = "otthon"
 
 
 class TestEndpoint(PlannedEndpoint):
+    def identify(self, params):
+        return None
+        
+
     def wait_this_action(self, action_type):
         action = yield from self.wait_action()
         assert action and action["type"] == action_type
@@ -184,13 +188,21 @@ class CallerEndpoint(TestEndpoint):
         
         yield from self.wait_input("Press any key to dial out!")
         
-        ctx = {
+        src = {
+            'type': "sip",  # FIXME: we lie here for mkctx
             'from': CALLER_NAMEADDR,
             'to': Nameaddr(Uri(Addr(A_DOMAIN, None), SNOM_NUMBER))
         }
         
         offer = None  # FIXME: make one from CALLER_SDP!
-        self.leg.forward(dict(type="dial", ctx=ctx, session=offer))
+        action = dict(
+            type="dial",
+            call_info=self.get_call_info(),
+            src=src,
+            ctx={},
+            session=offer
+        )
+        self.leg.forward(action)
 
         while True:
             action = yield from self.wait_action()
@@ -304,10 +316,17 @@ class TestController(Controller):
         
         
 class TestLine(Bridge):
+    def identify(self, params):
+        self.addr = params["addr"]
+        self.username = params["username"]
+        
+        return "%s@%s" % (self.username, self.addr)
+        
+        
     def process_dial(self, action):
         ctx = action["ctx"]
-        self.addr = ctx.pop("line_addr", None)
-        self.username = ctx.pop("line_username", None)
+        #self.addr = ctx.pop("line_addr", None)
+        #self.username = ctx.pop("line_username", None)
         
         src_username = ctx["src_username"]
         src_addr = ctx["src_addr"]
@@ -317,7 +336,7 @@ class TestLine(Bridge):
         dst_addr = ctx["dst_addr"]
         
         if self.username != dst_username or self.addr != dst_addr:
-            self.dial("routing", action)
+            self.dial(action)
             return
             
         record_uri = Uri(dst_addr, dst_username)
@@ -328,6 +347,7 @@ class TestLine(Bridge):
             contact = contacts[0]
         
             dst = {
+                'type': "sip",
                 'uri': contact.uri,
                 'hop': contact.hop,
                 'from': Nameaddr(Uri(src_addr, src_username), src_name),
@@ -335,7 +355,8 @@ class TestLine(Bridge):
                 'route': []
             }
         
-            self.dial("sip", dict(action, ctx=dst))
+            #self.dial("sip", dict(action, ctx=dst))
+            self.dial(action, **dst)
         else:
             self.logger.debug("Has %d registered SIP contacts: %s" % (len(contacts), record_uri))
             self.reject_incoming_leg(Status(404))
@@ -396,16 +417,18 @@ class TestSwitch(Switch):
 
 
 
-def mkctx(ctx):
-    ctx["received"] = True
+def mkctx(src):
+    if src["type"] != "sip":
+        raise Exception("Uh-oh, not a SIP-like caller?")
     
-    ctx["src_addr"] = ctx["from"].uri.addr
-    ctx["src_username"] = ctx["from"].uri.username
-    ctx["src_name"] = ctx["from"].name
-
-    ctx["dst_addr"] = ctx["to"].uri.addr
-    ctx["dst_username"] = ctx["to"].uri.username
-    ctx["dst_name"] = ctx["to"].name
+    return dict(
+        src_addr=src["from"].uri.addr,
+        src_username=src["from"].uri.username,
+        src_name=src["from"].name,
+        dst_addr=src["to"].uri.addr,
+        dst_username=src["to"].uri.username,
+        dst_name=src["to"].name
+    )
     
 
 class SwitchA(TestSwitch):
@@ -413,19 +436,13 @@ class SwitchA(TestSwitch):
         def process_dial(self, action):
             ctx = action["ctx"]
             
-            if "received" not in ctx:
-                mkctx(ctx)
+            if not ctx:
+                ctx.update(mkctx(action["src"]))
                 
-                ctx["line_addr"] = ctx["from"].uri.addr
-                ctx["line_username"] = ctx["from"].uri.username
-            
-                self.dial("line", action)
+                self.dial(action, "line", addr=ctx["src_addr"], username=ctx["src_username"])
                 return
 
-            ctx["line_addr"] = ctx["to"].uri.addr
-            ctx["line_username"] = ctx["to"].uri.username
-
-            self.dial("line", action)
+            self.dial(action, "line", addr=ctx["dst_addr"], username=ctx["dst_username"])
             
 
     def __init__(self, *args):
@@ -478,13 +495,10 @@ class SwitchB(TestSwitch):
             li, action = yield from self.wait_leg_action()
             ctx = action["ctx"]
             
-            if "received" not in ctx:
-                mkctx(ctx)
-                
-                ctx["line_addr"] = ctx["from"].uri.addr
-                ctx["line_username"] = ctx["from"].uri.username
-            
-                self.dial("line", action)
+            if not ctx:
+                ctx.update(mkctx(action["src"]))
+
+                self.dial(action, "line", addr=ctx["src_addr"], username=ctx["src_username"])
                 return
 
             src_username = ctx["src_username"]
@@ -496,13 +510,14 @@ class SwitchB(TestSwitch):
             
             if dst_username == CALLEE_NUMBER:
                 ctx["dst_username"] = "444"
-                self.dial("record", action)
+                self.dial(action, "record")
             elif dst_username == "444":
-                self.dial("unreachable", action)
-                self.dial("ringing", action)
-                self.dial("callee", action)
+                self.dial(action, "unreachable")
+                self.dial(action, "ringing")
+                self.dial(action, "callee")
             elif dst_username == SNOM_NUMBER:
                 dst = {
+                    'type': "sip",
                     'uri': Uri(A_ADDR, SNOM_NUMBER),
                     #'hop': contact.hop,
                     'from': Nameaddr(Uri(src_addr, src_username), src_name),
@@ -513,7 +528,8 @@ class SwitchB(TestSwitch):
                 #action2 = deepcopy(action)
                 #action2["ctx"]["uri"] = Uri(A_ADDR, SNOM_NUMBER)
                 #action2["ctx"]["uri"] = Uri(A_ADDR, SNOM_NUMBER, params=dict(transport="TCP"))
-                self.dial("sip", dict(action, ctx=dst))
+                #self.dial("sip", dict(action, ctx=dst))
+                self.dial(action, **dst)
             
             
     def __init__(self, *args):

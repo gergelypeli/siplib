@@ -47,6 +47,12 @@ class SipEndpoint(Endpoint):
     def get_dialog(self):
         return self.dialog
         
+        
+    def identify(self, params):
+        self.dst = params
+        
+        return self.dialog.get_local_tag()
+        
 
     def change_state(self, new_state):
         self.logger.debug("Changing state %s => %s" % (self.state, new_state))
@@ -225,7 +231,7 @@ class SipEndpoint(Endpoint):
 
 
     def hop_selected(self, hop, action):
-        action["auto_hop"] = hop  # don't alter the ctx, just to be sure
+        self.dst["hop"] = hop
         self.logger.debug("Retrying dial with resolved hop")
         self.do(action)
         
@@ -241,9 +247,8 @@ class SipEndpoint(Endpoint):
         
         if self.state in (self.DOWN, self.SELECTING_HOP):
             if type == "dial":
-                ctx = action["ctx"]
-                fr = ctx.get("from")
-                to = ctx.get("to")
+                fr = self.dst.get("from")
+                to = self.dst.get("to")
                 
                 # These are mandatory
                 if not fr:
@@ -252,9 +257,9 @@ class SipEndpoint(Endpoint):
                     self.logger.error("No To field for outgoing SIP leg!")
                     
                 # Explicit URI is not needed if the To is fine
-                uri = ctx.get("uri") or to.uri
-                route = ctx.get("route")
-                hop = ctx.get("hop") or action.get("auto_hop")
+                uri = self.dst.get("uri") or to.uri
+                route = self.dst.get("route")
+                hop = self.dst.get("hop")
                 
                 # Hop may be calculated here, but it takes another round
                 if not hop:
@@ -380,14 +385,8 @@ class SipEndpoint(Endpoint):
         
         if self.state == self.DOWN:
             if not is_response and method == "INVITE":
-                ctx = {
-                    "uri": msg["uri"],
-                    "from": msg["from"],
-                    "to": msg["to"]
-                }
-
-                #src = dict(msg, type="sip")
-                #ctx = dict(src=src)
+                src = dict(msg, type="sip")
+                ctx = {}
                 
                 self.make_invite(False)
                 msg, sdp, is_answer = self.invite.incoming(msg)
@@ -395,7 +394,16 @@ class SipEndpoint(Endpoint):
                 options = set("100rel") if self.invite.is_rpr_supported() else set()
                 
                 self.change_state(self.DIALING_IN)
-                self.forward(dict(type="dial", ctx=ctx, session=session, options=options))
+                
+                action=dict(
+                    type="dial",
+                    call_info=self.get_call_info(),
+                    src=src,
+                    ctx=ctx,
+                    session=session,
+                    options=options
+                )
+                self.forward(action)
                 return
                 
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):

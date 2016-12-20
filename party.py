@@ -1,6 +1,6 @@
 from weakref import proxy
 
-from ground import GroundDweller, Leg
+from ground import GroundDweller
 from format import Status
 import zap
 
@@ -10,22 +10,30 @@ class Party(GroundDweller):
     def __init__(self):
         GroundDweller.__init__(self)
         
-        self.call_oid = None
-        self.path = None
+        #self.call_oid = None
+        #self.path = None
         self.finished_slot = zap.Slot()
+
+
+    def set_call_info(self, call_info):
+        self.call_info = call_info
+        
+
+    def get_call_info(self):
+        return self.call_info
+
+
+    def identify(self, params):
+        raise NotImplementedError()
         
             
-    def set_path(self, call_oid, path):
-        self.call_oid = call_oid
-        self.path = path
+    #def set_path(self, call_oid, path):
+    #    self.call_oid = call_oid
+    #    self.path = path
 
 
     def make_leg(self, li):
-        leg = Leg(proxy(self), li)
-        
-        self.ground.setup_leg(leg, self.oid.add("leg", li))
-        
-        return leg
+        return self.ground.make_leg(proxy(self), li)
         
         
     def make_media_leg(self, type):
@@ -82,7 +90,6 @@ class Endpoint(Party):
 
     def do_slot(self, li, action):
         self.do(action)
-
 
 
 
@@ -171,20 +178,26 @@ class Bridge(Party):
         self.queued_leg_actions[li].append(action)
 
 
-    def dial(self, type, action):
-        if action["type"] != "dial":
-            raise Exception("Dial action is not a dial: %s" % action["type"])
+    def dial(self, action, type=None, **kwargs):
+        dst = dict(type=type, **kwargs) if type else None
+        action = dict(action, dst=dst)
+        self.add_leg().forward(action)
 
-        self.logger.debug("Dialing out to: %s" % (type,))
-        
-        leg = self.add_leg()
-        li = leg.number
-        
-        party = self.ground.make_party(type, self.call_oid, self.path + [ li ])
-        party_leg = party.start()
-        self.ground.link_legs(leg.oid, party_leg.oid)
 
-        leg.forward(action)
+    #def dial(self, type, action):
+    #    if action["type"] != "dial":
+    #        raise Exception("Dial action is not a dial: %s" % action["type"])
+
+    #    self.logger.debug("Dialing out to: %s" % (type,))
+        
+    #    leg = self.add_leg()
+    #    li = leg.number
+        
+    #    party = self.ground.make_party(type, self.call_oid, self.path + [ li ])
+    #    party_leg = party.start()
+    #    self.ground.link_legs(leg.oid, party_leg.oid)
+
+    #    leg.forward(action)
 
 
     def hangup_outgoing_legs(self, except_li=None):
@@ -389,6 +402,13 @@ class Bridge(Party):
 
 
 class Routing(Bridge):
+    def identify(self, params):
+        identity = "%s" % self.call_info["routing_count"]
+        self.call_info["routing_count"] += 1
+        
+        return identity
+        
+        
     def anchor_outgoing_leg(self, li):
         # We overload this method completely. Skip the anchoring thing in Bridge,
         # because we collapse instead of unanchoring. And the queued actions should
@@ -448,9 +468,9 @@ class PlannedRouting(zap.Planned, Routing):
         self.send_event(li, action)
 
 
-class SimpleBridge(Bridge):
-    def process_dial(self, action):
-        self.dial("routing", action)
+#class SimpleBridge(Bridge):
+#    def process_dial(self, action):
+#        self.dial("routing", action)
         
         
 #    def __init__(self):
@@ -490,7 +510,7 @@ class SimpleBridge(Bridge):
 #            self.may_finish()
 
     
-class RecordingBridge(SimpleBridge):
+class RecordingBridge(Bridge):
     def hack_media(self, li, answer):
         old = len(self.legs[0].media_legs)
         new = len(answer["channels"])
@@ -531,4 +551,4 @@ class RecordingBridge(SimpleBridge):
         if session and session["is_answer"] and "channels" in session:
             self.hack_media(li, session)
         
-        SimpleBridge.do_slot(self, li, action)
+        Bridge.do_slot(self, li, action)

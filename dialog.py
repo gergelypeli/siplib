@@ -38,6 +38,8 @@ class Dialog(Loggable):
 
         self.dialog_manager = dialog_manager
         self.report_slot = zap.EventSlot()
+
+        self.local_tag = generate_tag()
     
         # Things in the From/To fields
         self.local_nameaddr = None
@@ -60,11 +62,11 @@ class Dialog(Loggable):
 
 
     def get_local_tag(self):
-        return self.local_nameaddr.params.get("tag") if self.local_nameaddr else None
+        return self.local_tag
         
         
     def setup_incoming(self, params):
-        self.local_nameaddr = params["to"].tagged(generate_tag())
+        self.local_nameaddr = params["to"].tagged(self.local_tag)
         self.remote_nameaddr = params["from"]
         self.my_contact = Nameaddr(Uri(params["hop"].local_addr))
         self.call_id = params["call_id"]
@@ -77,7 +79,7 @@ class Dialog(Loggable):
         
         
     def setup_outgoing(self, request_uri, from_nameaddr, to_nameaddr, route, hop):
-        self.local_nameaddr = from_nameaddr.tagged(generate_tag())
+        self.local_nameaddr = from_nameaddr.tagged(self.local_tag)
         self.remote_nameaddr = to_nameaddr
         self.my_contact = Nameaddr(Uri(hop.local_addr))
         self.call_id = generate_call_id()

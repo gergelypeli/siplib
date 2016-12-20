@@ -15,7 +15,7 @@ class Ground(Loggable):
         self.mgc = mgc
         
         self.legs_by_oid = WeakValueDictionary()
-        self.targets_by_source = {}
+        self.targets_by_source = {}  # TODO: rename!
         self.media_contexts_by_mlid = {}
         self.context_count = 0
         self.parties_by_oid = {}
@@ -165,14 +165,25 @@ class Ground(Loggable):
         target = self.targets_by_source.get(leg_oid)
         
         if target:
-            leg = self.legs_by_oid.get(target)
+            leg = self.legs_by_oid[target]
+            self.logger.debug("Forwarding %s from %s to %s" % (action["type"], leg_oid, target))
+            leg.do(action)
+            return
+        elif action["type"] == "dial":
+            dst = action.pop("dst", None)
+            call_info = action.get("call_info")
             
-            if leg:
-                self.logger.debug("Forwarding %s from %s to %s" % (action["type"], leg_oid, target))
-                leg.do(action)
-                return
+            if not call_info:
+                raise Exception("Missing call_info from dial action!")
+            
+            type = dst.pop("type") if dst else "routing"
+            party = self.make_party(type, dst, call_info)
 
-        self.logger.error("Couldn't forward %s from %s!" % (action["type"], leg_oid))
+            party_leg = party.start()
+            self.link_legs(leg_oid, party_leg.oid)
+            party_leg.do(action)
+        else:
+            self.logger.error("Couldn't forward %s from %s!" % (action["type"], leg_oid))
 
 
     def legs_anchored(self, leg_oid0, leg_oid1):
@@ -297,27 +308,32 @@ class Ground(Loggable):
             self.add_context(rmleg, tmleg)
         
 
-    def setup_leg(self, leg, oid):
-        leg.set_oid(oid)
+    def make_leg(self, party, li):
+        leg = Leg(party, li)
+        leg.set_oid(party.oid.add("leg", li))
         leg.set_ground(proxy(self))
-        
         self.add_leg(leg)
         
-
-    def make_party(self, type, call_oid, path):
+        return leg
+        
+        
+    def make_party(self, type, params, call_info):
         party = self.switch.make_party(type)
+        party.set_call_info(call_info)
+        identity = party.identify(params)
+        oid = call_info["oid"].add(type, identity)
         
-        party.set_path(call_oid, path)
+        #party.set_path(call_oid, path)
         
-        pathstr = ".".join(str(x) for x in path) if path else None
-        oid = call_oid.add(type, pathstr)
+        #pathstr = ".".join(str(x) for x in path) if path else None
+        #oid = call_oid.add(type, pathstr)
         
         if oid in self.parties_by_oid:
             raise Exception("Duplicate party oid: %s" % oid)
             
         party.set_oid(oid)
-
         self.parties_by_oid[oid] = party
+        
         party.set_ground(proxy(self))
         party.finished_slot.plug(self.party_finished, oid=oid)
         
@@ -328,7 +344,7 @@ class Ground(Loggable):
         self.parties_by_oid.pop(oid)
             
         if not self.parties_by_oid:
-            self.logger.info("Back to empty state.")
+            self.logger.info("No more parties left.")
         
 
     def select_hop_slot(self, next_uri):
