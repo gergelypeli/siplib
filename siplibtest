@@ -1,5 +1,6 @@
 #! /usr/bin/python3
 
+import os
 import logging
 import logging.config
 from copy import deepcopy
@@ -38,6 +39,7 @@ CALLEE_NAMEADDR = Nameaddr(Uri(Addr(B_DOMAIN, None), "callee"), "Callee")
 A_CRED = ("A_AUTHNAME", "A_HA1")
 B_CRED = ("B_AUTHNAME", "B_HA1")
 
+SNOM_WEB = Addr("192.168.1.7", 80)
 SNOM_ADDR = Addr("192.168.1.7", 2048)
 SNOM_NUMBER = "phone"
 SNOM_CRED = ("phone", "38450ead4036feb352c45462d8008511")  # md5(phone:a.switch:secret)
@@ -337,7 +339,6 @@ class TestLine(Bridge):
         else:
             self.logger.debug("Has %d registered SIP contacts: %s" % (len(contacts), record_uri))
             self.reject_incoming_leg(Status(404))
-            self.may_finish()
     
 
 class TestSwitch(Switch):
@@ -386,6 +387,13 @@ class TestSwitch(Switch):
             return TestLine()
         else:
             return Switch.make_party(self, type)
+
+
+    def reregister_snom(self, addr, line):
+        post_data = "REREGISTER%3A1=Re-Register"
+        url = "http://%s/line_login.htm?l=%d" % (addr, line)
+        os.system("wget --output-document=/dev/null --post-data='%s' '%s'" % (post_data, url))
+
 
 
 def mkctx(ctx):
@@ -518,6 +526,7 @@ class SwitchB(TestSwitch):
         self.account_manager.set_our_credentials(*B_CRED)
 
         if TEST == TEST_DIALOUT:
+            zap.time_slot(1).plug(self.reregister_snom, addr=SNOM_WEB, line=1)
             zap.time_slot(3).plug(self.test_dialing)
             
         if TEST == TEST_DIALIN:

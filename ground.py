@@ -255,7 +255,7 @@ class Ground(Loggable):
         mc = self.mgc.make_media_leg("context")  # FIXME!
         mc.set_oid(mcid)
         self.mgc.bind_media_leg(mc, mgw_sid)  # FIXME!
-        mc.set_leg_oids([ smleg.oid, tmleg.oid ])
+        mc.set_leg_labels([ smleg.label, tmleg.label ])
         
         self.media_contexts_by_mlid[smleg.oid] = mc
         self.media_contexts_by_mlid[tmleg.oid] = mc

@@ -24,7 +24,7 @@ class Thing(Loggable):
 
     def report(self, target, params, response_tag=None):
         msgid = (self.owner_sid, target)
-        self.mgw.report(msgid, dict(params, id=self.label), response_tag=response_tag)
+        self.mgw.report(msgid, dict(params, label=self.label), response_tag=response_tag)
         
         
     def modify(self, params):
@@ -428,7 +428,7 @@ class MediaGateway(Loggable):
         else:
             raise Error("Invalid context type %s!" % type)
             
-        context.set_oid(self.oid.add("context").add(label))
+        context.set_oid(self.oid.add("context", label))
         self.logger.info("Created context %s" % context.oid)
         return self.add_thing(self.contexts_by_label, context)
 
@@ -459,7 +459,7 @@ class MediaGateway(Loggable):
         else:
             raise Error("Invalid leg type '%s'!" % type)
 
-        leg.set_oid(self.oid.add("leg").add(label))
+        leg.set_oid(self.oid.add("leg", label))
         self.logger.info("Created leg %s" % leg.oid)
         return self.add_thing(self.legs_by_label, leg)
         
@@ -484,7 +484,7 @@ class MediaGateway(Loggable):
     def process_request(self, target, msgid, params):
         try:
             owner_sid, seq = msgid
-            label = params["id"]
+            label = params["label"]
             
             if target == "create_context":
                 self.create_context(label, owner_sid, params["type"])

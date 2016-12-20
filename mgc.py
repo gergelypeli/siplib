@@ -5,6 +5,11 @@ from util import vacuum, Loggable
 import zap
 
 
+def label_from_oid(oid):
+    return "/".join(part.split("=")[1] if "=" in part else "" for part in oid.split(","))
+    #return oid.replace("=", ":").replace(",", ";")
+
+
 class MediaThing(Loggable):
     def __init__(self):
         Loggable.__init__(self)
@@ -12,18 +17,21 @@ class MediaThing(Loggable):
         self.mgc = None
         self.sid = None
         self.is_created = False
+        self.label = None
 
 
     def bind(self, mgc, sid):
-        # Should be called after set_oid
+        # Must be called after set_oid
         self.mgc = mgc
         self.sid = sid
+        self.label = label_from_oid(self.oid)
 
-        self.mgc.register_thing(self)
+        self.mgc.register_thing(self.label, self)
         
 
     def send_request(self, target, params, drop_response=False):
-        response_tag = (self.oid, drop_response)
+        response_tag = (self.label, drop_response)
+        params["label"] = self.label
         self.mgc.send_message((self.sid, target), params, response_tag=response_tag)
 
 
@@ -37,7 +45,7 @@ class MediaThing(Loggable):
 
     def process_response(self, response_tag, msgid, params):
         if params == "ok":
-            self.logger.debug("Huh, MGW message %s/%s was successful." % msgid)
+            pass  #self.logger.debug("Huh, MGW message %s/%s was successful." % msgid)
         else:
             self.logger.debug("Oops, MGW message %s/%s failed!" % msgid)
 
@@ -54,22 +62,20 @@ class MediaLeg(MediaThing):
     def refresh(self, params):
         if not self.is_created:
             self.is_created = True
-            params = dict(params, id=self.oid, type=self.type)
+            params = dict(params, type=self.type)
             self.send_request("create_leg", params)
         else:
-            params = dict(params, id=self.oid)
             self.send_request("modify_leg", params)
         
         
     def delete(self):
         if self.is_created:
             self.is_created = False  # Call uses this to ignore such MediaLeg-s
-            params = dict(id=self.oid)
+            params = {}
             self.send_request("delete_leg", params, drop_response=True)
 
 
     def notify(self, target, params):
-        params = dict(params, id=self.oid)
         self.send_request(target, params)
             
 
@@ -85,7 +91,7 @@ class PassMediaLeg(MediaLeg):
         
         
     def refresh(self, params):
-        MediaLeg.refresh(self, dict(params, other=self.other.oid))
+        MediaLeg.refresh(self, dict(params, other=self.other.label))
         
 
 class EchoMediaLeg(MediaLeg):
@@ -125,7 +131,7 @@ class NetMediaLeg(MediaLeg):
     
     def process_request(self, target, msgid, params):
         if target == "tone":
-            self.logger.debug("Yay, just got a tone %s!" % (params,))
+            self.logger.debug("Yay, just detected a tone %s!" % (params,))
             self.send_response(msgid, "OK")
             self.event_slot.zap("tone", params)
         else:
@@ -137,23 +143,18 @@ class MediaContext(MediaThing):
     def __init__(self):
         MediaThing.__init__(self)
         
-        self.leg_oids = []
+        self.leg_labels = []
         
 
-    def set_leg_oids(self, leg_oids):
-        if leg_oids != self.leg_oids:
-            self.leg_oids = leg_oids
-            self.refresh()
-        else:
-            self.logger.debug("Context legs not changed.")
+    def set_leg_labels(self, leg_labels):
+        self.leg_labels = leg_labels
+        self.refresh()
 
         
     def refresh(self):
-        # TODO: implement leg deletion
         params = {
-            'id': self.oid,
             'type': 'proxy',
-            'legs': self.leg_oids
+            'legs': self.leg_labels
         }
         
         if not self.is_created:
@@ -169,8 +170,7 @@ class MediaContext(MediaThing):
         if self.is_created:
             self.is_created = False
             self.logger.debug("Deleting context")
-            params = dict(id=self.oid)
-            self.send_request("delete_context", params, drop_response=True)
+            self.send_request("delete_context", {}, drop_response=True)
 
 
 class Controller(Loggable):
@@ -179,7 +179,7 @@ class Controller(Loggable):
 
         self.mgw_sid = None  # FIXME: Msgp can handle multiple connections already!
         
-        self.things_by_oid = WeakValueDictionary()
+        self.things_by_label = WeakValueDictionary()
         self.msgp = MsgpPeer(None)
         self.msgp.request_slot.plug(self.process_request)
         self.msgp.response_slot.plug(self.process_response)
@@ -201,8 +201,8 @@ class Controller(Loggable):
         self.msgp.add_remote_addr(addr)
     
     
-    def register_thing(self, thing):
-        self.things_by_oid[thing.oid] = thing
+    def register_thing(self, label, thing):
+        self.things_by_label[label] = thing
         
     
     def send_message(self, msgid, params, response_tag):
@@ -210,29 +210,29 @@ class Controller(Loggable):
         
         
     def process_request(self, target, msgid, params):
-        oid = params.pop('id', None)
+        label = params.pop('label', None)
         
-        if not oid:
-            self.logger.error("Request from MGW without id, can't process!")
+        if not label:
+            self.logger.error("Request from MGW without label, can't process!")
         else:
-            self.logger.debug("Request %s from MGW to %s" % (target, oid))
-            thing = self.things_by_oid.get(oid)
+            self.logger.debug("Request %s from MGW to %s" % (target, label))
+            thing = self.things_by_label.get(label)
             
             if thing:
                 thing.process_request(target, msgid, params)
             else:
-                self.logger.warning("No thing for this request!")
+                self.logger.warning("No thing for this %s request!" % target)
 
 
     def process_response(self, response_tag, msgid, params):
-        oid, drop_response = response_tag
-        thing = self.things_by_oid.get(oid)
+        label, drop_response = response_tag
+        thing = self.things_by_label.get(label)
         
         if not thing:
             if not drop_response:
-                self.logger.error("Response from MGW to unknown entity: %s" % oid)
+                self.logger.error("Response from MGW to unknown entity: %s" % label)
         else:
-            self.logger.debug("Response from MGW to %s" % oid)
+            self.logger.debug("Response from MGW to %s" % label)
             thing.process_response(None, msgid, params)
         
         
