@@ -47,7 +47,7 @@ class Record(object):
     def add_contact(self, uri, hop, expiration):
         self.contacts = [ contact for contact in self.contacts if contact.uri != uri ]
         self.contacts.append(RecordContact(uri, hop, expiration))
-        self.record_manager.logger.debug("Registered %s from %s via %s until %s." % (self.record_uri, uri, hop, expiration))
+        self.record_manager.logger.info("Registered %s from %s via %s until %s." % (self.record_uri, uri, hop, expiration))
         
 
     def get_contacts(self):

@@ -76,48 +76,61 @@ class Loggable(object):
 
 
 def setup_logging():
-    class OidLogFilter(logging.Filter):
-        def filter(self, record):
-            if not hasattr(record, 'oid'):
-                record.oid = record.name
+    MARKS_BY_LEVEL = {
+        logging.DEBUG:    ' ',
+        logging.INFO:     ':',
+        logging.WARNING:  '?',
+        logging.ERROR:    '!',
+        logging.CRITICAL: '@'
+    }
+    
+    def default_filter(record):
+        if not hasattr(record, 'oid'):
+            record.oid = record.name
+        
+        record.mark = MARKS_BY_LEVEL.get(record.levelno, '#')
+        
+        return True
+
+    def console_filter(record):
+        if record.levelno < logging.INFO:
+            return False
             
-            record.mark = {
-                logging.DEBUG:    ' ',
-                logging.INFO:     ':',
-                logging.WARNING:  '?',
-                logging.ERROR:    '!',
-                logging.CRITICAL: '@'
-            }.get(record.levelno, '#')
-            
-            return True
+        return True
     
     logging.config.dictConfig({
         'version': 1,
         'disable_existing_loggers': False,
         'formatters': {
-            'default': {
+            'console': {
                 #'format': '%(asctime)s.%(msecs)03d  %(name)s  %(levelname)s  %(message)s',
-                #'format': '%(name)-10s | %(message)s',
-                #'format': '%(oid)s | %(message)s',
                 'format': '%(mark)s | %(oid)s | %(message)s',
                 'datefmt': '%F %T'
+            },
+            'file': {
+                'format': '%(asctime)s.%(msecs)06d | %(mark)s | %(oid)s | %(message)s',
+                'datefmt': '%T'
             }
+
         },
         'filters': {
-            'oidfilter': {
-                '()': OidLogFilter
+            'default': {
+                '()': lambda: default_filter
+            },
+            'console': {
+                '()': lambda: console_filter
             }
         },
         'handlers': {
             'console': {
                 'class': 'logging.StreamHandler',
-                'formatter': 'default',
-                'filters': [ 'oidfilter' ]
+                'formatter': 'console',
+                'filters': [ 'default', 'console' ]
             },
             'file': {
                 'class': 'logging.FileHandler',
-                'formatter': 'default',
-                'filters': [ 'oidfilter' ],
+                'formatter': 'file',
+                'filters': [ 'default' ],
                 'filename': 'siplibtest.log',
                 'mode': 'w'
             }
@@ -126,9 +139,6 @@ def setup_logging():
             '': {
                 'level': logging.DEBUG,
                 'handlers': [ 'console', 'file' ]
-            },
-            'msgp': {
-                'level': logging.DEBUG
             }
         }
     })

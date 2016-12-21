@@ -200,7 +200,7 @@ class TransportManager(Loggable):
         hop = params["hop"]
         message = print_structured_message(params)
         #packet = sip.encode()
-        self.logger.info("Sending via %s\n%s" % (hop, indented(message.print())))
+        self.logger.debug("Sending via %s\n%s" % (hop, indented(message.print())))
         
         if hop.transport == "UDP":
             raddr = hop.remote_addr
@@ -231,7 +231,7 @@ class TransportManager(Loggable):
         if raddr:
             hop = hop._replace(remote_addr=raddr)
             
-        self.logger.info("Receiving via %s\n%s" % (hop, indented(message.print())))
+        self.logger.debug("Receiving via %s\n%s" % (hop, indented(message.print())))
         
         #sip = packet.decode()
         params = parse_structured_message(message)

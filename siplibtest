@@ -413,7 +413,7 @@ class TestSwitch(Switch):
     def reregister_snom(self, addr, line):
         post_data = "REREGISTER%3A1=Re-Register"
         url = "http://%s/line_login.htm?l=%d" % (addr, line)
-        os.system("wget --output-document=/dev/null --post-data='%s' '%s'" % (post_data, url))
+        os.system("wget -q --output-document=/dev/null --post-data='%s' '%s'" % (post_data, url))
 
 
 
