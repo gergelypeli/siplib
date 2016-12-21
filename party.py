@@ -307,7 +307,8 @@ class Bridge(Party):
         
         
     def process_dial(self, action):
-        self.reject_incoming_leg(Status(604))
+        # Just pass it to the next routing
+        self.dial(action)
 
 
     def process_leg_action(self, li, action):
@@ -408,6 +409,10 @@ class Routing(Bridge):
         
         return identity
         
+
+    def process_dial(self, action):
+        self.reject_incoming_leg(Status(604))
+
         
     def anchor_outgoing_leg(self, li):
         # We overload this method completely. Skip the anchoring thing in Bridge,
@@ -511,6 +516,10 @@ class PlannedRouting(zap.Planned, Routing):
 
     
 class RecordingBridge(Bridge):
+    def identify(self, params):
+        return params["id"]
+        
+        
     def hack_media(self, li, answer):
         old = len(self.legs[0].media_legs)
         new = len(answer["channels"])

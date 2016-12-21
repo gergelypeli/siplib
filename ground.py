@@ -322,6 +322,7 @@ class Ground(Loggable):
         party.set_call_info(call_info)
         identity = party.identify(params)
         oid = call_info["oid"].add(type, identity)
+        self.logger.info("Made party %s" % oid)
         
         #party.set_path(call_oid, path)
         

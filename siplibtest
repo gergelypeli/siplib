@@ -211,7 +211,7 @@ class CallerEndpoint(TestEndpoint):
                 self.logger.error("Oops, we got rejected!")
                 return
             elif action["type"] == "accept":
-                self.logger.error("Yay, accepted!")
+                self.logger.info("Yay, accepted!")
                 break
             else:
                 self.logger.error("Hm, we got: %s!" % action["type"])
@@ -498,7 +498,8 @@ class SwitchB(TestSwitch):
             if not ctx:
                 ctx.update(mkctx(action["src"]))
 
-                self.dial(action, "line", addr=ctx["src_addr"], username=ctx["src_username"])
+                #self.dial(action, "line", addr=ctx["src_addr"], username=ctx["src_username"])
+                self.dial(action, "record", id="rekord")
                 return
 
             src_username = ctx["src_username"]
