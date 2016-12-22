@@ -119,7 +119,7 @@ class Switch(Loggable):
 
     def start_call(self, incoming_type, incoming_params=None):
         call_oid = self.oid.add("call", self.call_count)
-        call_info = dict(oid=call_oid, routing_count=0)
+        call_info = dict(number=self.call_count, oid=call_oid, routing_count=0)
         self.call_count += 1
 
         incoming_party = self.ground.make_party(incoming_type, incoming_params, call_info)

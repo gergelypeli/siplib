@@ -23,7 +23,7 @@ import resolver
 
 TEST_DIALIN = 1
 TEST_DIALOUT = 2
-TEST = TEST_DIALOUT
+TEST = TEST_DIALIN
 
 HOST = "otthon"
 A_ADDR = Addr(HOST, 5060)
@@ -258,11 +258,32 @@ class BusylampEventSource(DialogEventSource):
     def identify(self, params):
         self.set_entity(params["entity"])
 
+        self.calls_by_number = {}
+        #self.call_state = None
+        
         self.state = 0
-        zap.time_slot(30, True).plug(self.fake)
+        #zap.time_slot(30, True).plug(self.fake)
 
         return self.entity
         
+        
+    def update(self, call_number, is_outgoing, is_confirmed):
+        if is_outgoing is None and is_confirmed is None:
+            self.calls_by_number.pop(call_number)
+        else:
+            self.calls_by_number[call_number] = dict(is_outgoing=is_outgoing, is_confirmed=is_confirmed)
+            
+        self.logger.info("%s: %s" % (self.entity, self.calls_by_number))
+        
+        #if (False, False) in self.calls_by_number.values():
+        #    self.call_state = False
+        #elif self.calls_by_number:
+        #    self.call_state = True
+        #else:
+        #    self.call_state = None
+            
+        self.notify_all()
+            
         
     def fake(self):
         self.notify_all()
@@ -270,12 +291,14 @@ class BusylampEventSource(DialogEventSource):
         
         
     def get_dialog_state(self):
-        if self.state % 3 == 0:
-            return dict()
-        elif self.state % 3 == 1:
-            return dict(one=dict(is_outgoing=False, is_confirmed=False))
-        else:
-            return dict(one=dict(is_outgoing=False, is_confirmed=True))
+        return self.calls_by_number
+        
+        #if self.state % 3 == 0:
+        #    return dict()
+        #elif self.state % 3 == 1:
+        #    return dict(one=dict(is_outgoing=False, is_confirmed=False))
+        #else:
+        #    return dict(one=dict(is_outgoing=False, is_confirmed=True))
             
 
 class TestSubscriptionManager(SubscriptionManager):
@@ -321,10 +344,20 @@ class TestController(Controller):
         
 class TestLine(Bridge):
     def identify(self, params):
+        self.is_outgoing = None
+        self.is_confirmed = None
+        
         self.addr = params["addr"]
         self.username = params["username"]
         
         return "%s@%s" % (self.username, self.addr)
+        
+        
+    def update_busylamp_state(self):
+        es = self.ground.switch.subscription_manager.get_event_source("busylamp", self.username)
+        
+        if es:
+            es.update(self.call_info["number"], self.is_outgoing, self.is_confirmed)
         
         
     def process_dial(self, action):
@@ -340,9 +373,16 @@ class TestLine(Bridge):
         dst_addr = ctx["dst_addr"]
         
         if self.username != dst_username or self.addr != dst_addr:
+            self.is_outgoing = True
+            self.is_confirmed = False
+            self.update_busylamp_state()
             self.dial(action)
             return
             
+        self.is_outgoing = False
+        self.is_confirmed = False
+        self.update_busylamp_state()
+        
         record_uri = Uri(dst_addr, dst_username)
         self.logger.debug("Checking registered SIP contact: %s" % (record_uri,))
         contacts = self.ground.switch.record_manager.lookup_contacts(record_uri)
@@ -364,6 +404,20 @@ class TestLine(Bridge):
         else:
             self.logger.debug("Has %d registered SIP contacts: %s" % (len(contacts), record_uri))
             self.reject_incoming_leg(Status(404))
+            
+            
+    def do_slot(self, li, action):
+        type = action["type"]
+        
+        if type == "accept":
+            self.is_confirmed = True
+            self.update_busylamp_state()
+        elif type in ("reject", "hangup"):
+            self.is_outgoing = None
+            self.is_confirmed = None
+            self.update_busylamp_state()
+            
+        return Bridge.do_slot(self, li, action)
     
 
 class TestSwitch(Switch):
@@ -472,6 +526,7 @@ class SwitchA(TestSwitch):
         
         # Add a line state
         self.subscription_manager.add_event_source("busylamp", dict(entity="201"))
+        self.subscription_manager.add_event_source("busylamp", dict(entity="phone"))
 
         #if TEST == TEST_DIALOUT:
         #    zap.time_slot(2).plug(self.test_snoming)

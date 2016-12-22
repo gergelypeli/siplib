@@ -294,3 +294,8 @@ class SubscriptionManager(Loggable):
         dialog = self.switch.make_dialog()
         es.add_subscription(dialog)
         dialog.recv_request(params)
+
+
+    def get_event_source(self, type, id):
+        key = (type, id)
+        return self.event_sources_by_key.get(key)
