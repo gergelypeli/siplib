@@ -154,7 +154,12 @@ class InviteClientState(InviteState):
 
     def make_prack(self, rpr, sdp=None):
         rack = Rack(rpr["rseq"], rpr["cseq"], rpr["method"])
-        return add_sdp(dict(method="PRACK", rack=rack), sdp)
+        req = dict(method="PRACK", rack=rack)
+        
+        if sdp:
+            add_sdp(req, sdp)
+            
+        return req
 
 
     def outgoing(self, message, sdp=None):

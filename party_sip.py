@@ -416,6 +416,7 @@ class SipEndpoint(Endpoint):
                     self.may_finish()
                 elif method == "ACK":
                     session = self.process_incoming_sdp(sdp, is_answer)
+                    self.invite = None
                     self.change_state(self.UP)
                     
                     if session:

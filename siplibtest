@@ -507,7 +507,7 @@ class SwitchB(TestSwitch):
                 ctx.update(mkctx(action["src"]))
 
                 #self.dial(action, "line", addr=ctx["src_addr"], username=ctx["src_username"])
-                self.dial(action, "record", id="rekord")
+                self.dial(action, "record", id="prekord")
                 return
 
             src_username = ctx["src_username"]
@@ -519,7 +519,7 @@ class SwitchB(TestSwitch):
             
             if dst_username == CALLEE_NUMBER:
                 ctx["dst_username"] = "444"
-                self.dial(action, "record")
+                self.dial(action, "record", id="rekord")
             elif dst_username == "444":
                 self.dial(action, "unreachable")
                 self.dial(action, "ringing")
@@ -550,12 +550,13 @@ class SwitchB(TestSwitch):
         
         self.account_manager.set_our_credentials(*B_CRED)
 
+        zap.time_slot(1).plug(self.reregister_snom, addr=SNOM_WEB, line=1)
+
         if TEST == TEST_DIALOUT:
-            zap.time_slot(1).plug(self.reregister_snom, addr=SNOM_WEB, line=1)
             zap.time_slot(3).plug(self.test_dialing)
             
         if TEST == TEST_DIALIN:
-            zap.time_slot(1).plug(self.test_registering)
+            zap.time_slot(3).plug(self.test_registering)
 
 
     def make_party(self, type):

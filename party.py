@@ -548,11 +548,14 @@ class RecordingBridge(Bridge):
             c = answer["channels"][0]
 
             if not c["send"]:
-                self.logger.debug("Hah, the %s put us on hold!" % ("callee" if li == 0 else "caller"))
+                self.logger.info("Hah, the %s put us on hold." % ("callee" if li == 0 else "caller"))
 
             if not c["recv"]:
-                self.logger.debug("Hah, the %s put us on hold!" % ("caller" if li == 0 else "callee"))
+                self.logger.info("Hah, the %s put us on hold." % ("caller" if li == 0 else "callee"))
 
+            if c["send"] and c["recv"]:
+                self.logger.info("Hah, a two-way call.")
+                
 
     def do_slot(self, li, action):
         session = action.get("session")
