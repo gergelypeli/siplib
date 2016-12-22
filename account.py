@@ -27,6 +27,7 @@ class AccountManager(Loggable):
         if uri in self.accounts_by_uri:
             raise Exception("Account already exists: %s!" % (uri,))
             
+        self.logger.info("Added account %s with policy %s." % (uri, auth_policy))
         self.accounts_by_uri[uri] = Account(display_name, auth_policy, authname, ha1, hops)
 
 

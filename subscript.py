@@ -21,6 +21,10 @@ class EventSource(Loggable):
         self.last_subscription_id = 0
 
 
+    def identify(self, params):
+        raise NotImplementedError()
+        
+
     def get_expiry_range(self):
         return 30, 60
         
@@ -40,7 +44,7 @@ class EventSource(Loggable):
         
         if not is_response:
             if method == "SUBSCRIBE":
-                self.logger.info("Got SUBSCRIBE request.")
+                self.logger.debug("Got SUBSCRIBE request.")
                 subscription = self.subscriptions_by_id[id]
 
                 expires = params.get("expires", 0)
@@ -68,14 +72,15 @@ class EventSource(Loggable):
                     res = dict(status=Status(200, "OK"), expires=expires)
                     subscription.dialog.send_response(res, params)
 
-                    self.logger.info("Subscribed for %d seconds." % expires)
+                    contact = subscription.dialog.peer_contact.uri
+                    self.logger.info("Subscription %s from %s extended for %d seconds." % (id, contact, expires))
                     self.notify_one(id)
                 else:
                     if subscription.expiration_plug:
-                        self.logger.info("Unsubscribed.")
+                        self.logger.info("Subscription %s cancelled." % (id,))
                         subscription.expiration_plug.unplug()
                     else:
-                        self.logger.info("Polled.")
+                        self.logger.info("Subscription %s polled." % (id,))
 
                     res = dict(status=Status(200, "OK"), expires=expires)
                     subscription.dialog.send_response(res, params)
@@ -89,7 +94,7 @@ class EventSource(Loggable):
                 status = params["status"]
                 
                 if status.code == 200:
-                    self.logger.info("Got NOTIFY response.")
+                    self.logger.debug("Got NOTIFY response.")
                 else:
                     self.logger.warning("Got NOTIFY response %d!" % status.code)
                     self.subscriptions_by_id.pop(id, None)
@@ -168,11 +173,15 @@ class MessageSummaryEventSource(EventSource):
 
 
 class DialogEventSource(EventSource):
-    def __init__(self, entity):
+    def __init__(self):
         EventSource.__init__(self)
         
-        self.entity = entity
         self.version = 0
+        self.entity = None
+        
+        
+    def set_entity(self, entity):
+        self.entity = entity
         
         
     def get_dialog_state(self):
@@ -204,6 +213,7 @@ class DialogEventSource(EventSource):
         lines = []
         
         lines.append('<?xml version="1.0"?>')
+        
         lines.append('<dialog-info xmlns="urn:ietf:params:xml:ns:dialog-info" version="%d" state="full" entity="%s">' % (self.version, self.entity))
         self.version += 1
         
@@ -233,7 +243,7 @@ class SubscriptionManager(Loggable):
         Loggable.__init__(self)
 
         self.switch = switch
-        self.event_sources_by_id = {}
+        self.event_sources_by_key = {}
         
 
     def transmit(self, params, related_params=None):
@@ -250,39 +260,37 @@ class SubscriptionManager(Loggable):
         raise NotImplementedError()
 
 
-    def make_event_source(self, type, uri):
+    def make_event_source(self, type):
         raise NotImplementedError()
 
 
-    def get_event_source(self, type, uri):
-        uri_str = uri.print()
-        key = (type, uri_str)
-        es = self.event_sources_by_id.get(key)
-        
-        if not es:
-            self.logger.debug("Creating event source: %s=%s." % (type, uri_str))
-            es = self.make_event_source(type, uri)
-            if not es:
-                raise Exception("Couldn't make event source of type %s!" % type)
-                
-            es.set_oid(self.oid.add(type, uri_str))
-            self.event_sources_by_id[key] = es
-            
-        return es
+    def add_event_source(self, type, params):
+        es = self.make_event_source(type)
+        id = es.identify(params)
+        self.logger.debug("Created event source: %s=%s." % (type, id))
 
+        es.set_oid(self.oid.add(type, id))
+        key = (type, id)
+        self.event_sources_by_key[key] = es
+        
 
     def process_request(self, params):
         if params["method"] != "SUBSCRIBE":
             raise Exception("SubscriptionManager has nothing to do with this request!")
         
-        type, uri = self.identify_event_source(params) or (None, None)
+        key = self.identify_event_source(params) or (None, None)
         
-        if not type:
-            self.logger.warning("Ignoring subscription for unknown event source!")
+        if not key:
+            self.logger.warning("Rejecting subscription for unidentifiable event source!")
             self.reject_request(params, Status(404))
             return
         
-        es = self.get_event_source(type, uri)
+        es = self.event_sources_by_key.get(key)
+        if not es:
+            self.logger.warning("Rejecting subscription for nonexistent event source!")
+            self.reject_request(params, Status(404))
+            return
+            
         dialog = self.switch.make_dialog()
         es.add_subscription(dialog)
         dialog.recv_request(params)

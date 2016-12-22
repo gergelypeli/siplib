@@ -564,6 +564,10 @@ class Nameaddr(namedtuple("Nameaddr", "uri name params")):
         return super().__new__(cls, uri, name, params or {})
 
 
+    def __str__(self):
+        return self.print()
+
+
     def print(self):
         # If the URI contains URI parameters, not enclosing it in angle brackets would
         # be interpreted as header parameters. So enclose them always just to be safe.

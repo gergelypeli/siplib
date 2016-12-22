@@ -236,11 +236,13 @@ class TestAuthority(Authority):
 
 
 class VoicemailEventSource(MessageSummaryEventSource):
-    def __init__(self):
-        MessageSummaryEventSource.__init__(self)
-        
+    def identify(self, params):
+        self.mailbox = params["mailbox"]
+
         self.state = 0
         zap.time_slot(30, True).plug(self.fake)
+        
+        return self.mailbox
         
         
     def fake(self):
@@ -253,11 +255,13 @@ class VoicemailEventSource(MessageSummaryEventSource):
 
 
 class BusylampEventSource(DialogEventSource):
-    def __init__(self, uri):
-        DialogEventSource.__init__(self, uri)
-        
+    def identify(self, params):
+        self.set_entity(params["entity"])
+
         self.state = 0
         zap.time_slot(30, True).plug(self.fake)
+
+        return self.entity
         
         
     def fake(self):
@@ -281,19 +285,19 @@ class TestSubscriptionManager(SubscriptionManager):
         to_uri = params["to"].uri._replace(params={})
         
         if event == "message-summary" and to_uri.username == "phonebox":
-            return "voicemail", from_uri
+            return "voicemail", from_uri.username
             
         if event == "dialog":
-            return "busylamp", to_uri
+            return "busylamp", to_uri.username
             
         return None
         
         
-    def make_event_source(self, type, uri):
+    def make_event_source(self, type):
         if type == "voicemail":
             return VoicemailEventSource()
         elif type == "busylamp":
-            return BusylampEventSource(uri)
+            return BusylampEventSource()
         else:
             return None
 
@@ -384,8 +388,6 @@ class TestSwitch(Switch):
 
 
     def start(self):
-        #Switch.start(self)
-
         self.mgc.add_mgw_addr(self.mgw_addr)
         
         hop = Hop("UDP", "eth0", self.local_addr, None)
@@ -445,8 +447,8 @@ class SwitchA(TestSwitch):
             self.dial(action, "line", addr=ctx["dst_addr"], username=ctx["dst_username"])
             
 
-    def __init__(self, *args):
-        TestSwitch.__init__(self, *args)
+    def start(self):
+        TestSwitch.start(self)
         
         # CALLEE lives on switch-b, but registers here to take calls from here
         callee_uri = Uri(Addr(A_DOMAIN, None), CALLEE_NUMBER)
@@ -464,6 +466,12 @@ class SwitchA(TestSwitch):
         
         # Allow us to register at other places
         self.account_manager.set_our_credentials(*A_CRED)
+
+        # Add a voicemail box to monitor
+        self.subscription_manager.add_event_source("voicemail", dict(mailbox="phone"))
+        
+        # Add a line state
+        self.subscription_manager.add_event_source("busylamp", dict(entity="201"))
 
         #if TEST == TEST_DIALOUT:
         #    zap.time_slot(2).plug(self.test_snoming)
@@ -533,8 +541,8 @@ class SwitchB(TestSwitch):
                 self.dial(action, **dst)
             
             
-    def __init__(self, *args):
-        TestSwitch.__init__(self, *args)
+    def start(self):
+        TestSwitch.start(self)
         
         phone_uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
         
