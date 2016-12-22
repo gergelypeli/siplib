@@ -206,6 +206,7 @@ class Controller(Loggable):
         
     
     def send_message(self, msgid, params, response_tag):
+        #self.logger.info("XXX Sending message %s with %s tagged %s" % (msgid, params, response_tag))
         self.msgp.send(msgid, params, response_tag=response_tag)
         
         
@@ -225,11 +226,16 @@ class Controller(Loggable):
 
 
     def process_response(self, response_tag, msgid, params):
+        #self.logger.info("XXX Received response %s with %s tagged %s" % (msgid, params, response_tag))
         label, drop_response = response_tag
         thing = self.things_by_label.get(label)
         
         if not thing:
             if not drop_response:
+                # TODO: Hm, this can still happen, if we modify and delete something
+                # quickly, and the thing is gone when the modify response arrives.
+                # Probably we shouldn't delete things with a pending modification,
+                # but deleting should be an unrefusable step.
                 self.logger.error("Response from MGW to unknown entity: %s" % label)
         else:
             self.logger.debug("Response from MGW to %s" % label)

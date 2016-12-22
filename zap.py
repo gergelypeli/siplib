@@ -9,29 +9,27 @@ from util import Loggable, Oid
 
 
 class Plug:
-    def __init__(self, callable, kwargs):
+    def __init__(self, weak_method, kwargs):
         self.slot = None
-        self.callable = callable
+        self.weak_method = weak_method
         self.kwargs = kwargs
         
         
     def __del__(self):
         self.unplug()
         
-        
-    def zap(self, *args):
-        method = self.callable()
+            
+    def __call__(self, *args):
+        method = self.weak_method()
         
         if method:
-            kwargs = self.kwargs
-            task = lambda: method(*args, **kwargs)
-            self.invoke(task)
-            
-            
-    def invoke(self, task):
-        schedule(task)
-            
+            method(*args, **self.kwargs)
+
         
+    def zap(self, *args):
+        schedule(lambda: self(*args))
+
+
     def unplug(self):
         try:
             if self.slot:
@@ -41,8 +39,8 @@ class Plug:
 
 
 class InstaPlug(Plug):
-    def invoke(self, task):
-        task()
+    def zap(self, *args):
+        self(*args)
             
 
 class Slot:
@@ -485,7 +483,7 @@ def schedule(task):
     
     #kernel.logger.debug("Scheduling task")
     scheduled_tasks[task] = None
-    
+
 
 def loop():
     global scheduled_tasks

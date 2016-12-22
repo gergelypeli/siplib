@@ -4,7 +4,7 @@ from util import Loggable
 
 
 # FIXME: currently we can't tell how many channels do we have to deal with
-GUESSED_CHANNEL_COUNT = 2
+GUESSED_CHANNEL_COUNT = 1
 
 
 class Ground(Loggable):
