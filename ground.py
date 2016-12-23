@@ -251,9 +251,9 @@ class Ground(Loggable):
     def add_context(self, smleg, tmleg):
         self.logger.info("Must link media leg %s to %s" % (smleg.oid, tmleg.oid))
 
-        # Why do we need this?
-        smleg.refresh({})
-        tmleg.refresh({})
+        # Make sure the media legs are already realized
+        smleg.create()
+        tmleg.create()
         
         if smleg.sid != tmleg.sid:
             raise Exception("Sid mismatch!")  # FIXME: this will happen eventually
@@ -266,7 +266,7 @@ class Ground(Loggable):
         mc = self.mgc.make_media_leg("context")  # FIXME!
         mc.set_oid(mcid)
         self.mgc.bind_media_leg(mc, mgw_sid)  # FIXME!
-        mc.set_leg_labels([ smleg.label, tmleg.label ])
+        mc.modify({ 'legs': [ smleg.label, tmleg.label ] })
         
         self.media_contexts_by_mlid[smleg.oid] = mc
         self.media_contexts_by_mlid[tmleg.oid] = mc

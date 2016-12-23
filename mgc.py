@@ -59,7 +59,7 @@ class MediaLeg(MediaThing):
         self.type = type
 
 
-    def refresh(self, params):
+    def modify(self, params):
         if not self.is_created:
             self.is_created = True
             params = dict(params, type=self.type)
@@ -68,6 +68,11 @@ class MediaLeg(MediaThing):
             self.send_request("modify_leg", params)
         
         
+    def create(self):
+        if not self.is_created:
+            self.modify({})
+
+
     def delete(self):
         if self.is_created:
             self.is_created = False  # Call uses this to ignore such MediaLeg-s
@@ -90,8 +95,8 @@ class PassMediaLeg(MediaLeg):
         self.other = other
         
         
-    def refresh(self, params):
-        MediaLeg.refresh(self, dict(params, other=self.other.label))
+    def modify(self, params):
+        MediaLeg.modify(self, dict(params, other=self.other.label))
         
 
 class EchoMediaLeg(MediaLeg):
@@ -112,7 +117,7 @@ class PlayerMediaLeg(MediaLeg):
             fade=fade
         ))
         
-        self.refresh(new)
+        self.modify(new)
 
 
 class NetMediaLeg(MediaLeg):
@@ -120,13 +125,13 @@ class NetMediaLeg(MediaLeg):
         MediaLeg.__init__(self, "net")
 
         self.event_slot = zap.EventSlot()
-        self.committed = {}
+        #self.committed = {}
 
 
-    def update(self, **kwargs):  # TODO: rename to refresh?
-        changes = { k: v for k, v in kwargs.items() if v != self.committed.get(k) }
-        self.committed.update(changes)
-        self.refresh(changes)
+    #def update(self, **kwargs):  # TODO: rename to refresh?
+    #    changes = { k: v for k, v in kwargs.items() if v != self.committed.get(k) }
+    #    self.committed.update(changes)
+    #    self.modify(changes)
         
     
     def process_request(self, target, msgid, params):
@@ -140,22 +145,8 @@ class NetMediaLeg(MediaLeg):
         
         
 class MediaContext(MediaThing):
-    def __init__(self):
-        MediaThing.__init__(self)
-        
-        self.leg_labels = []
-        
-
-    def set_leg_labels(self, leg_labels):
-        self.leg_labels = leg_labels
-        self.refresh()
-
-        
-    def refresh(self):
-        params = {
-            'type': 'proxy',
-            'legs': self.leg_labels
-        }
+    def modify(self, params):
+        params = dict(params, type="proxy")  # legs:
         
         if not self.is_created:
             self.is_created = True
@@ -165,6 +156,11 @@ class MediaContext(MediaThing):
             self.logger.debug("Modifying context")
             self.send_request("modify_context", params)
     
+    
+    def create(self):
+        if not self.is_created:
+            self.modify({})
+            
 
     def delete(self):
         if self.is_created:

@@ -541,8 +541,8 @@ class RecordingBridge(Bridge):
             self.legs[1].set_media_leg(i, that, mgw_sid)
             
             format = ("L16", 8000, 1, None)
-            this.refresh(dict(filename="recorded.wav", format=format, record=True))
-            that.refresh({})
+            this.modify(dict(filename="recorded.wav", format=format, record=True))
+            that.modify({})
             
         if len(answer["channels"]) >= 1:
             c = answer["channels"][0]

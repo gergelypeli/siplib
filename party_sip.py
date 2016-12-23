@@ -176,8 +176,8 @@ class SipEndpoint(Endpoint):
                 'recv_formats': self.flatten_formats(lc["formats"], "rtp_local_payload_type")
             }
             
-            self.logger.debug("Refreshing media leg %d: %s" % (i, params))
-            ml.update(**params)
+            self.logger.debug("Modifying media leg %d: %s" % (i, params))
+            ml.modify(params)
             
             
     def add_mgw_affinities(self, session):
