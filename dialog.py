@@ -75,7 +75,8 @@ class Dialog(Loggable):
         self.route = params["record_route"]
         self.hop = params["hop"]
 
-        self.dialog_manager.register(self)
+        self.dialog_manager.register_by_local_tag(self.local_tag, self)
+        self.dialog_manager.register_by_incoming_branch(params["via"][0].branch, self)
         
         
     def setup_outgoing(self, request_uri, from_nameaddr, to_nameaddr, route, hop):
@@ -88,7 +89,7 @@ class Dialog(Loggable):
         self.route = route or []
         self.hop = hop
         
-        self.dialog_manager.register(self)
+        self.dialog_manager.register_by_local_tag(self.local_tag, self)
 
 
     def setup_outgoing_responded(self, params):
@@ -106,7 +107,7 @@ class Dialog(Loggable):
         self.last_sent_cseq = invite_params["cseq"]
         self.hop = invite_params["hop"]
         
-        # Don't register, we already have a dialog with the same local tag
+        # Don't register, we already have a dialog with the same local tag!
 
 
     def bastard_reaction(self, invite_params, response_params):
@@ -322,6 +323,7 @@ class DialogManager(Loggable):
         self.switch = switch
         #self.process_response_plug = transaction_manager.process_response_slot.plug(self.process_response)
         self.dialogs_by_local_tag = WeakValueDictionary()
+        self.dialogs_by_incoming_branch = WeakValueDictionary()
 
         
     def provide_auth(self, params, related_request):
@@ -332,13 +334,17 @@ class DialogManager(Loggable):
         self.switch.send_message(params, related_params)
 
 
-    def register(self, dialog):
-        local_tag = dialog.get_local_tag()
+    def register_by_local_tag(self, local_tag, dialog):
         self.dialogs_by_local_tag[local_tag] = dialog
         self.logger.debug("Registered dialog with local tag %s" % (local_tag,))
         
+        
+    def register_by_incoming_branch(self, branch, dialog):
+        self.dialogs_by_incoming_branch[branch] = dialog
+        self.logger.debug("Registered dialog with incoming branch %s" % (branch,))
+    
 
-    def process_request(self, params):
+    def process_request(self, params, related_params=None):
         method = params["method"]
         local_tag = params["to"].params.get("tag")
         dialog = self.dialogs_by_local_tag.get(local_tag)
@@ -348,10 +354,17 @@ class DialogManager(Loggable):
             dialog.recv_request(params)
             return True
 
-        #print("No dialog %s" % (did,))
-
-        if local_tag:
-            self.logger.warning("In-dialog request has no dialog!")
+        if method == "CANCEL" and not local_tag:
+            if related_params and related_params["method"] == "INVITE":
+                # TODO: use hop, too, for safety!
+                branch = related_params["via"][0].branch
+                dialog = self.dialogs_by_incoming_branch.get(branch)
+                
+                if dialog:
+                    self.logger.debug("Found dialog for INVITE CANCEL: %s" % branch)
+                    dialog.recv_request(params)
+                    return True
+                
             
         return False
         

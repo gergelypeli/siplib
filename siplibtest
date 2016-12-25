@@ -165,12 +165,20 @@ class CalleeEndpoint(TestEndpoint):
         self.logger.debug("Got offer:\n%s" % repr(offer))
         
         yield from self.sleep(1)
-        self.leg.forward(dict(type="ring"))
+        answer = self.update_session(offer)
+        self.leg.forward(dict(type="ring", session=answer))
         
         yield from self.sleep(1)
-        
-        answer = self.update_session(offer)
-        self.leg.forward(dict(type="accept", session=answer))
+        offer = answer
+        offer["is_answer"] = False
+        self.leg.forward(dict(type="session", session=offer))
+
+        action = yield from self.wait_this_action("session")
+        answer = action.get("session")
+        self.logger.debug("Got answer:\n%s" % repr(answer))
+
+        yield from self.sleep(1)
+        self.leg.forward(dict(type="accept"))
 
         yield from self.idle()
         
@@ -498,7 +506,10 @@ class SwitchA(TestSwitch):
                 self.dial(action, "line", addr=ctx["src_addr"], username=ctx["src_username"])
                 return
 
-            self.dial(action, "line", addr=ctx["dst_addr"], username=ctx["dst_username"])
+            if ctx["dst_username"] == "333":
+                self.dial(action, "callee")
+            else:
+                self.dial(action, "line", addr=ctx["dst_addr"], username=ctx["dst_username"])
             
 
     def start(self):

@@ -152,9 +152,9 @@ class Bridge(Party):
         if self.legs:
             raise Exception("Already started!")
             
-        leg = self.add_leg()
+        li = self.add_leg()
         
-        return leg
+        return self.legs[li]
 
     
     def add_leg(self):
@@ -165,7 +165,7 @@ class Bridge(Party):
         self.legs[li] = leg
         self.queued_leg_actions[li] = []
         
-        return leg
+        return li
 
 
     def remove_leg(self, li):
@@ -181,7 +181,10 @@ class Bridge(Party):
     def dial(self, action, type=None, **kwargs):
         dst = dict(type=type, **kwargs) if type else None
         action = dict(action, dst=dst)
-        self.add_leg().forward(action)
+        li = self.add_leg()
+        self.legs[li].forward(action)
+        
+        return li
 
 
     #def dial(self, type, action):
@@ -329,7 +332,15 @@ class Bridge(Party):
                     self.logger.error("Dial processing error: %s" % (e,), exc_info=True)
                     self.reject_incoming_leg(Status(500))
                     self.hangup_outgoing_legs()
-                #raise Exception("Should have handled dial in a subclass!")
+                else:
+                    # If the dial action is executed by this fallback code, then the
+                    # user is probably satisfied with this many outgoing legs, so
+                    # if there's only one, then anchor it right now.
+                    
+                    if not self.is_anchored and len(self.legs) == 2:
+                        oli = max(self.legs.keys())
+                        self.logger.info("Auto-anchoring outgoing leg %d." % oli)
+                        self.anchor_outgoing_leg(oli)
             elif type == "hangup":
                 if self.is_anchored:
                     self.unanchor_legs()
@@ -362,6 +373,8 @@ class Bridge(Party):
                         # No more incoming legs, so time to give up
                         self.legs[0].forward(action)
                         self.remove_leg(0)
+                        
+                    # TODO: shall we auto-anchor the last remaining outgoing leg?
             elif type == "accept":
                 if self.is_anchored:
                     self.legs[0].forward(action)

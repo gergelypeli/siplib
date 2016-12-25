@@ -209,7 +209,7 @@ class Switch(Loggable):
             return False
     
 
-    def process_request(self, params):
+    def process_request(self, params, related_params):
         method = params["method"]
         request_uri = params["uri"]
         
@@ -234,6 +234,14 @@ class Switch(Loggable):
             elif method == "SUBSCRIBE":
                 self.subscription_manager.process_request(params)
                 return
+            elif method == "CANCEL":
+                # The related_params may be None if the transaction manager didn't find it
+                if related_params and related_params["method"] == "INVITE":
+                    self.dialog_manager.process_request(params, related_params)
+                    return
+                else:
+                    self.reject_request(params, Status(481, "Transaction Does Not Exist"))
+                    return
     
             self.reject_request(params, Status(501, "Method Not Implemented"))
         else:

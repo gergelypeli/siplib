@@ -198,6 +198,9 @@ class Controller(Loggable):
     
     
     def register_thing(self, label, thing):
+        if label in self.things_by_label:
+            raise Exception("Duplicate MGC thing label: %s!" % label)
+            
         self.things_by_label[label] = thing
         
     

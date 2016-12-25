@@ -651,8 +651,8 @@ def print_structured_message(params):
             headers[field] = [ f.print() for f in params[field] ]
         elif field in ("via",):
             headers[field] = [ f.print() for f in params[field] ]
-        elif field in ("supported", "require"):
-            headers[field] = ", ".join(sorted(params[field]))
+        elif field in ("supported", "require", "allow"):
+            headers[field] = ", ".join(sorted(params[field]))  # TODO: sorted here?
         elif field not in META_HEADER_FIELDS:
             headers[field] = params[field]
 
@@ -744,7 +744,7 @@ def parse_structured_message(message):
             p[field] = Rack.parse(Parser(header))
         elif field == "via":
             p[field] = [ Via.parse(Parser(h)) for h in header ]
-        elif field in ("supported", "require"):
+        elif field in ("supported", "require", "allow"):
             p[field] = set( x.strip() for x in header.split(",") )  # TODO
         elif field not in META_HEADER_FIELDS:
             p[field] = header

@@ -14,6 +14,20 @@ STATIC_PAYLOAD_TYPES = {
 
 class Error(Exception): pass
 
+
+def add_sdp(params, sdp):
+    params["content_type"] = "application/sdp"
+    params["body"] = sdp.print()
+    return params
+    
+    
+def get_sdp(params):
+    if params.get("content_type") == "application/sdp":
+        return Sdp.parse(params["body"])
+    else:
+        return None
+        
+
 last_session_id = 0
 
 def generate_session_id():
@@ -385,7 +399,7 @@ class SdpBuilder:
         )
         
         connection = Connection("IN", "IP4", session_host) if session_host else None
-        bandwidth = session.pop("bandwidth")
+        bandwidth = session.get("bandwidth")
         attributes = list(session["attributes"])
         
         if session_direction:

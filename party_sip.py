@@ -2,8 +2,9 @@ from collections import namedtuple
 
 from format import Status
 from party import Endpoint
-from sdp import SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES
+from sdp import SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES, add_sdp, get_sdp
 from party_sip_invite import InviteClientState, InviteServerState
+import zap
 
 
 AllocatedMedia = namedtuple("AllocatedMedia", "mgw_sid local_addr")
@@ -15,13 +16,14 @@ class Error(Exception):
 
 class SipEndpoint(Endpoint):
     DOWN = "DOWN"
-    SELECTING_HOP = "SELECTING_HOP"
     DIALING_IN = "DIALING_IN"
     DIALING_OUT = "DIALING_OUT"
     DIALING_IN_RINGING = "DIALING_IN_RINGING"
     DIALING_OUT_RINGING = "DIALING_OUT_RINGING"
     UP = "UP"
     DISCONNECTING_OUT = "DISCONNECTING_OUT"
+
+    DEFAULT_ALLOWED_METHODS = ["INVITE", "CANCEL", "ACK", "PRACK", "BYE", "UPDATE"]
     
 
     def __init__(self, dialog):
@@ -30,7 +32,10 @@ class SipEndpoint(Endpoint):
         self.dialog = dialog
         self.state = self.DOWN
         self.invite = None
+        self.update = None
         self.allocated_media = []
+        
+        self.has_clogged_invite = False
         self.pending_actions = []
         
         self.sdp_builder = SdpBuilder()
@@ -60,11 +65,13 @@ class SipEndpoint(Endpoint):
         
 
     def send_request(self, request, related=None):
+        request["allow"] = self.DEFAULT_ALLOWED_METHODS
         self.dialog.send_request(request, related)
 
 
     def send_response(self, response, related):
         if related and not related["is_response"]:
+            response["allow"] = self.DEFAULT_ALLOWED_METHODS
             self.dialog.send_response(response, related)
         else:
             raise Error("Respond to what?")
@@ -74,9 +81,10 @@ class SipEndpoint(Endpoint):
         self.leg.forward(action)
         
 
-    def make_invite(self, is_outgoing):
+    # INVITE helpers
+    def invite_new(self, is_outgoing):
         if self.invite:
-            raise Error("Already has an invite!")
+            raise Error("Invite already in progress!")
             
         if is_outgoing:
             self.invite = InviteClientState()
@@ -87,7 +95,111 @@ class SipEndpoint(Endpoint):
             
         self.invite.set_oid(self.oid.add("invite"))
         
+        
+    def invite_outgoing(self, msg, sdp):
+        if not self.invite:
+            raise Error("Invite not in progress!")
 
+        if self.has_clogged_invite:
+            raise Error("Mustn't try sending while invite is clogged!")
+
+        self.invite.process_outgoing(msg, sdp)
+        
+        if self.invite.is_finished():
+            self.invite = None
+        elif self.invite.is_clogged():
+            self.logger.debug("Invite is clogged, may postpone future actions.")
+            self.has_clogged_invite = True
+
+
+    def invite_incoming(self, msg):
+        if not self.invite:
+            raise Error("Invite not in progress!")
+            
+        msg, sdp, is_answer = self.invite.process_incoming(msg)
+        
+        if self.invite.is_finished():
+            self.invite = None
+        elif self.has_clogged_invite and not self.invite.is_clogged():
+            self.has_clogged_invite = False
+            
+            if self.pending_actions:
+                self.logger.info("Invite unclogged, will retry postponed actions.")
+                zap.time_slot(0).plug(self.do, action=None)
+            
+        return msg, sdp, is_answer
+        
+        
+    # UPDATE helpers
+    def update_new(self, is_outgoing):
+        if self.update:
+            raise Error("Update already in progress!")
+            
+        self.update = dict(is_outgoing=is_outgoing, request=None)
+        
+        
+    def update_outgoing(self, msg, sdp):
+        if not self.update:
+            raise Error("Update not in progress!")
+            
+        if self.update["is_outgoing"]:
+            if self.update["request"]:
+                raise Error("Update was already sent!")
+                
+            req = add_sdp(dict(method="UPDATE"), sdp)
+            self.send_request(req)
+            self.update["request"] = req
+        else:
+            if not self.update["request"]:
+                raise Error("Update was not yet received!")
+                
+            res = add_sdp(dict(status=Status(200)), sdp)  # TODO: handle rejection
+            self.send_response(res, self.update["request"])
+            self.update = None
+            
+            
+    def update_incoming(self, msg):
+        if not self.update:
+            raise Error("Update not in progress!")
+            
+        if self.update["is_outgoing"]:
+            if not self.update["request"]:
+                raise Error("Update request was not sent, but now receiving one!")
+                
+            if not msg["is_response"]:
+                self.logger.warning("Rejecting incoming UPDATE because one was already sent!")
+                res = dict(status=Status(419))
+                self.send_response(res, msg)
+                return None, None, None
+        
+            if msg["status"].code == 200:
+                sdp = get_sdp(msg)
+                return None, sdp, True
+            else:
+                return None, dict(is_answer=True), True  # TODO: proper session rejection!
+        else:
+            if self.update["request"]:
+                self.logger.warning("Update request was already received!")
+                res = dict(status=Status(419))
+                self.send_response(res, msg)
+                return None, None, None
+                
+            if msg["is_response"]:
+                self.logger.warning("Got an update response without sending a request!")
+                return None, None, None
+                
+            sdp = get_sdp(msg)
+            return None, sdp, False
+
+
+    def update_outgoing_sdp(self, sdp, is_answer):
+        if is_answer:
+            self.update_outgoing(dict(status=Status(200)), sdp)  # TODO: handle rejection
+        else:
+            self.update_new(is_outgoing=True)
+            self.update_outgoing(dict(method="UPDATE"), sdp)
+
+        
     def flatten_formats(self, formats, pt_key):
         return { f[pt_key]: (f["encoding"], f["clock"], f["encp"], f["fmtp"]) for f in formats }
 
@@ -230,22 +342,42 @@ class SipEndpoint(Endpoint):
         Endpoint.may_finish(self)
 
 
-    def hop_selected(self, hop, action):
+    def hop_selected(self, hop):
         self.dst["hop"] = hop
         self.logger.debug("Retrying dial with resolved hop")
-        self.do(action)
-        
+        self.do(None)
+
 
     def do(self, action):
-        # TODO: we probably need an inner do method, to retry pending actions,
-        # because we should update self.session once, not on retries.
-        # Or we should update it in each case, below. Hm. In the helper methods?
-        self.logger.debug("Doing %s" % action)
+        if action is None:
+            action = self.pending_actions.pop(0)
+            self.logger.info("Retrying pending %s action." % action["type"])
+        elif self.has_clogged_invite:
+            self.logger.info("Invite clogged, postponing %s action." % action["type"])
+            self.pending_actions.append(action)
+            return
+        elif self.pending_actions:
+            self.logger.info("Has postponed actions, postponing %s action." % action["type"])
+            self.pending_actions.append(action)
+            return
+        elif action["type"] == "dial" and not self.dst.get("hop"):
+            self.logger.info("Dialing out without hop, postponing until resolved.")
+            self.pending_actions.append(action)
+            to = self.dst.get("to")
+            uri = self.dst.get("uri") or to.uri
+            route = self.dst.get("route")
+            next_uri = route[0].uri if route else uri
+            self.ground.select_hop_slot(next_uri).plug(self.hop_selected)
+            return
+        else:
+            self.logger.info("Doing %s action." % action["type"])
         
         type = action["type"]
         session = action.get("session")
+        # FIXME: now we can process sessions here again, because hop resolution is now
+        # above
         
-        if self.state in (self.DOWN, self.SELECTING_HOP):
+        if self.state in (self.DOWN,):
             if type == "dial":
                 fr = self.dst.get("from")
                 to = self.dst.get("to")
@@ -261,44 +393,37 @@ class SipEndpoint(Endpoint):
                 route = self.dst.get("route")
                 hop = self.dst.get("hop")
                 
-                # Hop may be calculated here, but it takes another round
-                if not hop:
-                    next_uri = route[0].uri if route else uri
-                    self.ground.select_hop_slot(next_uri).plug(self.hop_selected, action=action)
-                    self.change_state(self.SELECTING_HOP)
-                    return
-            
                 # These parameters can't go into the user_params, because it
                 # won't be there for future requests, and we should be consistent.
                 self.logger.info("Using hop %s to reach %s." % (hop, uri))
                 self.dialog.setup_outgoing(uri, fr, to, route, hop)
-                self.make_invite(True)
+                self.invite_new(is_outgoing=True)
                 
                 if "100rel" in action.get("options", set()):
                     self.invite.use_rpr_locally()
                     
                 sdp = self.process_outgoing_session(session)
-                self.invite.outgoing(dict(method="INVITE"), sdp)
+                self.invite_outgoing(dict(method="INVITE"), sdp)
                 self.change_state(self.DIALING_OUT)
                 
                 return
 
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
             if type == "hangup":
-                self.invite.outgoing(dict(method="CANCEL"))
+                self.invite_outgoing(dict(method="CANCEL"))
                 self.change_state(self.DISCONNECTING_OUT)
                 return
                 
             elif type == "session":
-                if self.invite.is_session_finished():
-                    raise Error("Can't send UPDATE yet!")
+                if not self.invite.is_session_established():
+                    sdp = self.process_outgoing_session(session)
+                    self.invite_outgoing(None, sdp)
+                    
+                    if not self.invite:  # may have sent an ACK
+                        self.change_state(self.UP)
                 else:
                     sdp = self.process_outgoing_session(session)
-                    self.invite.outgoing(None, sdp)
-                    
-                    if self.invite.is_finished():  # may have sent an ACK
-                        self.invite = None
-                        self.change_state(self.UP)
+                    self.update_outgoing_sdp(sdp, session["is_answer"])
                         
                 return
 
@@ -306,20 +431,26 @@ class SipEndpoint(Endpoint):
             already_ringing = (self.state == self.DIALING_IN_RINGING)
             #rpr = "100rel" in action.get("options", set())
 
-            if self.invite.is_session_finished():
-                raise Error("Can't send UPDATE yet!")
-
+            if session and self.invite.is_session_established():
+                # Rip the sdp from the response, and use an UPDATE instead
+                sdp = self.process_outgoing_session(session)
+                self.update_outgoing_sdp(sdp, session["is_answer"])
+                
+                session = None
+                if type == "session":
+                    return
+                
             if type == "session":
                 # TODO: use an empty msg, to have opportunity for extra fields!
                 msg = dict(status=Status(180)) if already_ringing else None
                 sdp = self.process_outgoing_session(session)
-                self.invite.outgoing(msg, sdp)
+                self.invite_outgoing(msg, sdp)
                 return
                 
             elif type == "ring":
                 msg = dict(status=Status(180))
                 sdp = self.process_outgoing_session(session)
-                self.invite.outgoing(msg, sdp)
+                self.invite_outgoing(msg, sdp)
 
                 if not already_ringing:
                     self.change_state(self.DIALING_IN_RINGING)
@@ -329,13 +460,13 @@ class SipEndpoint(Endpoint):
             elif type == "accept":
                 msg = dict(status=Status(200))
                 sdp = self.process_outgoing_session(session)
-                self.invite.outgoing(msg, sdp)
+                self.invite_outgoing(msg, sdp)
                 # Wait for the ACK before changing state
                 return
 
             elif type == "reject":
                 msg = dict(status=action["status"])
-                self.invite.outgoing(msg, None)
+                self.invite_outgoing(msg, None)
                 # The transactions will catch the ACK
                 self.change_state(self.DOWN)
                 self.may_finish()
@@ -345,15 +476,18 @@ class SipEndpoint(Endpoint):
             # Re-INVITE stuff
             
             if type == "session":
+                sdp = self.process_outgoing_session(session)
+                
                 if not self.invite:
-                    self.make_invite(True)
+                    self.invite_new(is_outgoing=True)
                     msg = dict(method="INVITE")
-                    sdp = self.process_outgoing_session(session)
-                    self.invite.outgoing(msg, sdp)
-                else:
+                    self.invite_outgoing(msg, sdp)
+                elif not self.invite.is_session_established():
                     msg = dict(status=Status(200))  # TODO: handle rejection!
-                    sdp = self.process_outgoing_session(session)
-                    self.invite.outgoing(msg, sdp)
+                    self.invite_outgoing(msg, sdp)
+                else:
+                    self.update_outgoing_sdp(sdp, session["is_answer"])
+                    
                 return
         
             elif type == "tone":
@@ -388,8 +522,8 @@ class SipEndpoint(Endpoint):
                 src = dict(msg, type="sip")
                 ctx = {}
                 
-                self.make_invite(False)
-                msg, sdp, is_answer = self.invite.incoming(msg)
+                self.invite_new(is_outgoing=False)
+                msg, sdp, is_answer = self.invite_incoming(msg)
                 session = self.process_incoming_sdp(sdp, is_answer)
                 options = set("100rel") if self.invite.is_rpr_supported() else set()
                 
@@ -407,16 +541,24 @@ class SipEndpoint(Endpoint):
                 return
                 
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
-            msg, sdp, is_answer = self.invite.incoming(msg)
-            
-            if self.invite.is_finished():
+            if method == "UPDATE":
+                msg, sdp, is_answer = self.update_incoming(msg)
+                session = self.process_incoming_sdp(sdp, is_answer)
+                self.forward(dict(type="session", session=session))
+                return
+            elif method in ("CANCEL", "ACK", "NAK", "PRACK"):
+                if is_response:
+                    self.logger.warning("A %s response, WTF?" % method)
+                    return
+                
+                msg, sdp, is_answer = self.invite_incoming(msg)
+                
                 if method == "CANCEL":
                     self.change_state(self.DOWN)
                     self.forward(dict(type="hangup"))
                     self.may_finish()
                 elif method == "ACK":
                     session = self.process_incoming_sdp(sdp, is_answer)
-                    self.invite = None
                     self.change_state(self.UP)
                     
                     if session:
@@ -424,91 +566,104 @@ class SipEndpoint(Endpoint):
                 elif method == "NAK":
                     self.send_request(dict(method="BYE"))  # required behavior
                     self.change_state(self.DISCONNECTING_OUT)
+                elif method == "PRACK":
+                    session = self.process_incoming_sdp(sdp, is_answer)
+                    if session:
+                        self.forward(dict(type="session", session=session))
                     
                 return
                 
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
-            msg, sdp, is_answer = self.invite.incoming(msg)
-            session = self.process_incoming_sdp(sdp, is_answer)
+            if method == "UPDATE":
+                msg, sdp, is_answer = self.update_incoming(msg)
+                session = self.process_incoming_sdp(sdp, is_answer)
+                self.forward(dict(type="session", session=session))
+                return
+            elif method in ("INVITE", "PRACK"):
+                if not is_response:
+                    self.logger.warning("A %s request, WTF?" % method)
+                    return
 
-            if msg and msg["method"] == "INVITE":
                 status = msg["status"]
+                    
+                msg, sdp, is_answer = self.invite_incoming(msg)
+                if not msg:
+                    return
                 
-                if status.code == 180:
-                    if self.state == self.DIALING_OUT_RINGING:
+                session = self.process_incoming_sdp(sdp, is_answer)
+
+                if method == "INVITE":
+                    if status.code == 180:
+                        if self.state == self.DIALING_OUT_RINGING:
+                            if session:
+                                self.forward(dict(type="session", session=session))
+                        
+                        else:
+                            self.change_state(self.DIALING_OUT_RINGING)
+                            self.forward(dict(type="ring", session=session))
+                        
+                        return
+
+                    elif status.code == 183:
                         if session:
                             self.forward(dict(type="session", session=session))
                         
-                    else:
-                        self.change_state(self.DIALING_OUT_RINGING)
-                        self.forward(dict(type="ring", session=session))
-                        
-                    return
-
-                elif status.code == 183:
-                    if session:
-                        self.forward(dict(type="session", session=session))
-                        
-                    return
+                        return
                     
-                elif status.code >= 300:
-                    if self.invite.is_finished():
-                        # Transaction now acked, invite should be finished now
-                        self.invite = None
-                        self.change_state(self.DOWN)
-                        self.forward(dict(type="reject", status=status))
-                        self.may_finish()
+                    elif status.code >= 300:
+                        if not self.invite:
+                            # Transaction now acked, invite should be finished now
+                            self.change_state(self.DOWN)
+                            self.forward(dict(type="reject", status=status))
+                            self.may_finish()
                         
-                    return
+                        return
 
-                elif status.code >= 200:
-                    if self.invite.is_finished():
-                        self.invite = None
-                        self.change_state(self.UP)
+                    elif status.code >= 200:
+                        if not self.invite:
+                            self.change_state(self.UP)
                         
-                    self.forward(dict(type="accept", session=session))
-                    return
+                        self.forward(dict(type="accept", session=session))
+                        return
+                elif method == "PRACK":
+                    return # Nothing meaningful should arrive in PRACK responses
 
         elif self.state == self.UP:
-            # Re-INVITE stuff
+            if method == "UPDATE":
+                msg, sdp, is_answer = self.update_incoming(msg)
+                session = self.process_incoming_sdp(sdp, is_answer)
+                self.forward(dict(type="session", session=session))
+                return
+            elif method in ("INVITE", "ACK", "NAK", "PRACK"):
+                # Re-INVITE stuff
             
-            if not is_response:
-                if method in ("INVITE", "ACK", "NAK"):
+                if not is_response:
                     if method == "INVITE":
-                        self.make_invite(False)
-                    
-                    msg, sdp, is_answer = self.invite.incoming(msg)
+                        self.invite_new(is_outgoing=False)
+                
+                    msg, sdp, is_answer = self.invite_incoming(msg)
                     session = self.process_incoming_sdp(sdp, is_answer)
-                    
-                    if self.invite.is_finished():
-                        self.invite = None
                 
                     if session:
                         self.forward(dict(type="session", session=session))
-                        
-                    return
                     
-                elif method == "BYE":
+                    return
+                else:
+                    # FIXME: copy-paste!
+                    msg, sdp, is_answer = self.invite_incoming(msg)
+                    session = self.process_incoming_sdp(sdp, is_answer)
+                
+                    if session:
+                        self.forward(dict(type="session", session=session))
+                    
+                    return
+            elif method == "BYE":
+                if not is_response:
                     self.send_response(dict(status=Status(200, "OK")), msg)
                     self.change_state(self.DOWN)
                     self.forward(dict(type="hangup"))
                     self.may_finish()
                     return
-                    
-            else:
-                if method == "INVITE" and self.invite:
-                    # FIXME: copy-paste!
-                    msg, sdp, is_answer = self.invite.incoming(msg)
-                    session = self.process_incoming_sdp(sdp, is_answer)
-                    
-                    if self.invite.is_finished():
-                        self.invite = None
-                
-                    if session:
-                        self.forward(dict(type="session", session=session))
-                        
-                    return
-
         elif self.state == self.DISCONNECTING_OUT:
             if is_response and method == "BYE":
                 self.change_state(self.DOWN)

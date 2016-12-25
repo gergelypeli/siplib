@@ -183,25 +183,26 @@ class PlainClientTransaction(Transaction):
 
 
 class PlainServerTransaction(Transaction):
-    def __init__(self, manager, branch):
+    def __init__(self, manager, branch, related_msg=None):
         Transaction.__init__(self, manager, branch)
         
-        self.incoming_via = None
+        self.incoming_msg = None
+        self.related_msg = related_msg  # This is only for incoming CANCELs
         
         
     def transmit(self, msg):
         if msg.get("via"):
             raise Error("Don't mess with the response Via headers!")
             
-        msg["via"] = self.incoming_via
+        msg["via"] = self.incoming_msg["via"]
         Transaction.transmit(self, msg)
 
 
     def process(self, request):
         if self.state == self.WAITING:
-            if not self.incoming_via:
-                self.incoming_via = request["via"]
-                self.manager.report_request(request)
+            if not self.incoming_msg:
+                self.incoming_msg = request
+                self.manager.report_request(request, self.related_msg)
         elif self.state == self.LINGERING:
             self.retransmit()
         else:
@@ -311,13 +312,10 @@ class InviteClientTransaction(PlainClientTransaction):
 class InviteServerTransaction(PlainServerTransaction):
     def process(self, request):
         if self.state == self.WAITING:
-            if not self.incoming_via:
-                self.incoming_via = request["via"]
+            if not self.incoming_msg:
+                self.incoming_msg = request
                 self.manager.report_request(request)
-                
-                if self.state == self.WAITING:
-                    # No response yet, say something
-                    self.send(make_simple_response(request, Status(100, "Trying")))
+                self.send(make_simple_response(request, Status(100, "Trying")))
         elif self.state == self.PROVISIONING:
             self.retransmit()
         elif self.state == self.TRANSMITTING:
@@ -432,27 +430,32 @@ class TransactionManager(Loggable):
             return
             
         if method == "CANCEL":
-            tr = PlainServerTransaction(proxy(self), branch)
-            self.add_transaction(tr, "CANCEL")
-            tr.process(msg)
-            return
+            # CANCEL-s may happen outside of any dialogs, so process them here
+            # FIXME: not necessarily INVITE
+            invite_str = self.server_transactions.get((branch, "INVITE"))
+            related_msg = invite_str.incoming_msg if invite_str else None
             
-        if method == "ACK":
-            invite_tr = self.server_transactions.get((branch, "INVITE"))
-            if invite_tr:
+            tr = PlainServerTransaction(proxy(self), branch, related_msg)
+            # A CANCEL response must have a To tag, so somebody else has to generate it.
+            
+        elif method == "ACK":
+            invite_str = self.server_transactions.get((branch, "INVITE"))
+            
+            if invite_str:
                 # We must have sent a non-200 response to this, so no dialog was created.
                 # Send a virtual ACK response to notify the transaction.
                 # But don't create an AckServerTransaction here, we have no one to notify.
-                invite_tr.send(make_virtual_response())
+                invite_str.send(make_virtual_response())
                 return
-                
-        # Create new
-        if method == "INVITE":
-            tr = InviteServerTransaction(proxy(self), branch)
-        elif method == "ACK":
+
             # Must create a server transaction to swallow duplicates,
             # we don't want to bother the dialogs unnecessarily.
+            # Too bad we can't find the related INVITE for this ACK, that would need
+            # a lookup by dialog and cseq.
             tr = AckServerTransaction(proxy(self), branch)
+                
+        elif method == "INVITE":
+            tr = InviteServerTransaction(proxy(self), branch)
         else:
             tr = PlainServerTransaction(proxy(self), branch)
 
@@ -524,22 +527,5 @@ class TransactionManager(Loggable):
         self.response_slot.zap(params, related_request)
 
 
-    def report_request(self, params):
-        if params["method"] == "CANCEL":
-            # CANCEL-s may happen outside of any dialogs, so process them here
-            # FIXME: not necessarily INVITE
-            branch, method = identify(params)
-            invite_str = self.server_transactions.get((branch, "INVITE"))
-            
-            if not invite_str:
-                status = Status(481, "Transaction Does Not Exist")
-                cancel_response = make_simple_response(params, status)
-                cancel_str = self.server_transactions.get((branch, "CANCEL"))
-                cancel_str.send(cancel_response)
-                return
-
-            # The responses to INVITE and CANCEL must have a To tag, so they must
-            # be generated by the Dialog.
-            # And it has to accept that the CANCEL request may have no to tag!
-    
-        self.request_slot.zap(params)
+    def report_request(self, params, related_request=None):
+        self.request_slot.zap(params, related_request)

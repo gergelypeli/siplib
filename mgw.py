@@ -41,6 +41,7 @@ class Leg(Thing):
         
         self.type = type
         self.forward_slot = zap.EventSlot()
+        self.has_complained = False
         #self.logger.debug("Created %s leg" % self.type)
         
         
@@ -50,9 +51,15 @@ class Leg(Thing):
 
     def recv_packet(self, packet):
         if self.forward_slot.plugs:  # FIXME: there should be a better way
+            if self.has_complained:
+                self.logger.info("Now has a context to forward media to.")
+                self.has_complained = False
+                
             self.forward_slot.zap(packet)
         else:
-            self.logger.warning("No context to forward media to!")
+            if not self.has_complained:
+                self.logger.warning("No context to forward media to!")
+                self.has_complained = True
 
 
     def send_packet(self, packet):

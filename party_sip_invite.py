@@ -1,5 +1,5 @@
 from format import Status, Rack, make_virtual_response
-from sdp import Sdp
+from sdp import add_sdp, get_sdp
 from util import Loggable
 import zap
 
@@ -31,19 +31,6 @@ class Error(Exception):
     pass
 
 
-def add_sdp(params, sdp):
-    params["content_type"] = "application/sdp"
-    params["body"] = sdp.print()
-    return params
-    
-    
-def get_sdp(params):
-    if params.get("content_type") == "application/sdp":
-        return Sdp.parse(params["body"])
-    else:
-        return None
-        
-
 class InviteState(Loggable):
     def __init__(self):
         Loggable.__init__(self)
@@ -55,7 +42,8 @@ class InviteState(Loggable):
         
         self.rpr_supported = True  # FIXME
         self.rpr_last_rseq = 0
-        
+
+        # FIXME: remove these, SipEndpoint does the queueing now
         self.pending_sdp = None
         self.pending_messages = []
 
@@ -64,7 +52,7 @@ class InviteState(Loggable):
         self.message_slot.zap(msg, related_msg)
         
 
-    def outgoing(self, message, sdp):
+    def process_outgoing(self, message, sdp):
         if message:
             self.pending_messages.append(message)
         
@@ -75,7 +63,7 @@ class InviteState(Loggable):
             self.pending_sdp = sdp
             
             
-    def incoming(self, msg):
+    def process_incoming(self, msg):
         raise NotImplementedError()
         
         
@@ -91,8 +79,13 @@ class InviteState(Loggable):
         return self.state == FINISH
 
 
-    def is_session_finished(self):
+    def is_session_established(self):
         return self.state in (EARLY_SESSION, RELIABLE_EMPTY, FINAL_EMPTY, FINISH)
+
+
+    def is_clogged(self):
+        return self.state in (RELIABLE_NOANSWER, RELIABLE_ANSWER, RELIABLE_OFFER, RELIABLE_EMPTY)
+
 
     # FIXME: use a separate send_request and send_response in each
     # subclasses! And let the user pimp messages there, pass only a simple
@@ -162,8 +155,8 @@ class InviteClientState(InviteState):
         return req
 
 
-    def outgoing(self, message, sdp=None):
-        InviteState.outgoing(self, message, sdp)
+    def process_outgoing(self, message, sdp=None):
+        InviteState.process_outgoing(self, message, sdp)
         
         s = self.state
         req = self.request
@@ -211,7 +204,7 @@ class InviteClientState(InviteState):
                 raise Error("Invalid outgoing SDP in state %s!" % s)
 
                 
-    def incoming(self, msg):
+    def process_incoming(self, msg):
         s = self.state
         req = self.request
 
@@ -330,9 +323,9 @@ class InviteClientState(InviteState):
                 return self.abort("LOL, rejected PRACK!")
             elif has_final:
                 # We never send offers in PRACK requests, so the response is irrelevant
-                return self.recv("PRACK response", None, None)
+                return self.recv("PRACK response", None, msg)
             else:
-                return self.abort("LOL, provisional PRACK!")
+                return self.abort("LOL, provisional PRACK response!")
         
         else:
             return self.abort("Unexpected response!")
@@ -354,8 +347,8 @@ class InviteServerState(InviteState):
         msg["rseq"] = self.rpr_last_rseq
         
 
-    def outgoing(self, message, sdp=None):
-        InviteState.outgoing(self, message, sdp)
+    def process_outgoing(self, message, sdp=None):
+        InviteState.process_outgoing(self, message, sdp)
 
         s = self.state
         req = self.request
@@ -445,7 +438,7 @@ class InviteServerState(InviteState):
                 return self.abort("Huh?")
 
 
-    def incoming(self, msg):
+    def process_incoming(self, msg):
         s = self.state
         req = self.request
         
@@ -467,6 +460,10 @@ class InviteServerState(InviteState):
                 return self.abort("Not an INVITE request is received!")
 
         elif method == "CANCEL":
+            # A gem from 9.2:
+            #   the To tag of the response to the CANCEL and the To tag
+            #   in the response to the original request SHOULD be the same.
+            # Which response, darling? The 100 Trying didn't have To tag, the others did.
             res = dict(status=Status(200))
             self.send_message(res, msg)
         
