@@ -211,11 +211,6 @@ class Switch(Loggable):
 
     def process_request(self, params, related_params):
         method = params["method"]
-        request_uri = params["uri"]
-        
-        if request_uri.scheme != "sip":  # TODO: add some addr checks, too
-            self.reject_request(params, Status(404, "Not found"))
-            return
 
         processed = self.auth_request(params)
         if processed:

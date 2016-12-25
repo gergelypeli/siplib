@@ -477,6 +477,12 @@ class PlannedRouting(zap.Planned, Routing):
             self.logger.error("Routing plan aborted with exception: %s" % exception)
             self.reject_incoming_leg(Status(500))
             self.hangup_outgoing_legs(None)
+        else:
+            # Auto-anchoring
+            if not self.is_anchored and len(self.legs) == 2:
+                oli = max(self.legs.keys())
+                self.logger.info("Auto-anchoring outgoing leg %d." % oli)
+                self.anchor_outgoing_leg(oli)
             
         self.may_finish()
         

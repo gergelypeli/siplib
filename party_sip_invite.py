@@ -40,7 +40,6 @@ class InviteState(Loggable):
         self.state = START
         self.request = None
         
-        self.rpr_supported = True  # FIXME
         self.rpr_last_rseq = 0
 
 
@@ -54,14 +53,6 @@ class InviteState(Loggable):
             
     def process_incoming(self, msg):
         raise NotImplementedError()
-        
-        
-    def set_rpr_supported(self):
-        self.rpr_supported = True
-        
-        
-    def is_rpr_supported(self):
-        return self.rpr_supported
         
         
     def is_finished(self):
@@ -231,7 +222,10 @@ class InviteClientState(InviteState):
                         return self.abort("final response missing offer")
                 elif s in (EARLY_SESSION, RELIABLE_EMPTY):
                     if sdp:
-                        return self.abort("final response with unexpected SDP!")
+                        # The Snom sends such SDP
+                        ack = dict(method="ACK")
+                        self.send("ACK", None, ack, req)
+                        return self.recv("final response with ignored SDP", FINISH, msg)
                     else:
                         ack = dict(method="ACK")
                         self.send("ACK", None, ack, req)
@@ -321,6 +315,8 @@ class InviteServerState(InviteState):
     def __init__(self):
         InviteState.__init__(self)
 
+        # Since we require 100rel, we no longer transition to PROVISIONAL_* states,
+        # unlike the InviteClientState.
 
     def require_100rel(self, msg):
         msg.setdefault("require", set()).add("100rel")
@@ -338,7 +334,6 @@ class InviteServerState(InviteState):
     def process_outgoing(self, msg, sdp=None):
         s = self.state
         req = self.request
-        can_rpr = self.is_rpr_supported()
         
         status = msg["status"] if msg else None
         has_reject = status and status.code >= 300
@@ -349,13 +344,13 @@ class InviteServerState(InviteState):
             # regardless of the session state, send this out
             return self.send("final non-2xx", FINISH, msg, req)
         elif has_final:
-            if s in (REQUEST_EMPTY, PROVISIONAL_OFFER):
+            if s in (REQUEST_EMPTY,):
                 if sdp:
                     add_sdp(msg, sdp)
                     return self.send("final 2xx with offer", FINAL_OFFER, msg, req)
                 else:
                     return self.abort("final 2xx needs offer")
-            elif s in (REQUEST_OFFER, PROVISIONAL_ANSWER):
+            elif s in (REQUEST_OFFER,):
                 if sdp:
                     add_sdp(msg, sdp)
                     return self.send("final 2xx with answer", FINAL_ANSWER, msg, req)
@@ -364,53 +359,36 @@ class InviteServerState(InviteState):
             elif s in (EARLY_SESSION,):
                 return self.send("final 2xx after session", FINAL_EMPTY, msg, req)
         elif has_prov:  # including rpr
-            if s in (REQUEST_EMPTY, PROVISIONAL_OFFER):
+            if s in (REQUEST_EMPTY,):
                 if sdp:
                     add_sdp(msg, sdp)
-                    
-                    if can_rpr:
-                        self.require_100rel(msg)
-                        return self.send("rpr with offer", RELIABLE_OFFER, msg, req)
-                    else:
-                        return self.send("prov with offer", PROVISIONAL_OFFER, msg, req)
+                    self.require_100rel(msg)
+                    return self.send("rpr with offer", RELIABLE_OFFER, msg, req)
                 else:
                     # without offer we can't send an rpr
                     return self.send("prov without offer", REQUEST_EMPTY, msg, req)
-            elif s in (REQUEST_OFFER, PROVISIONAL_ANSWER):
+            elif s in (REQUEST_OFFER,):
                 if sdp:
                     add_sdp(msg, sdp)
-
-                    if can_rpr:
-                        self.require_100rel(msg)
-                        return self.send("rpr with answer", RELIABLE_ANSWER, msg, req)
-                    else:
-                        return self.send("prov with answer", PROVISIONAL_ANSWER, msg, req)
+                    self.require_100rel(msg)
+                    return self.send("rpr with answer", RELIABLE_ANSWER, msg, req)
                 else:
-                    if can_rpr:
-                        self.require_100rel(msg)
-                        return self.send("rpr without answer", RELIABLE_NOANSWER, msg, req)
-                    else:
-                        return self.send("prov without answer", REQUEST_OFFER, msg, req)
+                    self.require_100rel(msg)
+                    return self.send("rpr without answer", RELIABLE_NOANSWER, msg, req)
             elif s in (EARLY_SESSION,):
                 # seems like we can do rpr, but can't send further sessions in rpr
                 return self.send("rpr after session", RELIABLE_EMPTY, msg, req)
         else:
-            if s in (REQUEST_EMPTY, PROVISIONAL_OFFER):
+            if s in (REQUEST_EMPTY,):
                 if sdp:
                     msg = add_sdp(dict(status=Status(183)), sdp)
-                    
-                    if can_rpr:
-                        return self.send("session progress rpr with offer", RELIABLE_OFFER, msg, req)
-                    else:
-                        return self.send("session progress with offer", PROVISIONAL_OFFER, msg, req)
-            elif s in (REQUEST_OFFER, PROVISIONAL_ANSWER):
+                    self.require_100rel(msg)
+                    return self.send("session progress rpr with offer", RELIABLE_OFFER, msg, req)
+            elif s in (REQUEST_OFFER,):
                 if sdp:
                     msg = add_sdp(dict(status=Status(183)), sdp)
-                    
-                    if can_rpr:
-                        return self.send("session progress rpr with answer", RELIABLE_ANSWER, msg, req)
-                    else:
-                        return self.send("session progress with answer", PROVISIONAL_ANSWER, msg, req)
+                    self.require_100rel(msg)
+                    return self.send("session progress rpr with answer", RELIABLE_ANSWER, msg, req)
             else:
                 return self.abort("Huh?")
 
@@ -426,9 +404,6 @@ class InviteServerState(InviteState):
             if s == START:
                 self.request = msg
                 
-                if "100rel" in msg.get("supported", set()):
-                    self.set_rpr_supported()
-        
                 if sdp:
                     return self.recv("request with offer", REQUEST_OFFER, msg, sdp, False)
                 else:

@@ -262,6 +262,7 @@ class Status(namedtuple("Status", [ "code", "reason" ])):
         403: "Forbidden",
         404: "Not Found",
         408: "Request Timeout",
+        421: "Extension Required",
         423: "Interval Too Brief",
         481: "Call/Transaction Does Not Exist",
         482: "Loop Detected",

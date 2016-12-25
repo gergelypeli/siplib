@@ -23,7 +23,7 @@ import resolver
 
 TEST_DIALIN = 1
 TEST_DIALOUT = 2
-TEST = TEST_DIALIN
+TEST = TEST_DIALOUT
 
 HOST = "otthon"
 A_ADDR = Addr(HOST, 5060)
@@ -221,13 +221,19 @@ class CallerEndpoint(TestEndpoint):
             elif action["type"] == "accept":
                 self.logger.info("Yay, accepted!")
                 break
+            elif action["type"] == "session":
+                # This is necessary, since the callee may send the offer in an rpr,
+                # and we must generate the answer in order to PRACK it.
+                offer = action.get("session")
+                answer = self.update_session(offer)
+                self.leg.forward(dict(type="session", session=answer))
             else:
                 self.logger.error("Hm, we got: %s!" % action["type"])
             
         offer = action.get("session")
-        answer = self.update_session(offer)
-        
-        self.leg.forward(dict(type="session", session=answer))
+        if offer:
+            answer = self.update_session(offer)
+            self.leg.forward(dict(type="session", session=answer))
 
         # Be more flexible here!
         yield from self.idle()

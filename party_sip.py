@@ -399,11 +399,13 @@ class SipEndpoint(Endpoint):
                 self.dialog.setup_outgoing(uri, fr, to, route, hop)
                 self.invite_new(is_outgoing=True)
                 
-                if "100rel" in action.get("options", set()):
-                    self.invite.use_rpr_locally()
-                    
                 sdp = self.process_outgoing_session(session)
-                self.invite_outgoing(dict(method="INVITE"), sdp)
+                req = dict(
+                    method="INVITE",
+                    supported=["100rel"],
+                    require=["100rel"]
+                )
+                self.invite_outgoing(req, sdp)
                 self.change_state(self.DIALING_OUT)
                 
                 return
@@ -429,7 +431,6 @@ class SipEndpoint(Endpoint):
 
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
             already_ringing = (self.state == self.DIALING_IN_RINGING)
-            #rpr = "100rel" in action.get("options", set())
 
             if session and self.invite.is_session_established():
                 # Rip the sdp from the response, and use an UPDATE instead
@@ -519,13 +520,18 @@ class SipEndpoint(Endpoint):
         
         if self.state == self.DOWN:
             if not is_response and method == "INVITE":
+                if "100rel" not in msg.get("supported", set()):
+                    self.logger.error("Obsolete peer does not support 100rel!")
+                    self.send_response(dict(status=Status(421, "100rel support required")), msg)
+                    self.may_finish()
+                    return
+                
                 src = dict(msg, type="sip")
                 ctx = {}
                 
                 self.invite_new(is_outgoing=False)
                 msg, sdp, is_answer = self.invite_incoming(msg)
                 session = self.process_incoming_sdp(sdp, is_answer)
-                options = set("100rel") if self.invite.is_rpr_supported() else set()
                 
                 self.change_state(self.DIALING_IN)
                 
@@ -534,8 +540,7 @@ class SipEndpoint(Endpoint):
                     call_info=self.get_call_info(),
                     src=src,
                     ctx=ctx,
-                    session=session,
-                    options=options
+                    session=session
                 )
                 self.forward(action)
                 return
