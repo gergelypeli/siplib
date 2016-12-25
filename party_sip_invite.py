@@ -11,7 +11,7 @@ REQUEST_OFFER = "REQUEST_OFFER"
 PROVISIONAL_ANSWER = "PROVISIONAL_ANSWER"
 RELIABLE_NOANSWER = "RELIABLE_NOANSWER"  # wait for PRACK only, then RO
 RELIABLE_ANSWER = "RELIABLE_ANSWER"  # wait for PRACK
-PRACK_OFFER = "PRACK_OFFER"
+#PRACK_OFFER = "PRACK_OFFER"  # nope
 
 REQUEST_EMPTY = "REQUEST_EMPTY"
 PROVISIONAL_OFFER = "PROVISIONAL_OFFER"
@@ -43,24 +43,13 @@ class InviteState(Loggable):
         self.rpr_supported = True  # FIXME
         self.rpr_last_rseq = 0
 
-        # FIXME: remove these, SipEndpoint does the queueing now
-        self.pending_sdp = None
-        self.pending_messages = []
-
 
     def send_message(self, msg, related_msg=None):
         self.message_slot.zap(msg, related_msg)
         
 
     def process_outgoing(self, message, sdp):
-        if message:
-            self.pending_messages.append(message)
-        
-        if sdp:
-            if self.pending_sdp:
-                raise Error("SDP already pending!")
-                
-            self.pending_sdp = sdp
+        raise NotImplementedError()
             
             
     def process_incoming(self, msg):
@@ -84,7 +73,7 @@ class InviteState(Loggable):
 
 
     def is_clogged(self):
-        return self.state in (RELIABLE_NOANSWER, RELIABLE_ANSWER, RELIABLE_OFFER, RELIABLE_EMPTY)
+        raise NotImplementedError()
 
 
     # FIXME: use a separate send_request and send_response in each
@@ -94,8 +83,6 @@ class InviteState(Loggable):
     #def send_message(self, message, related):
     #    raise NotImplementedError()
 
-    # FIXME: no need for pending queue, just use a single variable!
-    
     # FIXME: maybe even a single status or method string? Only the initial
     # invite has meaningful fields. But those are set in SipLeg.
 
@@ -104,9 +91,6 @@ class InviteState(Loggable):
             self.logger.debug("Changing state %s => %s" % (self.state, state))
             self.state = state
         
-        if self.pending_messages and self.pending_messages[0] is msg:
-            self.pending_messages.pop(0)
-
         if msg:
             self.logger.debug("Sending message: %s" % log)
             self.send_message(msg, rel)
@@ -145,6 +129,11 @@ class InviteClientState(InviteState):
         self.unanswered_rpr = None
 
 
+    def is_clogged(self):
+        # And INVITE client can always send any message
+        return False
+        
+
     def make_prack(self, rpr, sdp=None):
         rack = Rack(rpr["rseq"], rpr["cseq"], rpr["method"])
         req = dict(method="PRACK", rack=rack)
@@ -155,15 +144,10 @@ class InviteClientState(InviteState):
         return req
 
 
-    def process_outgoing(self, message, sdp=None):
-        InviteState.process_outgoing(self, message, sdp)
-        
+    def process_outgoing(self, msg, sdp=None):
         s = self.state
         req = self.request
-
-        msg = self.pending_messages[0] if self.pending_messages else None
         method = msg["method"] if msg else None
-        sdp = self.pending_sdp
 
         # CANCEL is possible in all states
         if method == "CANCEL":
@@ -337,25 +321,25 @@ class InviteServerState(InviteState):
     def __init__(self):
         InviteState.__init__(self)
 
-        self.unanswered_prack = None
-
 
     def require_100rel(self, msg):
         msg.setdefault("require", set()).add("100rel")
 
         self.rpr_last_rseq += 1
         msg["rseq"] = self.rpr_last_rseq
+
+
+    def is_clogged(self):
+        # After sending an rpr we must wait until the corresponding PRACK before we
+        # can handle the next outgoing message. Better tell our owner beforehand.
+        return self.state in (RELIABLE_NOANSWER, RELIABLE_ANSWER, RELIABLE_OFFER, RELIABLE_EMPTY)
         
 
-    def process_outgoing(self, message, sdp=None):
-        InviteState.process_outgoing(self, message, sdp)
-
+    def process_outgoing(self, msg, sdp=None):
         s = self.state
         req = self.request
-        sdp = self.pending_sdp
         can_rpr = self.is_rpr_supported()
         
-        msg = self.pending_messages[0] if self.pending_messages else None
         status = msg["status"] if msg else None
         has_reject = status and status.code >= 300
         has_final = status and status.code < 300 and status.code >= 200
@@ -427,13 +411,6 @@ class InviteServerState(InviteState):
                         return self.send("session progress rpr with answer", RELIABLE_ANSWER, msg, req)
                     else:
                         return self.send("session progress with answer", PROVISIONAL_ANSWER, msg, req)
-            elif s in (PRACK_OFFER,):
-                if sdp:
-                    msg = add_sdp(dict(status=Status(200)), sdp)
-                    pra = self.unanswered_prack
-                    self.unanswered_prack = None
-                    
-                    return self.send("prack response with answer", EARLY_SESSION, msg, pra)
             else:
                 return self.abort("Huh?")
 
@@ -494,9 +471,9 @@ class InviteServerState(InviteState):
             elif s in (RELIABLE_ANSWER,):
                 if sdp:
                     # Bleh
-                    self.unanswered_prack = msg
-                    self.pending_sdp = None  # This is needed to let us answer again
-                    return self.recv("PRACK with offer", PRACK_OFFER, None, sdp, False)
+                    prr = dict(status=Status(400, "PRACK Offers Are Fucked Up"))
+                    self.send_message(prr, msg)
+                    return self.recv("PRACK with fucked up offer", EARLY_SESSION, None, None)
                 else:
                     prr = dict(status=Status(200))
                     self.send_message(prr, msg)
