@@ -11,7 +11,7 @@ REQUEST_OFFER = "REQUEST_OFFER"
 PROVISIONAL_ANSWER = "PROVISIONAL_ANSWER"
 RELIABLE_NOANSWER = "RELIABLE_NOANSWER"  # wait for PRACK only, then RO
 RELIABLE_ANSWER = "RELIABLE_ANSWER"  # wait for PRACK
-#PRACK_OFFER = "PRACK_OFFER"  # nope
+PRACK_OFFER = "PRACK_OFFER"  # wait for answer
 
 REQUEST_EMPTY = "REQUEST_EMPTY"
 PROVISIONAL_OFFER = "PROVISIONAL_OFFER"
@@ -32,7 +32,7 @@ class Error(Exception):
 
 
 class InviteState(Loggable):
-    def __init__(self):
+    def __init__(self, use_rpr):
         Loggable.__init__(self)
         
         self.message_slot = zap.EventSlot()
@@ -40,6 +40,7 @@ class InviteState(Loggable):
         self.state = START
         self.request = None
         
+        self.use_rpr = use_rpr
         self.rpr_last_rseq = 0
 
 
@@ -114,8 +115,8 @@ class InviteState(Loggable):
 
 
 class InviteClientState(InviteState):
-    def __init__(self):
-        InviteState.__init__(self)
+    def __init__(self, use_rpr):
+        InviteState.__init__(self, use_rpr)
         
         self.unanswered_rpr = None
 
@@ -149,6 +150,10 @@ class InviteClientState(InviteState):
         elif method == "INVITE":
             if s != START:
                 raise Error("Bad INVITE!")
+            
+            if self.use_rpr:
+                msg.setdefault("supported", set()).add("100rel")
+                msg.setdefault("require", set()).add("100rel")
             
             self.request = msg
                 
@@ -273,7 +278,9 @@ class InviteClientState(InviteState):
                 else:
                     return self.abort("Unexpected reliable response!")
             else:
-                if s in (REQUEST_OFFER,):
+                if self.use_rpr:
+                    return self.abort("Disallowed provisional response!")
+                elif s in (REQUEST_OFFER,):
                     if sdp:
                         return self.recv("provisional response with answer", PROVISIONAL_ANSWER, msg, sdp, True)
                     else:
@@ -312,17 +319,22 @@ class InviteClientState(InviteState):
 # Invite server
 
 class InviteServerState(InviteState):
-    def __init__(self):
-        InviteState.__init__(self)
+    def __init__(self, use_rpr):
+        InviteState.__init__(self, use_rpr)
 
-        # Since we require 100rel, we no longer transition to PROVISIONAL_* states,
-        # unlike the InviteClientState.
+        self.unanswered_prack = None  # only used for PRACK offers
+        self.provisional_sdp = None  # only used without rpr
 
-    def require_100rel(self, msg):
-        msg.setdefault("require", set()).add("100rel")
 
-        self.rpr_last_rseq += 1
-        msg["rseq"] = self.rpr_last_rseq
+    def send(self, log, state=None, msg=None, rel=None):
+        if state in (RELIABLE_NOANSWER, RELIABLE_OFFER, RELIABLE_ANSWER, RELIABLE_EMPTY):
+            self.provisional_sdp = None
+            msg.setdefault("require", set()).add("100rel")
+            
+            self.rpr_last_rseq += 1
+            msg["rseq"] = self.rpr_last_rseq
+            
+        InviteState.send(self, log, state, msg, rel)
 
 
     def is_clogged(self):
@@ -340,17 +352,22 @@ class InviteServerState(InviteState):
         has_final = status and status.code < 300 and status.code >= 200
         has_prov = status and status.code < 200
 
+        if not sdp:
+            # This should be repeated in provisional and final responses, once sent.
+            # If rpr is supported, we never set it.
+            sdp = self.provisional_sdp
+
         if has_reject:
             # regardless of the session state, send this out
             return self.send("final non-2xx", FINISH, msg, req)
         elif has_final:
-            if s in (REQUEST_EMPTY,):
+            if s in (REQUEST_EMPTY, PROVISIONAL_OFFER):
                 if sdp:
                     add_sdp(msg, sdp)
                     return self.send("final 2xx with offer", FINAL_OFFER, msg, req)
                 else:
                     return self.abort("final 2xx needs offer")
-            elif s in (REQUEST_OFFER,):
+            elif s in (REQUEST_OFFER, PROVISIONAL_ANSWER):
                 if sdp:
                     add_sdp(msg, sdp)
                     return self.send("final 2xx with answer", FINAL_ANSWER, msg, req)
@@ -359,36 +376,70 @@ class InviteServerState(InviteState):
             elif s in (EARLY_SESSION,):
                 return self.send("final 2xx after session", FINAL_EMPTY, msg, req)
         elif has_prov:  # including rpr
-            if s in (REQUEST_EMPTY,):
+            if s in (REQUEST_EMPTY, PROVISIONAL_OFFER):
                 if sdp:
                     add_sdp(msg, sdp)
-                    self.require_100rel(msg)
-                    return self.send("rpr with offer", RELIABLE_OFFER, msg, req)
+                    
+                    if self.use_rpr:
+                        return self.send("rpr with offer", RELIABLE_OFFER, msg, req)
+                    else:
+                        # FIXME: check first!
+                        self.provisional_sdp = sdp
+                        return self.send("prov with offer", PROVISIONAL_OFFER, msg, req)
                 else:
-                    # without offer we can't send an rpr
-                    return self.send("prov without offer", REQUEST_EMPTY, msg, req)
-            elif s in (REQUEST_OFFER,):
+                    if self.use_rpr:
+                        # must send an offer in the first provisional response
+                        return self.send("waiting for offer", None, None, None)
+                    else:
+                        return self.send("prov without offer", None, msg, req)
+            elif s in (REQUEST_OFFER, PROVISIONAL_ANSWER):
                 if sdp:
                     add_sdp(msg, sdp)
-                    self.require_100rel(msg)
-                    return self.send("rpr with answer", RELIABLE_ANSWER, msg, req)
+                    
+                    if self.use_rpr:
+                        return self.send("rpr with answer", RELIABLE_ANSWER, msg, req)
+                    else:
+                        # FIXME: check first!
+                        self.provisional_sdp = sdp
+                        return self.send("prov with answer", PROVISIONAL_ANSWER, msg, req)
                 else:
-                    self.require_100rel(msg)
-                    return self.send("rpr without answer", RELIABLE_NOANSWER, msg, req)
+                    if self.use_rpr:
+                        return self.send("rpr without answer", RELIABLE_NOANSWER, msg, req)
+                    else:
+                        return self.send("prov without answer", None, msg, req)
             elif s in (EARLY_SESSION,):
                 # seems like we can do rpr, but can't send further sessions in rpr
                 return self.send("rpr after session", RELIABLE_EMPTY, msg, req)
         else:
-            if s in (REQUEST_EMPTY,):
+            if s in (REQUEST_EMPTY, PROVISIONAL_OFFER):
                 if sdp:
                     msg = add_sdp(dict(status=Status(183)), sdp)
-                    self.require_100rel(msg)
-                    return self.send("session progress rpr with offer", RELIABLE_OFFER, msg, req)
-            elif s in (REQUEST_OFFER,):
+                    
+                    if self.use_rpr:
+                        return self.send("session progress rpr with offer", RELIABLE_OFFER, msg, req)
+                    else:
+                        return self.send("session progress with offer", PROVISIONAL_OFFER, msg, req)
+                else:
+                    raise Exception("Nothing to do!")
+            elif s in (REQUEST_OFFER, PROVISIONAL_ANSWER):
                 if sdp:
                     msg = add_sdp(dict(status=Status(183)), sdp)
-                    self.require_100rel(msg)
-                    return self.send("session progress rpr with answer", RELIABLE_ANSWER, msg, req)
+                    
+                    if self.use_rpr:
+                        return self.send("session progress rpr with answer", RELIABLE_ANSWER, msg, req)
+                    else:
+                        return self.send("session progress with answer", PROVISIONAL_ANSWER, msg, req)
+                else:
+                    raise Exception("Nothing to do!")
+            elif s in (PRACK_OFFER,):
+                if sdp:
+                    msg = add_sdp(dict(status=Status(200, "Not Happy")), sdp)
+                    pra = self.unanswered_prack
+                    self.unanswered_prack = None
+                    
+                    return self.send("prack response with answer", EARLY_SESSION, msg, pra)
+                else:
+                    raise Exception("Nothing to do!")
             else:
                 return self.abort("Huh?")
 
@@ -446,9 +497,8 @@ class InviteServerState(InviteState):
             elif s in (RELIABLE_ANSWER,):
                 if sdp:
                     # Bleh
-                    prr = dict(status=Status(400, "PRACK Offers Are Fucked Up"))
-                    self.send_message(prr, msg)
-                    return self.recv("PRACK with fucked up offer", EARLY_SESSION, None, None)
+                    self.unanswered_prack = msg
+                    return self.recv("PRACK with offer", PRACK_OFFER, None, sdp, False)
                 else:
                     prr = dict(status=Status(200))
                     self.send_message(prr, msg)

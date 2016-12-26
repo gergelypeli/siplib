@@ -24,7 +24,8 @@ class SipEndpoint(Endpoint):
     DISCONNECTING_OUT = "DISCONNECTING_OUT"
 
     DEFAULT_ALLOWED_METHODS = ["INVITE", "CANCEL", "ACK", "PRACK", "BYE", "UPDATE"]
-    
+
+    USE_RPR = True
 
     def __init__(self, dialog):
         Endpoint.__init__(self)
@@ -87,10 +88,10 @@ class SipEndpoint(Endpoint):
             raise Error("Invite already in progress!")
             
         if is_outgoing:
-            self.invite = InviteClientState()
+            self.invite = InviteClientState(self.USE_RPR)
             self.invite.message_slot.plug(self.send_request)
         else:
-            self.invite = InviteServerState()
+            self.invite = InviteServerState(self.USE_RPR)
             self.invite.message_slot.plug(self.send_response)
             
         self.invite.set_oid(self.oid.add("invite"))
@@ -122,6 +123,27 @@ class SipEndpoint(Endpoint):
             self.invite = None
         elif self.has_clogged_invite and not self.invite.is_clogged():
             self.has_clogged_invite = False
+            
+            if sdp and not is_answer:
+                # Thanks to the PRACK offers, we may need to reject pending outgoing offers
+                # before we send the received one up.
+                
+                pas = []
+                
+                for action in self.pending_actions:
+                    session = action.get("session")
+                    
+                    if session:
+                        self.forward(dict(type="session", session=dict(is_answer=True)))  # TODO: proper rejection!
+                        
+                        if action["type"] == "session":
+                            continue
+                        
+                        action["session"] = None
+                        
+                    pas.append(action)
+                    
+                self.pending_actions = pas
             
             if self.pending_actions:
                 self.logger.info("Invite unclogged, will retry postponed actions.")
@@ -400,12 +422,7 @@ class SipEndpoint(Endpoint):
                 self.invite_new(is_outgoing=True)
                 
                 sdp = self.process_outgoing_session(session)
-                req = dict(
-                    method="INVITE",
-                    supported=["100rel"],
-                    require=["100rel"]
-                )
-                self.invite_outgoing(req, sdp)
+                self.invite_outgoing(dict(method="INVITE"), sdp)
                 self.change_state(self.DIALING_OUT)
                 
                 return
@@ -520,7 +537,7 @@ class SipEndpoint(Endpoint):
         
         if self.state == self.DOWN:
             if not is_response and method == "INVITE":
-                if "100rel" not in msg.get("supported", set()):
+                if self.USE_RPR and "100rel" not in msg.get("supported", set()):
                     self.logger.error("Obsolete peer does not support 100rel!")
                     self.send_response(dict(status=Status(421, "100rel support required")), msg)
                     self.may_finish()
