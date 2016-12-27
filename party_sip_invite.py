@@ -4,12 +4,14 @@ from util import Loggable
 import zap
 
 
+KEEP = "KEEP"
+
 START = "START"
 
 REQUEST_OFFER = "REQUEST_OFFER"
 # no need for PROVISIONAL_EMPTY
 PROVISIONAL_ANSWER = "PROVISIONAL_ANSWER"
-RELIABLE_NOANSWER = "RELIABLE_NOANSWER"  # wait for PRACK only, then RO
+RELIABLE_PREANSWER = "RELIABLE_PREANSWER"  # wait for PRACK only, then RO
 RELIABLE_ANSWER = "RELIABLE_ANSWER"  # wait for PRACK
 PRACK_OFFER = "PRACK_OFFER"  # wait for answer
 
@@ -18,13 +20,14 @@ PROVISIONAL_OFFER = "PROVISIONAL_OFFER"
 RELIABLE_OFFER = "RELIABLE_OFFER"  # wait for PRACK
 
 EARLY_SESSION = "EARLY_SESSION"
-RELIABLE_EMPTY = "RELIABLE_EMPTY"  # wait for PRACK only, then ES
+RELIABLE_POSTANSWER = "RELIABLE_POSTANSWER"  # wait for PRACK only, then ES
 
 FINAL_OFFER = "FINAL_OFFER"
 FINAL_ANSWER = "FINAL_ANSWER"
 FINAL_EMPTY = "FINAL_EMPTY"
 
 FINISH = "FINISH"
+ABORT = "ABORT"
 
 
 class Error(Exception):
@@ -48,7 +51,7 @@ class InviteState(Loggable):
         self.message_slot.zap(msg, related_msg)
         
 
-    def process_outgoing(self, message, sdp):
+    def process_outgoing(self, message, sdp, is_answer):
         raise NotImplementedError()
             
             
@@ -57,16 +60,20 @@ class InviteState(Loggable):
         
         
     def is_finished(self):
-        return self.state == FINISH
+        return self.state in (FINISH, ABORT)
 
 
     def is_session_established(self):
-        return self.state in (EARLY_SESSION, RELIABLE_EMPTY, FINAL_EMPTY, FINISH)
+        return self.state in (EARLY_SESSION, RELIABLE_POSTANSWER, FINAL_EMPTY, FINISH)
 
 
     def is_clogged(self):
         raise NotImplementedError()
 
+
+    def will_session_prack(self):
+        raise NotImplementedError()
+        
 
     # FIXME: use a separate send_request and send_response in each
     # subclasses! And let the user pimp messages there, pass only a simple
@@ -78,8 +85,8 @@ class InviteState(Loggable):
     # FIXME: maybe even a single status or method string? Only the initial
     # invite has meaningful fields. But those are set in SipLeg.
 
-    def send(self, log, state=None, msg=None, rel=None):
-        if state:
+    def send(self, log, state, msg=None, rel=None):
+        if state != KEEP:
             self.logger.debug("Changing state %s => %s" % (self.state, state))
             self.state = state
         
@@ -90,30 +97,22 @@ class InviteState(Loggable):
             self.logger.debug("Not sending message: %s" % log)
 
 
-    def recv(self, log, state, msg, sdp=None, is_answer=None):
-        self.logger.debug("Received message: %s" % log)
+    def recv(self, log, state, msg=None, sdp=None, is_answer=None):
+        if msg:
+            self.logger.debug("Processing message: %s" % log)
+        else:
+            self.logger.warning("Not processing message: %s" % log)
     
         if sdp is not None and is_answer is None:
             raise Exception("Please tell explicitly if the SDP is an answer or not!")
     
-        if state:
+        if state != KEEP:
             self.logger.debug("Changing state %s => %s" % (self.state, state))
             self.state = state
         
         return msg, sdp, is_answer
 
         
-    def abort(self, message):
-        self.logger.error(message)
-        self.state = FINISH
-        return None, None, None
-
-
-    def ignore(self, message):
-        self.logger.info(message)
-        return None, None, None
-
-
 class InviteClientState(InviteState):
     def __init__(self, use_rpr):
         InviteState.__init__(self, use_rpr)
@@ -124,9 +123,17 @@ class InviteClientState(InviteState):
     def is_clogged(self):
         return self.state in (PROVISIONAL_OFFER,)
         
+        
+    def will_session_prack(self):
+        return self.use_rpr and self.state == RELIABLE_OFFER
+        
+        
+    def make_rack(self, rpr):
+        return Rack(rpr["rseq"], rpr["cseq"], rpr["method"])
+        
 
     def make_prack(self, rpr, sdp=None):
-        rack = Rack(rpr["rseq"], rpr["cseq"], rpr["method"])
+        rack = self.make_rack(rpr)
         req = dict(method="PRACK", rack=rack)
         
         if sdp:
@@ -135,20 +142,23 @@ class InviteClientState(InviteState):
         return req
 
 
-    def process_outgoing(self, msg, sdp=None):
+    def process_outgoing(self, msg, sdp=None, is_answer=None):
+        if sdp is not None and is_answer is None:
+            raise Error("SDP without direction!")
+    
         s = self.state
         req = self.request
-        method = msg["method"] if msg else None
+        method = msg["method"]
 
         # CANCEL is possible in all states
         if method == "CANCEL":
             if s == START:
-                raise Error("Bad CANCEL!")
-                
-            return self.send("cancel", None, msg, req)
+                return self.send("premature CANCEL", ABORT)
+            else:
+                return self.send("cancel", None, msg, req)
         elif method == "INVITE":
             if s != START:
-                raise Error("Bad INVITE!")
+                return self.send("late INVITE", ABORT)
             
             if self.use_rpr:
                 msg.setdefault("supported", set()).add("100rel")
@@ -157,30 +167,38 @@ class InviteClientState(InviteState):
             self.request = msg
                 
             if sdp:
+                assert not is_answer
                 add_sdp(msg, sdp)
-                return self.send("request with offer", REQUEST_OFFER, msg, None)
+                return self.send("request with offer", REQUEST_OFFER, msg)
             else:
-                return self.send("request without offer", REQUEST_EMPTY, msg, None)
-        elif method:
-            # PRACK request is always implicit
-            raise Error("Bad outgoing request!")
-        elif sdp:
-            if s == START:
-                return self.abort("offer before INVITE")
-            elif s == PROVISIONAL_OFFER:
-                return self.abort("clogged answer for provisional offer")
-            elif s == RELIABLE_OFFER:
-                rpr = self.unanswered_rpr
-                self.unanswered_rpr = None
+                return self.send("request without offer", REQUEST_EMPTY, msg)
+        elif method == "ACK":
+            if s == FINAL_OFFER:
+                if sdp:
+                    assert is_answer
                 
-                pra = self.make_prack(rpr, sdp)
-                return self.send("PRACK with answer", EARLY_SESSION, pra, None)
-            elif s == FINAL_OFFER:
-                ack = add_sdp(dict(method="ACK"), sdp)
-                
-                return self.send("ACK with answer", FINISH, ack, req)
+                    add_sdp(msg, sdp)
+                    return self.send("ACK with answer", FINISH, msg, req)
+                else:
+                    return self.send("ACK needs answer", ABORT)
             else:
-                raise Error("Invalid outgoing SDP in state %s!" % s)
+                return self.send("unexpected ACK", ABORT)
+        elif method == "PRACK":
+            if s == RELIABLE_OFFER:
+                if sdp:
+                    assert is_answer
+                    rpr = self.unanswered_rpr
+                    self.unanswered_rpr = None
+                
+                    msg["rack"] = self.make_rack(rpr)
+                    add_sdp(msg, sdp)
+                    return self.send("PRACK with answer", EARLY_SESSION, msg)
+                else:
+                    return self.send("PRACK needs answer", ABORT)
+            else:
+                return self.send("unexpected PRACK", ABORT)
+        else:
+            return self.send("unexpected message", ABORT)
 
                 
     def process_incoming(self, msg):
@@ -201,118 +219,123 @@ class InviteClientState(InviteState):
                 return self.recv("cancel rejected", FINISH, msg)
             else:
                 # Wait for rejection of the INVITE
-                return self.recv("cancel accepted", None, msg)
+                return self.recv("cancel accepted", KEEP, msg)
         
         elif method == "INVITE":
             if has_reject:
                 # Transaction layer already sends the ACK for this
                 return self.recv("reject response", FINISH, msg)
             elif has_final:
-                if s in (REQUEST_OFFER, PROVISIONAL_ANSWER, RELIABLE_NOANSWER):
+                if s in (REQUEST_OFFER, PROVISIONAL_ANSWER, RELIABLE_PREANSWER):
                     ack = dict(method="ACK")
-                    self.send("ACK", None, ack, req)
+                    self.send("ACK", KEEP, ack, req)
                     
                     if sdp:
                         return self.recv("final response with answer", FINISH, msg, sdp, True)
                     else:
-                        return self.abort("final response missing answer")
+                        return self.recv("final response missing answer", ABORT)
                 elif s in (REQUEST_EMPTY, PROVISIONAL_OFFER):
                     if sdp:
                         # Wait for answer to ACK
                         return self.recv("final response with offer", FINAL_OFFER, msg, sdp, False)
                     else:
                         ack = dict(method="ACK")
-                        self.send("ACK for bad response", None, ack, req)
-                        return self.abort("final response missing offer")
-                elif s in (EARLY_SESSION, RELIABLE_EMPTY):
+                        self.send("ACK for bad response", KEEP, ack, req)
+                        return self.recv("final response missing offer", ABORT)
+                elif s in (EARLY_SESSION, RELIABLE_POSTANSWER):
                     if sdp:
                         # The Snom sends such SDP
                         ack = dict(method="ACK")
-                        self.send("ACK", None, ack, req)
+                        self.send("ACK", KEEP, ack, req)
                         return self.recv("final response with ignored SDP", FINISH, msg)
                     else:
                         ack = dict(method="ACK")
-                        self.send("ACK", None, ack, req)
+                        self.send("ACK", KEEP, ack, req)
                         return self.recv("final response", FINISH, msg)
                 else:
-                    # This can be a duplicate final
-                    return self.ignore("ignoring unexpected final response!")
+                    return self.recv("duplicate final response", KEEP)
             elif has_rpr:
                 rseq = msg["rseq"]
                 
                 if rseq <= self.rpr_last_rseq:
-                    return self.recv("ignoring duplicate rpr", None, None)
+                    return self.recv("ignoring duplicate rpr", KEEP)
                 elif rseq > self.rpr_last_rseq + 1:
-                    return self.recv("ignoring out of order rpr", None, None)
+                    return self.recv("ignoring out of order rpr", KEEP)
 
                 self.rpr_last_rseq += 1
                 
                 if s in (REQUEST_OFFER,):
-                    self.send("PRACK", None, self.make_prack(msg))
+                    pra = dict(method="PRACK", rack=self.make_rack(msg))
+                    self.send("PRACK", KEEP, pra)
                     
                     if sdp:
                         return self.recv("reliable response with answer", EARLY_SESSION, msg, sdp, True)
                     else:
-                        return self.recv("reliable response", None, msg)
+                        return self.recv("reliable response", KEEP, msg)
                 elif s in (PROVISIONAL_ANSWER,):
-                    self.send("PRACK", None, self.make_prack(msg))
+                    pra = dict(method="PRACK", rack=self.make_rack(msg))
+                    self.send("PRACK", KEEP, pra)
                     
                     if sdp:
                         return self.recv("reliable response with ignored answer", EARLY_SESSION, msg)
                     else:
-                        return self.recv("reliable response", None, msg)
+                        return self.recv("reliable response", KEEP, msg)
                 elif s in (REQUEST_EMPTY,):
+                    # This will be PRACK-ed explicitly when the answer is ready.
+                    # Also, the first reliable response must have an offer.
+                    
                     if sdp:
                         self.unanswered_rpr = msg
                         return self.recv("reliable response with offer", RELIABLE_OFFER, msg, sdp, False)
                     else:
-                        return self.abort("reliable response missing offer")
+                        return self.recv("reliable response missing offer", ABORT)
                 elif s in (PROVISIONAL_OFFER,):
-                    self.send("PRACK", None, self.make_prack(msg))
+                    pra = dict(method="PRACK", rack=self.make_rack(msg))
+                    self.send("PRACK", KEEP, pra)
                     
                     if sdp:
                         return self.recv("reliable response with ignored offer", EARLY_SESSION, msg)
                     else:
-                        return self.recv("reliable response", None, msg)
+                        return self.recv("reliable response", KEEP, msg)
                 else:
-                    return self.abort("unexpected reliable response")
+                    return self.recv("unexpected reliable response", ABORT)
             else:
                 if self.use_rpr:
-                    return self.abort("disallowed unreliable provisional response")
+                    return self.recv("disallowed unreliable provisional response", ABORT)
                 elif s in (REQUEST_OFFER,):
                     if sdp:
                         return self.recv("provisional response with answer", PROVISIONAL_ANSWER, msg, sdp, True)
                     else:
-                        return self.recv("provisional response", None, msg)
+                        return self.recv("provisional response", KEEP, msg)
                 elif s in (PROVISIONAL_ANSWER,):
                     if sdp:
-                        return self.recv("provisional response with ignored answer", None, msg)
+                        return self.recv("provisional response with ignored answer", KEEP, msg)
                     else:
-                        return self.recv("provisional response", None, msg)
+                        return self.recv("provisional response", KEEP, msg)
                 elif s in (REQUEST_EMPTY,):
                     if sdp:
                         return self.recv("provisional response with offer", PROVISIONAL_OFFER, msg, sdp, False)
                     else:
-                        return self.recv("provisional response", None, msg)
+                        return self.recv("provisional response", KEEP, msg)
                 elif s in (PROVISIONAL_OFFER,):
                     if sdp:
-                        return self.recv("provisional response with ignored offer", None, msg)
+                        return self.recv("provisional response with ignored offer", KEEP, msg)
                     else:
-                        return self.recv("provisional response", None, msg)
+                        return self.recv("provisional response", KEEP, msg)
                 else:
-                    return self.abort("unexpected provisional response")
+                    return self.recv("unexpected provisional response", ABORT)
 
         elif method == "PRACK":
             if has_reject:
-                return self.abort("rejected PRACK")
+                return self.recv("rejected PRACK", ABORT)
             elif has_final:
                 # We never send offers in PRACK requests, so the response is irrelevant
-                return self.recv("PRACK response", None, msg)
+                return self.recv("PRACK response", KEEP, msg)
             else:
-                return self.ignore("provisional PRACK response")
+                return self.recv("provisional PRACK response", KEEP)
         
         else:
-            return self.abort("unexpected response")
+            return self.recv("unexpected response", ABORT)
 
 
 # Invite server
@@ -326,7 +349,7 @@ class InviteServerState(InviteState):
 
 
     def send(self, log, state=None, msg=None, rel=None):
-        if state in (RELIABLE_NOANSWER, RELIABLE_OFFER, RELIABLE_ANSWER, RELIABLE_EMPTY):
+        if state in (RELIABLE_PREANSWER, RELIABLE_OFFER, RELIABLE_ANSWER, RELIABLE_POSTANSWER):
             self.provisional_sdp = None
             msg.setdefault("require", set()).add("100rel")
             
@@ -339,108 +362,136 @@ class InviteServerState(InviteState):
     def is_clogged(self):
         # After sending an rpr we must wait until the corresponding PRACK before we
         # can handle the next outgoing message. Better tell our owner beforehand.
-        return self.state in (RELIABLE_NOANSWER, RELIABLE_ANSWER, RELIABLE_OFFER, RELIABLE_EMPTY)
+        return self.state in (RELIABLE_PREANSWER, RELIABLE_ANSWER, RELIABLE_OFFER, RELIABLE_POSTANSWER)
+        
+        
+    def will_session_prack(self):
+        return self.use_rpr and self.state == PRACK_OFFER
         
 
-    def process_outgoing(self, msg, sdp=None):
+    def process_outgoing(self, msg, sdp=None, is_answer=None):
+        if sdp is not None and is_answer is None:
+            raise Error("SDP without direction!")
+            
         s = self.state
         req = self.request
-        
-        status = msg["status"] if msg else None
+
+        status = msg["status"]
         has_reject = status and status.code >= 300
         has_final = status and status.code < 300 and status.code >= 200
         has_prov = status and status.code < 200
-
-        if not sdp:
-            # This should be repeated in provisional and final responses, once sent.
-            # If rpr is supported, we never set it.
-            sdp = self.provisional_sdp
 
         if has_reject:
             # regardless of the session state, send this out
             return self.send("final non-2xx", FINISH, msg, req)
         elif has_final:
-            if s in (REQUEST_EMPTY, PROVISIONAL_OFFER):
+            if s in (REQUEST_EMPTY,):
                 if sdp:
+                    assert not is_answer
                     add_sdp(msg, sdp)
                     return self.send("final 2xx with offer", FINAL_OFFER, msg, req)
                 else:
-                    return self.abort("final 2xx needs offer")
-            elif s in (REQUEST_OFFER, PROVISIONAL_ANSWER):
+                    return self.send("final 2xx needs offer", ABORT)
+            elif s in (PROVISIONAL_OFFER,):
                 if sdp:
+                    return self.send("final 2xx with unexpected SDP", ABORT)
+                else:
+                    add_sdp(msg, self.provisional_sdp)
+                    return self.send("final 2xx with repeated offer", FINAL_OFFER, msg, req)
+            elif s in (REQUEST_OFFER,):
+                if sdp:
+                    assert is_answer
                     add_sdp(msg, sdp)
                     return self.send("final 2xx with answer", FINAL_ANSWER, msg, req)
                 else:
-                    return self.abort("final 2xx needs answer")
+                    return self.send("final 2xx needs answer", ABORT)
+            elif s in (PROVISIONAL_ANSWER,):
+                if sdp:
+                    return self.send("final 2xx with unexpected SDP", ABORT)
+                else:
+                    add_sdp(msg, self.provisional_sdp)
+                    return self.send("final 2xx with repeated answer", FINAL_ANSWER, msg, req)
             elif s in (EARLY_SESSION,):
-                return self.send("final 2xx after session", FINAL_EMPTY, msg, req)
-        elif has_prov:  # including rpr
-            if s in (REQUEST_EMPTY, PROVISIONAL_OFFER):
                 if sdp:
-                    add_sdp(msg, sdp)
-                    
-                    if self.use_rpr:
-                        return self.send("rpr with offer", RELIABLE_OFFER, msg, req)
-                    else:
-                        # FIXME: check first!
-                        self.provisional_sdp = sdp
-                        return self.send("prov with offer", PROVISIONAL_OFFER, msg, req)
+                    return self.send("final 2xx with unexpected SDP", ABORT)
                 else:
-                    if self.use_rpr:
-                        # must send an offer in the first provisional response
-                        return self.send("waiting for offer", None, None, None)
-                    else:
-                        return self.send("prov without offer", None, msg, req)
-            elif s in (REQUEST_OFFER, PROVISIONAL_ANSWER):
-                if sdp:
-                    add_sdp(msg, sdp)
-                    
-                    if self.use_rpr:
-                        return self.send("rpr with answer", RELIABLE_ANSWER, msg, req)
-                    else:
-                        # FIXME: check first!
-                        self.provisional_sdp = sdp
-                        return self.send("prov with answer", PROVISIONAL_ANSWER, msg, req)
-                else:
-                    if self.use_rpr:
-                        return self.send("rpr without answer", RELIABLE_NOANSWER, msg, req)
-                    else:
-                        return self.send("prov without answer", None, msg, req)
-            elif s in (EARLY_SESSION,):
-                # seems like we can do rpr, but can't send further sessions in rpr
-                return self.send("rpr after session", RELIABLE_EMPTY, msg, req)
-        else:
-            if s in (REQUEST_EMPTY, PROVISIONAL_OFFER):
-                if sdp:
-                    msg = add_sdp(dict(status=Status(183)), sdp)
-                    
-                    if self.use_rpr:
-                        return self.send("session progress rpr with offer", RELIABLE_OFFER, msg, req)
-                    else:
-                        return self.send("session progress with offer", PROVISIONAL_OFFER, msg, req)
-                else:
-                    raise Exception("Nothing to do!")
-            elif s in (REQUEST_OFFER, PROVISIONAL_ANSWER):
-                if sdp:
-                    msg = add_sdp(dict(status=Status(183)), sdp)
-                    
-                    if self.use_rpr:
-                        return self.send("session progress rpr with answer", RELIABLE_ANSWER, msg, req)
-                    else:
-                        return self.send("session progress with answer", PROVISIONAL_ANSWER, msg, req)
-                else:
-                    raise Exception("Nothing to do!")
+                    return self.send("final 2xx after session", FINAL_EMPTY, msg, req)
             elif s in (PRACK_OFFER,):
                 if sdp:
-                    msg = add_sdp(dict(status=Status(200, "Not Happy")), sdp)
+                    assert is_answer
+                    add_sdp(msg, sdp)
                     pra = self.unanswered_prack
                     self.unanswered_prack = None
                     
                     return self.send("prack response with answer", EARLY_SESSION, msg, pra)
                 else:
-                    raise Exception("Nothing to do!")
+                    return self.send("prack response needs answer", ABORT)
             else:
-                return self.abort("Huh?")
+                return self.send("unexpected final 2xx", ABORT)
+        elif has_prov:
+            if s in (REQUEST_EMPTY,):
+                if sdp:
+                    assert not is_answer
+                    add_sdp(msg, sdp)
+                    
+                    if self.use_rpr:
+                        return self.send("rpr with offer", RELIABLE_OFFER, msg, req)
+                    else:
+                        self.provisional_sdp = sdp
+                        return self.send("prov with offer", PROVISIONAL_OFFER, msg, req)
+                else:
+                    if self.use_rpr:
+                        # The first reliable response must contain the offer.
+                        # While it may be an option to send an unreliable response
+                        # without an offer if the caller didn't require 100rel, we
+                        # don't want to mix the two modes, so just don't send anything.
+                        return self.send("omitted without offer", KEEP)
+                    else:
+                        return self.send("prov without offer", KEEP, msg, req)
+            elif s in (PROVISIONAL_OFFER,):
+                if sdp:
+                    return self.send("prov with unexpected SDP", ABORT)
+                else:
+                    add_sdp(msg, self.provisional_sdp)
+
+                    if self.use_rpr:
+                        return self.send("rpr with repeated offer", RELIABLE_OFFER, msg, req)
+                    else:
+                        return self.send("prov with repeated offer", KEEP, msg, req)
+            elif s in (REQUEST_OFFER,):
+                if sdp:
+                    assert is_answer
+                    add_sdp(msg, sdp)
+                    
+                    if self.use_rpr:
+                        return self.send("rpr with answer", RELIABLE_ANSWER, msg, req)
+                    else:
+                        self.provisional_sdp = sdp
+                        return self.send("prov with answer", PROVISIONAL_ANSWER, msg, req)
+                else:
+                    if self.use_rpr:
+                        return self.send("rpr without answer", RELIABLE_PREANSWER, msg, req)
+                    else:
+                        return self.send("prov without answer", KEEP, msg, req)
+            elif s in (PROVISIONAL_ANSWER,):
+                if sdp:
+                    return self.send("prov with unexpected SDP", ABORT)
+                else:
+                    add_sdp(msg, self.provisional_sdp)
+
+                    if self.use_rpr:
+                        return self.send("rpr with repeated answer", RELIABLE_ANSWER, msg, req)
+                    else:
+                        return self.send("prov with repeated answer", KEEP, msg, req)
+            elif s in (EARLY_SESSION,):
+                if sdp:
+                    return self.send("prov with unexpected SDP", ABORT)
+                else:
+                    return self.send("rpr after session", RELIABLE_POSTANSWER, msg, req)
+            else:
+                return self.send("unexpected prov", ABORT)
+        else:
+            return self.send("unexpected response", ABORT)
 
 
     def process_incoming(self, msg):
@@ -452,6 +503,13 @@ class InviteServerState(InviteState):
 
         if method == "INVITE":
             if s == START:
+                if self.use_rpr and "100rel" not in msg.get("supported", set()):
+                    self.send_message(dict(status=Status(421, "100rel required")), msg)
+                    return self.recv("peer does not support 100rel", ABORT)
+                elif not self.use_rpr and "100rel" in msg.get("require", set()):
+                    self.send_message(dict(status=Status(420, "100rel unsupported")), msg)
+                    return self.recv("peer requires 100rel", ABORT)
+            
                 self.request = msg
                 
                 if sdp:
@@ -459,7 +517,7 @@ class InviteServerState(InviteState):
                 else:
                     return self.recv("request without offer", REQUEST_EMPTY, msg, None)
             else:
-                return self.abort("Not an INVITE request is received!")
+                return self.recv("INVITE request after started", ABORT)
 
         elif method == "CANCEL":
             # A gem from 9.2:
@@ -475,13 +533,12 @@ class InviteServerState(InviteState):
             return self.recv("cancelled", FINISH, msg, None)
 
         elif method == "PRACK":
-            # Prack is swallowed, not returned
             rseq, rcseq, rmethod = msg["rack"]
     
             if rmethod != req["method"] or rcseq != req["cseq"] or rseq != self.rpr_last_rseq:
                 prr = dict(status=Status(481))
                 self.send_message(prr, msg)
-                return self.abort("Wrong rpr to PRACK!")
+                return self.recv("PRACK for wrong rpr", KEEP)
             
             # Stop the retransmission of the rpr
             self.send_message(make_virtual_response(), req)
@@ -492,7 +549,7 @@ class InviteServerState(InviteState):
                     self.send_message(prr, msg)
                     return self.recv("PRACK with answer", EARLY_SESSION, None, sdp, True)
                 else:
-                    return self.abort("Missing answer in PRACK request!")
+                    return self.recv("PRACK needs answer", ABORT)
             elif s in (RELIABLE_ANSWER,):
                 if sdp:
                     # Bleh
@@ -501,17 +558,17 @@ class InviteServerState(InviteState):
                 else:
                     prr = dict(status=Status(200))
                     self.send_message(prr, msg)
-                    return self.recv("PRACK", EARLY_SESSION, None, None)
-            elif s in (RELIABLE_NOANSWER, RELIABLE_EMPTY):
+                    return self.recv("PRACK", EARLY_SESSION)
+            elif s in (RELIABLE_PREANSWER, RELIABLE_POSTANSWER):
                 if sdp:
-                    return self.abort("PRACK with unexpected SDP!")
+                    return self.recv("PRACK with unexpected SDP", ABORT)
                 else:
                     prr = dict(status=Status(200))
                     self.send_message(prr, msg)
-                    state = (EARLY_SESSION if s == RELIABLE_EMPTY else REQUEST_OFFER)
-                    return self.recv("PRACK", state, None, None)
+                    state = (EARLY_SESSION if s == RELIABLE_POSTANSWER else REQUEST_OFFER)
+                    return self.recv("plain PRACK", state)
             else:
-                raise Error("PRACK in a weird state: %s!" % s)
+                return self.recv("unexpected PRACK", ABORT)
                     
         elif method == "ACK":
             # Stop the retransmission of the final answer
@@ -532,4 +589,4 @@ class InviteServerState(InviteState):
                     return self.recv("ACK without SDP", FINISH, msg, None)
 
         elif method == "NAK":
-            return self.recv("NAK", FINISH, None, None)
+            return self.recv("NAK", ABORT)

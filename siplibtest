@@ -23,7 +23,7 @@ import resolver
 
 TEST_DIALIN = 1
 TEST_DIALOUT = 2
-TEST = TEST_DIALIN
+TEST = TEST_DIALOUT
 
 HOST = "otthon"
 A_ADDR = Addr(HOST, 5060)
@@ -168,6 +168,7 @@ class CalleeEndpoint(TestEndpoint):
         answer = self.update_session(offer)
         self.leg.forward(dict(type="ring", session=answer))
         
+        # Force an UPDATE
         yield from self.sleep(1)
         offer = answer
         offer["is_answer"] = False
@@ -222,11 +223,21 @@ class CallerEndpoint(TestEndpoint):
                 self.logger.info("Yay, accepted!")
                 break
             elif action["type"] == "session":
-                # This is necessary, since the callee may send the offer in an rpr,
-                # and we must generate the answer in order to PRACK it.
-                offer = action.get("session")
-                answer = self.update_session(offer)
-                self.leg.forward(dict(type="session", session=answer))
+                session = action.get("session")
+                
+                if not session["is_answer"]:
+                    # This is the offer from an RPR, we'll answer in a PRACK request
+                    offer = session
+                    answer = self.update_session(offer)
+                    self.leg.forward(dict(type="session", session=answer))
+                    
+                    # Then send another offer to force an UPDATE
+                    offer = answer
+                    offer["is_answer"] = False
+                    self.leg.forward(dict(type="session", session=offer))
+                else:
+                    # This is the answer from the UPDATE response, no need to process it
+                    pass
             else:
                 self.logger.error("Hm, we got: %s!" % action["type"])
             
