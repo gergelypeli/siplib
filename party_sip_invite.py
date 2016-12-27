@@ -71,7 +71,7 @@ class InviteState(Loggable):
         raise NotImplementedError()
 
 
-    def will_session_prack(self):
+    def is_session_pracking(self):
         raise NotImplementedError()
         
 
@@ -124,7 +124,7 @@ class InviteClientState(InviteState):
         return self.state in (PROVISIONAL_OFFER,)
         
         
-    def will_session_prack(self):
+    def is_session_pracking(self):
         return self.use_rpr and self.state == RELIABLE_OFFER
         
         
@@ -365,7 +365,7 @@ class InviteServerState(InviteState):
         return self.state in (RELIABLE_PREANSWER, RELIABLE_ANSWER, RELIABLE_OFFER, RELIABLE_POSTANSWER)
         
         
-    def will_session_prack(self):
+    def is_session_pracking(self):
         return self.use_rpr and self.state == PRACK_OFFER
         
 
