@@ -371,18 +371,20 @@ class SipEndpoint(Endpoint):
 
 
     def do(self, action):
-        if action is None:
+        type = action["type"] if action else None
+        
+        if not type:
             action = self.pending_actions.pop(0)
-            self.logger.info("Retrying pending %s action." % action["type"])
-        elif self.has_clogged_invite:
-            self.logger.info("Invite clogged, postponing %s action." % action["type"])
-            self.pending_actions.append(action)
-            return
-        elif self.pending_actions:
-            self.logger.info("Has postponed actions, postponing %s action." % action["type"])
-            self.pending_actions.append(action)
-            return
-        elif action["type"] == "dial" and not self.dst.get("hop"):
+            type = action["type"]
+            self.logger.info("Retrying pending %s action." % type)
+        elif self.has_clogged_invite or self.pending_actions:
+            if type != "hangup":
+                self.logger.info("Invite clogged, postponing %s action." % type)
+                self.pending_actions.append(action)
+                return
+            else:
+                self.logger.info("Invite clogged, but not postponing hangup.")
+        elif type == "dial" and not self.dst.get("hop"):
             self.logger.info("Dialing out without hop, postponing until resolved.")
             self.pending_actions.append(action)
             to = self.dst.get("to")
@@ -392,9 +394,8 @@ class SipEndpoint(Endpoint):
             self.ground.select_hop_slot(next_uri).plug(self.hop_selected)
             return
         else:
-            self.logger.info("Doing %s action." % action["type"])
+            self.logger.info("Doing %s action." % type)
         
-        type = action["type"]
         session = action.get("session")
         # FIXME: now we can process sessions here again, because hop resolution is now
         # above

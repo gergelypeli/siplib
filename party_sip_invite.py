@@ -110,7 +110,7 @@ class InviteState(Loggable):
 
 
     def ignore(self, message):
-        self.logger.warning(message)
+        self.logger.info(message)
         return None, None, None
 
 
@@ -122,8 +122,7 @@ class InviteClientState(InviteState):
 
 
     def is_clogged(self):
-        # And INVITE client can always send any message
-        return False
+        return self.state in (PROVISIONAL_OFFER,)
         
 
     def make_prack(self, rpr, sdp=None):
@@ -167,9 +166,9 @@ class InviteClientState(InviteState):
             raise Error("Bad outgoing request!")
         elif sdp:
             if s == START:
-                return self.send("delaying offer until INVITE")
+                return self.abort("offer before INVITE")
             elif s == PROVISIONAL_OFFER:
-                return self.send("delaying answer until reliable offer")
+                return self.abort("clogged answer for provisional offer")
             elif s == RELIABLE_OFFER:
                 rpr = self.unanswered_rpr
                 self.unanswered_rpr = None
@@ -237,14 +236,14 @@ class InviteClientState(InviteState):
                         return self.recv("final response", FINISH, msg)
                 else:
                     # This can be a duplicate final
-                    return self.ignore("Ignoring unexpected final response!")
+                    return self.ignore("ignoring unexpected final response!")
             elif has_rpr:
                 rseq = msg["rseq"]
                 
                 if rseq <= self.rpr_last_rseq:
-                    return self.recv("duplicate rpr", None, None)
+                    return self.recv("ignoring duplicate rpr", None, None)
                 elif rseq > self.rpr_last_rseq + 1:
-                    return self.recv("out of order rpr", None, None)
+                    return self.recv("ignoring out of order rpr", None, None)
 
                 self.rpr_last_rseq += 1
                 
@@ -276,10 +275,10 @@ class InviteClientState(InviteState):
                     else:
                         return self.recv("reliable response", None, msg)
                 else:
-                    return self.abort("Unexpected reliable response!")
+                    return self.abort("unexpected reliable response")
             else:
                 if self.use_rpr:
-                    return self.abort("Disallowed provisional response!")
+                    return self.abort("disallowed unreliable provisional response")
                 elif s in (REQUEST_OFFER,):
                     if sdp:
                         return self.recv("provisional response with answer", PROVISIONAL_ANSWER, msg, sdp, True)
@@ -301,19 +300,19 @@ class InviteClientState(InviteState):
                     else:
                         return self.recv("provisional response", None, msg)
                 else:
-                    return self.abort("Unexpected provisional response!")
+                    return self.abort("unexpected provisional response")
 
         elif method == "PRACK":
             if has_reject:
-                return self.abort("LOL, rejected PRACK!")
+                return self.abort("rejected PRACK")
             elif has_final:
                 # We never send offers in PRACK requests, so the response is irrelevant
                 return self.recv("PRACK response", None, msg)
             else:
-                return self.abort("LOL, provisional PRACK response!")
+                return self.ignore("provisional PRACK response")
         
         else:
-            return self.abort("Unexpected response!")
+            return self.abort("unexpected response")
 
 
 # Invite server
