@@ -23,7 +23,7 @@ import resolver
 
 TEST_DIALIN = 1
 TEST_DIALOUT = 2
-TEST = TEST_DIALIN
+TEST = TEST_DIALOUT
 
 HOST = "otthon"
 A_ADDR = Addr(HOST, 5060)
@@ -109,7 +109,7 @@ class TestEndpoint(PlannedEndpoint):
                 answer = self.update_session(action["session"])
                 self.leg.forward(dict(type="session", session=answer))
             elif action["type"] == "tone":
-                self.logger.debug("Okay, got a tone %s, fading out..." % action["name"])
+                self.logger.info("Okay, got a tone %s, fading out..." % action["name"])
                 break
             else:
                 self.logger.debug("Don't know what to do with %s, continuing..." % action["type"])
