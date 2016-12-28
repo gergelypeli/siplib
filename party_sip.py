@@ -1,6 +1,8 @@
 from format import Status
 from party import Endpoint
 from party_sip_helpers import InviteHelper, UpdateHelper, SessionHelper
+from sdp import Session
+
 import zap
 
 
@@ -85,7 +87,7 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
                 session = action.get("session")
             
                 if session:
-                    self.forward(dict(type="session", session=dict(is_answer=True)))  # TODO: proper rejection!
+                    self.forward(dict(type="session", session=Session.make_reject()))
                 
                     if action["type"] == "session":
                         continue
@@ -208,6 +210,7 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
                         return
                 elif self.invite_is_session_pracking():
                     # Rip the SDP from the response, and use a PRACK response instead
+                    # FIXME: The funny thing is we may send a reject in this 200...
                     pra = dict(status=Status(200, "Not Happy"))
                     self.invite_outgoing(pra, sdp, is_answer)
                     
@@ -216,13 +219,15 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
                         return
                 
             if type == "session":
-                msg = dict(status=Status(180 if already_ringing else 183))
+                code = 488 if is_answer and not sdp else 180 if already_ringing else 183
+                msg = dict(status=Status(code))
                     
                 self.invite_outgoing(msg, sdp, is_answer)
                 return
                 
             elif type == "ring":
-                msg = dict(status=Status(180))
+                code = 488 if is_answer and not sdp else 180
+                msg = dict(status=Status(code))
                 self.invite_outgoing(msg, sdp, is_answer)
 
                 if not already_ringing:
@@ -231,7 +236,8 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
                 return
                     
             elif type == "accept":
-                msg = dict(status=Status(200))
+                code = 488 if is_answer and not sdp else 200
+                msg = dict(status=Status(code))
                 self.invite_outgoing(msg, sdp, is_answer)
                 # Wait for the ACK before changing state
                 return
@@ -258,7 +264,8 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
                     msg = dict(method="INVITE")
                     self.invite_outgoing(msg, sdp, is_answer)
                 elif not self.invite_is_session_established():
-                    msg = dict(status=Status(200))  # TODO: handle rejection!
+                    code = 488 if is_answer and not sdp else 200
+                    msg = dict(status=Status(code))
                     self.invite_outgoing(msg, sdp, is_answer)
                 else:
                     self.update_outgoing_auto(sdp, is_answer)

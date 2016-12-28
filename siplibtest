@@ -3,7 +3,6 @@
 import os
 import logging
 import logging.config
-from copy import deepcopy
 import sys
 from weakref import proxy
 
@@ -23,7 +22,7 @@ import resolver
 
 TEST_DIALIN = 1
 TEST_DIALOUT = 2
-TEST = TEST_DIALOUT
+TEST = TEST_DIALIN
 
 HOST = "otthon"
 A_ADDR = Addr(HOST, 5060)
@@ -79,8 +78,8 @@ class TestEndpoint(PlannedEndpoint):
         
 
     def update_session(self, offer):
-        answer = deepcopy(offer)
-        answer["is_answer"] = True
+        answer = offer.flipped()
+        
         for c in answer["channels"]:
             c["formats"] = [ f for f in c["formats"] if f["encoding"] in ("PCMA", "telephone-event") ]
 
@@ -170,8 +169,7 @@ class CalleeEndpoint(TestEndpoint):
         
         # Force an UPDATE
         yield from self.sleep(1)
-        offer = answer
-        offer["is_answer"] = False
+        offer = answer.flipped()
         self.leg.forward(dict(type="session", session=offer))
 
         action = yield from self.wait_this_action("session")
@@ -225,15 +223,14 @@ class CallerEndpoint(TestEndpoint):
             elif action["type"] == "session":
                 session = action.get("session")
                 
-                if not session["is_answer"]:
+                if session.is_offer():
                     # This is the offer from an RPR, we'll answer in a PRACK request
                     offer = session
                     answer = self.update_session(offer)
                     self.leg.forward(dict(type="session", session=answer))
                     
                     # Then send another offer to force an UPDATE
-                    offer = answer
-                    offer["is_answer"] = False
+                    offer = answer.flipped()
                     self.leg.forward(dict(type="session", session=offer))
                 else:
                     # This is the answer from the UPDATE response, no need to process it

@@ -1,9 +1,7 @@
-from __future__ import print_function, unicode_literals
-
+from copy import deepcopy
 import collections
 import datetime
 import re
-#from pprint import pprint
 
 STATIC_PAYLOAD_TYPES = {
     0: ("PCMU", 8000, 1, None),
@@ -458,7 +456,7 @@ class SdpParser:
             )
             channels.append(channel)
             
-        session = dict(
+        session = Session(
             is_answer=is_answer,
             channels=channels,
             bandwidth=sdp.bandwidth,
@@ -466,3 +464,49 @@ class SdpParser:
         )
         
         return session
+
+
+class Session(dict):
+    def __init__(self, *args, **kwargs):
+        dict.__init__(self, *args, **kwargs)
+        
+        if self.get("is_answer") not in (False, True):
+            raise Exception("Invalid Session is_answer!")
+
+
+    def flipped(self):
+        flip = deepcopy(self)
+        flip["is_answer"] = not flip["is_answer"]
+        return flip
+        
+            
+    def is_offer(self):
+        return not self["is_answer"]
+            
+            
+    def is_answer(self):
+        return self["is_answer"]
+        
+        
+    def is_accept(self):
+        return self["is_answer"] and len(self) > 1
+        
+        
+    def is_reject(self):
+        return self["is_answer"] and len(self) == 1
+        
+        
+    @classmethod
+    def make_offer(cls, **kwargs):
+        return cls(is_answer=False, **kwargs)
+        
+        
+    @classmethod
+    def make_answer(cls, **kwargs):
+        return cls(is_answer=True, **kwargs)
+        
+        
+    @classmethod
+    def make_reject(cls):
+        return cls(is_answer=True)
+    

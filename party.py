@@ -579,7 +579,7 @@ class RecordingBridge(Bridge):
     def do_slot(self, li, action):
         session = action.get("session")
         
-        if session and session["is_answer"] and "channels" in session:
+        if session and session.is_accept():
             self.hack_media(li, session)
         
         Bridge.do_slot(self, li, action)

@@ -405,7 +405,7 @@ class SessionState:
     def set_ground_session(self, session):
         if not session:
             raise Error("No ground session specified!")
-        elif not session["is_answer"]:
+        elif session.is_offer():
             # Offer
             
             if self.pending_ground_session:
@@ -419,7 +419,7 @@ class SessionState:
 
             if not self.pending_party_session:
                 raise Error("Party offer not pending!")
-            elif "channels" not in session:  # rejected
+            elif session.is_reject():
                 self.pending_party_session = None
             else:
                 self.party_session = self.pending_party_session
@@ -430,7 +430,7 @@ class SessionState:
     def set_party_session(self, session):
         if not session:
             raise Error("No party session specified!")
-        elif not session["is_answer"]:
+        elif session.is_offer():
             # Offer
             
             if self.pending_ground_session:
@@ -444,7 +444,7 @@ class SessionState:
             
             if not self.pending_ground_session:
                 raise Error("Ground offer not pending!")
-            elif "channels" not in session:  # rejected
+            elif session.is_reject():
                 self.pending_ground_session = None
             else:
                 self.ground_session = self.pending_ground_session
@@ -473,7 +473,7 @@ class SessionState:
             raise Error("Party offer still pending!")
         elif not self.ground_session:
             raise Error("No ground answer yet!")
-        elif not self.ground_session["is_answer"]:
+        elif not self.ground_session.is_answer():
             raise Error("Ground was not the answering one!")
         else:
             return self.ground_session
@@ -486,7 +486,7 @@ class SessionState:
             raise Error("Party offer is pending!")
         elif not self.party_session:
             raise Error("No party answer yet!")
-        elif not self.party_session["is_answer"]:
+        elif not self.party_session.is_answer():
             raise Error("Party was not the answering one!")
         else:
             return self.party_session

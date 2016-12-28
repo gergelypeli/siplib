@@ -322,7 +322,7 @@ class SessionHelper:
         self.leg.session_state.set_party_session(session)
 
         if is_answer:
-            if "channels" not in session:  # reject
+            if session.is_reject():
                 self.refresh_local_media()  # deallocate media addresses
             else:
                 self.add_mgw_affinities(session)
@@ -337,15 +337,15 @@ class SessionHelper:
         if not session:
             return None, None
             
-        is_answer = session["is_answer"]
+        is_answer = session.is_answer()
             
         self.leg.session_state.set_ground_session(session)
         self.refresh_local_media()
 
-        if is_answer and "channels" in session:  # not reject
+        if session.is_accept():
             self.realize_local_media()
 
-        sdp = self.sdp_builder.build(session) if "channels" in session else None
+        sdp = self.sdp_builder.build(session) if not session.is_reject() else None
         
         return sdp, is_answer
         
