@@ -243,41 +243,32 @@ class TimedMessagePipe(MessagePipe):
         if tseq:
             self.acked(tseq)
                     
-            #item = self.outgoing_items_by_seq.get(tseq)
-            
             if sseq:
-                self.pending_ack = sseq
+                self.try_acking(sseq)
                 self.response_slot.zap(tseq, sseq, body)
-                self.try_acking(None)
         else:
             if not sseq:
                 raise Exception("Non-numeric source and target???")
         
-            # Process, and ACK it if necessary
-            self.pending_ack = sseq
+            self.try_acking(sseq)
             self.request_slot.zap(target, sseq, body)
-            self.try_acking(None)
 
 
-    def try_acking(self, tseq):
-        # Returns True if no ACK needed, or it went out successfully, False if stuck
+    def try_acking(self, seq=None):
+        if seq:
+            if self.pending_ack:
+                self.pending_ack = max(self.pending_ack, seq)
+            else:
+                self.pending_ack = seq
         
-        if self.pending_ack:
-            if not tseq or tseq < self.pending_ack:
-                # Must send the pending ACK first
-                message = ("ack", self.pending_ack, None)
-                is_piped = MessagePipe.try_sending(self, message)
+        if not self.pending_ack:
+            return
             
-                if is_piped:
-                    # clear only if piped
-                    self.pending_ack = None
-                    
-                return is_piped
-                
-            # implicit ACK, clear even if the response is not yet piped
+        message = ("ack", self.pending_ack, None)
+        is_piped = MessagePipe.try_sending(self, message)
+    
+        if is_piped:
             self.pending_ack = None
-            
-        return True  # nothing to pipe, consider it done
             
         
     def try_sending(self, message):
@@ -286,12 +277,16 @@ class TimedMessagePipe(MessagePipe):
         sseq = int(source) if source.isdigit() else None  # Can't be 0
         tseq = int(target) if target.isdigit() else None  # Can't be 0
 
-        # This makes sure if a response handler sends a message, the pending
-        # ack goes out first. TODO: with zap this may not be important anymore.
-        is_piped = self.try_acking(tseq)
-        if not is_piped:
-            return False  # even our ack is stuck, can't send message, too
-        
+        # Or message can replace the pending ack, if it responds to a later message
+        if self.pending_ack:
+            if tseq and self.pending_ack <= tseq:
+                self.pending_ack = None
+            else:
+                self.try_acking()
+                
+                if self.pending_ack:
+                    return False  # even our ack is stuck, can't send message, too
+            
         is_piped = MessagePipe.try_sending(self, message)
         if sseq and is_piped:
             self.ack_plugs_by_seq[sseq] = zap.time_slot(self.ack_timeout).plug(self.ack_timed_out, seq=sseq)
@@ -302,8 +297,9 @@ class TimedMessagePipe(MessagePipe):
     def flushed(self):
         # This makes sure if a pending ack could not be piped because of
         # a full outgoing buffer, then it goes out as soon as possible.
-        is_piped = self.try_acking(None)
-        if not is_piped:
+        self.try_acking()
+        
+        if self.pending_ack:
             raise Exception("How can an ACK be not piped after a flush?")
             
         self.flush_slot.zap()
@@ -628,6 +624,10 @@ class MsgpDispatcher(Loggable):
         pipe.set_oid(self.oid.add("pipe", name))  # Hah, pipe renamed here!
         stream.connect(pipe)
     
+
+    # NOTE: The reason why requests and responses are processed in almost the same
+    # way is that the target/origin use a different namespace, and their values
+    # may overlap, and we can't tell them apart.
 
     def process_request(self, target, source, body, name):
         if source is not None:
