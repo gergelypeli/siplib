@@ -1,4 +1,4 @@
-from weakref import proxy, WeakValueDictionary
+from weakref import proxy, ref
 
 from msgp import MsgpPeer  # MsgpClient
 from util import vacuum, Loggable
@@ -36,20 +36,21 @@ class MediaThing(Loggable):
         
 
     def send_request(self, target, params, drop_response=False):
-        response_tag = (self.label, drop_response)
         params["label"] = self.label
-        self.mgc.send_message((self.sid, target), params, response_tag=response_tag)
+        msgid = (self.sid, target)
+        
+        self.mgc.send_message(msgid, params, self.label, drop_response)
 
 
     def send_response(self, msgid, params):
-        self.mgc.send_message(msgid, params, response_tag=None)
+        self.mgc.send_message(msgid, params)
         
 
     def process_request(self, target, msgid, params):
         self.logger.warning("Unknown request %s from MGW!" % target)
 
 
-    def process_response(self, response_tag, msgid, params):
+    def process_response(self, origin, msgid, params):
         if params == "ok":
             pass  #self.logger.debug("Huh, MGW message %s/%s was successful." % msgid)
         else:
@@ -176,7 +177,10 @@ class Controller(Loggable):
 
         self.mgw_sid = None  # FIXME: Msgp can handle multiple connections already!
         
-        self.things_by_label = WeakValueDictionary()
+        # Store weak references, and only remove the nullified ones
+        # after getting a drop_response response from the MGW.
+        self.wthings_by_label = {}  # WeakValueDictionary()
+        
         self.msgp = MsgpPeer(None)
         self.msgp.request_slot.plug(self.process_request)
         self.msgp.response_slot.plug(self.process_response)
@@ -199,15 +203,16 @@ class Controller(Loggable):
     
     
     def register_thing(self, label, thing):
-        if label in self.things_by_label:
+        if label in self.wthings_by_label:
             raise Exception("Duplicate MGC thing label: %s!" % label)
             
-        self.things_by_label[label] = thing
+        self.wthings_by_label[label] = ref(thing)
         
     
-    def send_message(self, msgid, params, response_tag):
-        #self.logger.info("XXX Sending message %s with %s tagged %s" % (msgid, params, response_tag))
-        self.msgp.send(msgid, params, response_tag=response_tag)
+    def send_message(self, msgid, params, label=None, drop_response=False):
+        # If we pass an origin, the MGW must respond, otherwise our side will time out!
+        origin = (label, drop_response) if label else None
+        self.msgp.send(msgid, params, origin=origin)
         
         
     def process_request(self, target, msgid, params):
@@ -216,30 +221,42 @@ class Controller(Loggable):
         if not label:
             self.logger.error("Request from MGW without label, can't process!")
         else:
-            self.logger.debug("Request %s from MGW to %s" % (target, label))
-            thing = self.things_by_label.get(label)
+            self.logger.debug("Request to thing %s" % label)
+            wthing = self.wthings_by_label.get(label)
             
-            if thing:
-                thing.process_request(target, msgid, params)
+            if wthing:
+                thing = wthing()
+                
+                if thing:
+                    thing.process_request(target, msgid, params)
+                else:
+                    self.logger.debug("Ignoring request to just deleted thing %s!" % label)
             else:
-                self.logger.warning("No thing for this %s request!" % target)
+                self.logger.warning("Request to unknown thing %s!" % label)
 
 
-    def process_response(self, response_tag, msgid, params):
-        #self.logger.info("XXX Received response %s with %s tagged %s" % (msgid, params, response_tag))
-        label, drop_response = response_tag
-        thing = self.things_by_label.get(label)
-        
-        if not thing:
-            if not drop_response:
-                # TODO: Hm, this can still happen, if we modify and delete something
-                # quickly, and the thing is gone when the modify response arrives.
-                # Probably we shouldn't delete things with a pending modification,
-                # but deleting should be an unrefusable step.
-                self.logger.error("Response from MGW to unknown entity: %s" % label)
+    def process_response(self, origin, msgid, params):
+        #self.logger.info("XXX Received response %s with %s tagged %s" % (msgid, params, origin))
+        label, drop_response = origin
+
+        if not label:
+            self.logger.error("Response from MGW without label, can't process!")
         else:
-            self.logger.debug("Response from MGW to %s" % label)
-            thing.process_response(None, msgid, params)
+            self.logger.debug("Response to thing %s" % label)
+            wthing = self.wthings_by_label.get(label)
+        
+            if not wthing:
+                self.logger.warning("Response to unknown thing %s!" % label)
+            elif drop_response:
+                self.logger.debug("Dropping last response to thing %s." % label)
+                self.wthings_by_label.pop(label)
+            else:
+                thing = wthing()
+            
+                if thing:
+                    thing.process_response(None, msgid, params)
+                else:
+                    self.logger.debug("Ignoring response to just deleted thing %s!" % label)
         
         
     def status_changed(self, sid, remote_addr):

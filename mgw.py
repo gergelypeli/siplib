@@ -22,9 +22,9 @@ class Thing(Loggable):
         self.mgw = mgw
 
 
-    def report(self, target, params, response_tag=None):
+    def report(self, target, params, origin=None):
         msgid = (self.owner_sid, target)
-        self.mgw.report(msgid, dict(params, label=self.label), response_tag=response_tag)
+        self.mgw.report(msgid, dict(params, label=self.label), origin=origin)
         
         
     def modify(self, params):
@@ -230,9 +230,10 @@ class NetLeg(Leg):
     
     
     def dtmf_detected(self, name):
-        self.report("tone", dict(name=name))
+        self.report("tone", dict(name=name), origin="FIXME")
         
         
+    # FIXME: we should process the response for this
     #def dtmf_detected_response(self, msgid, params):
     #    self.logger.debug("Seems like he MGC %sacknowledged our DTMF!" % ("" if msgid[1] else "NOT "))
         
@@ -388,8 +389,8 @@ class MediaGateway(Loggable):
         return self.legs_by_label[label]
 
 
-    def report(self, msgid, params, response_tag=None):
-        self.msgp.send(msgid, params, response_tag=response_tag)
+    def report(self, msgid, params, origin=None):
+        self.msgp.send(msgid, params, origin=origin)
         
 
     # Things
@@ -525,5 +526,5 @@ class MediaGateway(Loggable):
                 self.logger.info("Back to clean state.")
 
 
-    def process_response(self, response_tag, msgid, params):
-        self.logger.debug("Got response for %s: %s" % (response_tag, params))
+    def process_response(self, origin, msgid, params):
+        self.logger.debug("Got response for %s: %s" % (origin, params))

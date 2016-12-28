@@ -387,14 +387,14 @@ class MsgpStream(Loggable):
         self.last_recved_seq = 0
         self.outgoing_items_by_seq = collections.OrderedDict()
 
-        self.response_timeout = datetime.timedelta(seconds=5)
+        self.response_timeout = datetime.timedelta(seconds=5)  # FIXME: make configurable!
 
 
     def __del__(self):
         for item in self.outgoing_items_by_seq.values():
             if item.response_plug:
                 item.response_plug.unplug()
-                self.response_slot.zap(item.response_tag, None, None)
+                self.response_slot.zap(item.origin, None, None)
 
 
     def connect(self, pipe):
@@ -415,11 +415,11 @@ class MsgpStream(Loggable):
         pipe.error_slot.plug(self.pipe_failed)
 
         
-    def send(self, target, body, response_tag=None, response_timeout=None):
+    def send(self, target, body, origin=None, response_timeout=None):
         self.last_sent_seq += 1
         seq = self.last_sent_seq
 
-        if response_tag:
+        if origin:
             rt = response_timeout or self.response_timeout
             response_plug = zap.time_slot(rt).plug(self.response_timed_out, seq=seq)
         else:
@@ -430,7 +430,7 @@ class MsgpStream(Loggable):
             target=target,
             body=body,
             response_plug=response_plug,
-            response_tag=response_tag,
+            origin=origin,
             is_acked=False,
             is_piped=False
         )
@@ -458,9 +458,9 @@ class MsgpStream(Loggable):
             
 
     def response_timed_out(self, seq):
-        self.logger.warning("Response timed out: %s" % seq)
+        self.logger.warning("Response timed out for message #%d" % seq)
         item = self.outgoing_items_by_seq.get(seq)
-        self.response_slot.zap(item.response_tag, None, None)
+        self.response_slot.zap(item.origin, None, None)
         self.pop(seq)
     
     
@@ -473,22 +473,22 @@ class MsgpStream(Loggable):
         
         if item:
             item.response_plug.unplug()
-            self.response_slot.zap(item.response_tag, seq, body)
+            self.response_slot.zap(item.origin, seq, body)
             self.pop(tseq)
         else:
-            self.logger.debug("Response ignored!")
+            self.logger.warning("Response ignored for message #%d!" % tseq)
     
     
     def pipe_acked(self, tseq):
         item = self.outgoing_items_by_seq.get(tseq)
         
         if item:
-            if item.response_tag:
+            if item.origin:
                 item.is_acked = True
             else:
                 self.pop(tseq)
         else:
-            self.logger.debug("Unknown message ACK-ed: %s" % tseq)
+            self.logger.debug("Got ACK for nonexistent message #%d" % tseq)
     
             
     def pipe_flushed(self):
@@ -631,42 +631,42 @@ class MsgpDispatcher(Loggable):
 
     def process_request(self, target, source, body, name):
         if source is not None:
-            self.logger.debug("Received request %s/%s" % (name, source))
+            self.logger.debug("Received request on @%s from #%d to :%s" % (name, source, target))
         else:
-            self.logger.debug("Not received request %s/-" % (name,))
+            self.logger.debug("Not received request on @%s" % (name,))
             # TODO: error handling here
         
         msgid = (name, source)
         self.request_slot.zap(target, msgid, body)
 
 
-    def process_response(self, response_tag, source, body, name):
+    def process_response(self, origin, source, body, name):
         if source is not None:
-            self.logger.debug("Received response %s/%s" % (name, source))
+            self.logger.debug("Received response on @%s from #%d to :%s" % (name, source, origin))
         else:
-            self.logger.debug("Not received response %s/-" % (name,))
+            self.logger.debug("Not received response on @%s" % (name,))
             
         msgid = (name, source)
-        self.response_slot.zap(response_tag, msgid, body)
+        self.response_slot.zap(origin, msgid, body)
 
     
     def process_error(self, name):
-        self.logger.error("Stream failed with: %s" % (name,))
+        self.logger.error("Stream failed @%s" % (name,))
         self.streams_by_name.pop(name)
         
         self.status_slot.zap(name, None)
 
     
-    def send(self, msgid, body, response_tag=None, response_timeout=None):
-        self.logger.debug("Sending message %s/%s" % msgid)
+    def send(self, msgid, body, origin=None, response_timeout=None):
         name, target = msgid
+        self.logger.debug("Sending message on @%s from #%s to :%s" % (name, origin, target))
         
         stream = self.streams_by_name.get(name)
         
         if stream:
-            stream.send(target, body, response_tag=response_tag, response_timeout=response_timeout)
+            stream.send(target, body, origin=origin, response_timeout=response_timeout)
         else:
-            raise Exception("No such stream: %s" % (name,))
+            raise Exception("No such stream @%s" % (name,))
 
 
     def make_handshake(self, addr):
