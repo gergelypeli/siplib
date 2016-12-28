@@ -437,7 +437,7 @@ class MediaGateway(Loggable):
             raise Error("Invalid context type %s!" % type)
             
         context.set_oid(self.oid.add("context", label))
-        self.logger.info("Created context %s" % context.oid)
+        self.logger.info("Created context %s" % label)
         return self.add_thing(self.contexts_by_label, context)
 
 
@@ -447,6 +447,7 @@ class MediaGateway(Loggable):
 
     def delete_context(self, label):
         self.delete_thing(self.contexts_by_label, label)
+        self.logger.info("Deleted context %s" % label)
 
 
     def take_context(self, label, owner_sid):
@@ -468,7 +469,7 @@ class MediaGateway(Loggable):
             raise Error("Invalid leg type '%s'!" % type)
 
         leg.set_oid(self.oid.add("leg", label))
-        self.logger.info("Created leg %s" % leg.oid)
+        self.logger.info("Created leg %s" % label)
         return self.add_thing(self.legs_by_label, leg)
         
         
@@ -477,8 +478,8 @@ class MediaGateway(Loggable):
         
         
     def delete_leg(self, label):
-        # NOTE: a leg may stay alive here if linked into a context!
         self.delete_thing(self.legs_by_label, label)
+        self.logger.info("Deleted leg %s" % label)
 
 
     def take_leg(self, label, owner_sid):
