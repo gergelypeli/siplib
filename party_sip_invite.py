@@ -165,9 +165,9 @@ class InviteClientState(InviteState):
                 msg.setdefault("require", set()).add("100rel")
             
             self.request = msg
+            assert not is_answer  # Must be offer or query
                 
             if sdp:
-                assert not is_answer
                 add_sdp(msg, sdp)
                 return self.send("request with offer", REQUEST_OFFER, msg)
             else:
@@ -515,7 +515,8 @@ class InviteServerState(InviteState):
                 if sdp:
                     return self.recv("request with offer", REQUEST_OFFER, msg, sdp, False)
                 else:
-                    return self.recv("request without offer", REQUEST_EMPTY, msg, None)
+                    # This is the only known place to generate a session query
+                    return self.recv("request without offer", REQUEST_EMPTY, msg, None, False)
             else:
                 return self.recv("INVITE request after started", ABORT)
 

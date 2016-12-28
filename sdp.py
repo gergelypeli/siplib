@@ -350,6 +350,9 @@ class SdpBuilder:
         
         
     def build(self, session):
+        if session.is_reject() or session.is_query():
+            return None
+        
         channels = []
         
         directions = set((c["send"], c["recv"]) for c in session["channels"])
@@ -421,6 +424,12 @@ class SdpParser:
         
 
     def parse(self, sdp, is_answer):
+        if not sdp:
+            if is_answer:
+                return Session.make_reject()
+            else:
+                return Session.make_query()
+                
         channels = []
         session_attributes = list(sdp.attributes)
         session_dir = rip_direction(session_attributes) or (True, True)
@@ -475,19 +484,26 @@ class Session(dict):
 
 
     def flipped(self):
+        if self.is_query():
+            raise Exception("A session query can't be flipped!")
+
+        if self.is_reject():
+            raise Exception("A session reject can't be flipped!")
+            
         flip = deepcopy(self)
         flip["is_answer"] = not flip["is_answer"]
+        
         return flip
+        
+        
+    def is_query(self):
+        return not self["is_answer"] and len(self) == 1
         
             
     def is_offer(self):
-        return not self["is_answer"]
+        return not self["is_answer"] and len(self) > 1
             
             
-    def is_answer(self):
-        return self["is_answer"]
-        
-        
     def is_accept(self):
         return self["is_answer"] and len(self) > 1
         
@@ -502,11 +518,15 @@ class Session(dict):
         
         
     @classmethod
-    def make_answer(cls, **kwargs):
+    def make_accept(cls, **kwargs):
         return cls(is_answer=True, **kwargs)
         
         
     @classmethod
     def make_reject(cls):
         return cls(is_answer=True)
-    
+
+
+    @classmethod
+    def make_query(cls):
+        return cls(is_answer=False)

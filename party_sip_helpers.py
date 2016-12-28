@@ -315,20 +315,23 @@ class SessionHelper:
 
 
     def process_incoming_sdp(self, sdp, is_answer):
-        if not sdp:
-            return None
+        if is_answer is None:
+            return None  # no SDP to process
             
         session = self.sdp_parser.parse(sdp, is_answer)
-        self.leg.session_state.set_party_session(session)
+        
+        if not session.is_query():
+            self.leg.session_state.set_party_session(session)
 
-        if is_answer:
-            if session.is_reject():
-                self.refresh_local_media()  # deallocate media addresses
-            else:
-                self.add_mgw_affinities(session)
-                self.realize_local_media()
-        else:
+        if session.is_reject():
+            self.refresh_local_media()  # deallocate media addresses
+        elif session.is_accept():
             self.add_mgw_affinities(session)
+            self.realize_local_media()
+        elif session.is_offer():
+            self.add_mgw_affinities(session)
+                
+        # Nothing to do with queries?
         
         return session
             
@@ -337,15 +340,16 @@ class SessionHelper:
         if not session:
             return None, None
             
-        is_answer = session.is_answer()
+        is_answer = session.is_accept() or session.is_reject()
             
-        self.leg.session_state.set_ground_session(session)
-        self.refresh_local_media()
+        if not session.is_query():
+            self.leg.session_state.set_ground_session(session)
+            self.refresh_local_media()
 
-        if session.is_accept():
-            self.realize_local_media()
+            if session.is_accept():
+                self.realize_local_media()
 
-        sdp = self.sdp_builder.build(session) if not session.is_reject() else None
+        sdp = self.sdp_builder.build(session)
         
         return sdp, is_answer
         

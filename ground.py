@@ -405,6 +405,8 @@ class SessionState:
     def set_ground_session(self, session):
         if not session:
             raise Error("No ground session specified!")
+        elif session.is_query():
+            raise Error("Query ground session specified!")
         elif session.is_offer():
             # Offer
             
@@ -430,6 +432,8 @@ class SessionState:
     def set_party_session(self, session):
         if not session:
             raise Error("No party session specified!")
+        elif session.is_query():
+            raise Error("Query party session specified!")
         elif session.is_offer():
             # Offer
             

@@ -22,7 +22,7 @@ import resolver
 
 TEST_DIALIN = 1
 TEST_DIALOUT = 2
-TEST = TEST_DIALIN
+TEST = TEST_DIALOUT
 
 HOST = "otthon"
 A_ADDR = Addr(HOST, 5060)
