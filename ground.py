@@ -265,7 +265,7 @@ class Ground(Loggable):
     
         mc = self.mgc.make_media_leg("context")  # FIXME!
         mc.set_oid(mcid)
-        self.mgc.bind_media_leg(mc, mgw_sid)  # FIXME!
+        mc.set_mgw(mgw_sid)
         mc.modify({ 'legs': [ smleg.label, tmleg.label ] })
         
         self.media_contexts_by_mlid[smleg.oid] = mc
@@ -364,10 +364,6 @@ class Ground(Loggable):
     
     def make_media_leg(self, type):
         return self.mgc.make_media_leg(type)
-
-
-    def bind_media_leg(self, ml, mgw_sid):
-        return self.mgc.bind_media_leg(ml, mgw_sid)
 
 
 
@@ -485,14 +481,15 @@ class Leg(GroundDweller):
         self.ground.remove_leg(self.oid)
 
 
-    def add_media_leg(self, media_leg, mgw_sid):
+    def add_media_leg(self, media_leg):
         ci = len(self.media_legs)
+        self.logger.debug("Adding %s media leg %s." % (type, ci))
 
-        self.logger.debug("Adding media leg %s." % ci)
-        self.media_legs.append(media_leg)  # must add before media_leg_appeared
-            
+        self.media_legs.append(media_leg)
         media_leg.set_oid(self.oid.add("channel", ci))
-        self.ground.bind_media_leg(media_leg, mgw_sid)
+        
+        # By this the media leg must be added, and set up, so in case Ground
+        # wants to immediately put it in a context, it will work.
         self.ground.media_leg_appeared(self.oid, ci)
         
         return ci
@@ -500,10 +497,11 @@ class Leg(GroundDweller):
 
     def remove_media_leg(self):
         ci = len(self.media_legs) - 1
-
         self.logger.debug("Deleting media leg %s." % ci)
+        
+        # Must call this when everything is still in place
         self.ground.media_leg_disappearing(self.oid, ci)
-        old = self.media_legs.pop()  # must remove after media_leg_disappearing
+        old = self.media_legs.pop()
         old.delete()
         
         return ci

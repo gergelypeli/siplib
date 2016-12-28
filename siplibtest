@@ -91,7 +91,8 @@ class TestEndpoint(PlannedEndpoint):
 
             answer_channel["mgw_affinity"] = mgw_sid
             media_leg = self.make_media_leg("player")
-            self.leg.add_media_leg(media_leg, mgw_sid)
+            media_leg.set_mgw(mgw_sid)
+            self.leg.add_media_leg(media_leg)
         
         for c in answer["channels"]:
             c["send"], c["recv"] = c["recv"], c["send"]

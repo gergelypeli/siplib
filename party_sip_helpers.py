@@ -307,7 +307,8 @@ class SessionHelper:
             am = self.allocated_media[i]
             
             ml = self.make_media_leg("net")
-            self.leg.add_media_leg(ml, am.mgw_sid)
+            ml.set_mgw(am.mgw_sid)
+            self.leg.add_media_leg(ml)
             ml.event_slot.plug(self.media_leg_notified, mli=i)
             
         # Delete (currently can only happen on shutdown, not on session exchange)

@@ -20,12 +20,18 @@ class MediaThing(Loggable):
         self.label = None
 
 
-    def bind(self, mgc, sid):
-        # Must be called after set_oid
-        self.mgc = mgc
+    def set_mgw(self, sid):
         self.sid = sid
-        self.label = label_from_oid(self.oid)
 
+
+    def set_mgc(self, mgc):
+        self.mgc = mgc
+
+
+    def set_oid(self, oid):
+        Loggable.set_oid(self, oid)
+        
+        self.label = label_from_oid(self.oid)
         self.mgc.register_thing(self.label, self)
         
 
@@ -279,9 +285,7 @@ class Controller(Loggable):
         else:
             raise Exception("No such media leg type: %s!" % type)
 
+        ml.set_mgc(proxy(self))
+
         self.logger.info("Made media leg of type %s" % type)
         return ml
-
-
-    def bind_media_leg(self, ml, mgw_sid):
-        ml.bind(proxy(self), mgw_sid)

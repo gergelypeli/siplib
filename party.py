@@ -556,8 +556,11 @@ class RecordingBridge(Bridge):
             this.pair(proxy(that))
             that.pair(proxy(this))
             
-            self.legs[0].add_media_leg(this, mgw_sid)
-            self.legs[1].add_media_leg(that, mgw_sid)
+            this.set_mgw(mgw_sid)
+            that.set_mgw(mgw_sid)
+            
+            self.legs[0].add_media_leg(this)
+            self.legs[1].add_media_leg(that)
             
             format = ("L16", 8000, 1, None)
             this.modify(dict(filename="recorded.wav", format=format, record=True))
