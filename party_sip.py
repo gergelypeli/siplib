@@ -68,14 +68,12 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
 
 
     def may_finish(self):
-        # TODO: nicer!
-        self.leg.session_state.ground_session = None
-        self.refresh_local_media()
+        self.clear_local_media()
         
         Endpoint.may_finish(self)
 
 
-    def media_leg_notified(self, type, params):
+    def media_leg_notified(self, type, params, mli):
         self.forward(dict(params, type=type))
         
         
@@ -244,7 +242,7 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
 
             elif type == "reject":
                 msg = dict(status=action["status"])
-                self.invite_outgoing(msg, None)
+                self.invite_outgoing(msg, None, None)
                 # The transactions will catch the ACK
                 self.change_state(self.DOWN)
                 self.may_finish()

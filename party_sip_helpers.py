@@ -2,7 +2,7 @@ from collections import namedtuple
 
 from format import Status
 from party_sip_invite import InviteClientState, InviteServerState
-from sdp import add_sdp, get_sdp, SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES
+from sdp import add_sdp, get_sdp, SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES, Session
 
 
 class InviteHelper:
@@ -199,7 +199,7 @@ class UpdateHelper:
         return msg, sdp, is_answer
 
 
-AllocatedMedia = namedtuple("AllocatedMedia", "mgw_sid local_addr")
+AllocatedMedia = namedtuple("AllocatedMedia", "mgw_sid local_addr cached_params")
 
 # Supposed to be a side class of an Endpoint
 class SessionHelper:
@@ -211,34 +211,52 @@ class SessionHelper:
         self.sdp_parser = SdpParser()
 
 
-    def media_leg_notified(self, type, params):
+    def media_leg_notified(self, type, params, mli):
         raise NotImplementedError()
                 
+
+    def allocate_local_media(self, local_session):
+        # Must be called for outgoing offers and accepts (before realizing media)
+        local_channels = local_session["channels"] if local_session else []
         
-    def flatten_formats(self, formats, pt_key):
-        return { f[pt_key]: (f["encoding"], f["clock"], f["encp"], f["fmtp"]) for f in formats }
+        channel_count = len(local_channels)
+        allocated_count = len(self.allocated_media)
+        
+        # Allocate
+        for i in range(allocated_count, channel_count):
+            local_channel = local_channels[i]
+            ctype = local_channel["type"]
+            mgw_affinity = local_channel.get("mgw_affinity")
+            self.logger.debug("Allocating local media address for channel %d (%s@%s)" % (i, ctype, mgw_affinity))
+            
+            mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
+            local_addr = self.ground.allocate_media_address(mgw_sid)
+            
+            allocated_media = AllocatedMedia(mgw_sid, local_addr, {})
+            self.allocated_media.append(allocated_media)
 
 
-    def refresh_local_media(self):
-        ss = self.leg.session_state
-        gs = ss.pending_ground_session or ss.ground_session
-        local_channels = gs["channels"] if gs else []
+    def deallocate_local_media(self, local_session):
+        # Must be called for incoming rejects, and after realizing media
+        local_channels = local_session["channels"] if local_session else []
+        
+        channel_count = len(local_channels)
+        allocated_count = len(self.allocated_media)
+                
+        # Deallocate
+        for i in reversed(range(channel_count, allocated_count)):
+            am = self.allocated_media.pop()
+            self.logger.debug("Deallocating local media address for channel %d" % i)
+            self.ground.deallocate_media_address(am.local_addr)
+
+
+    def add_local_info(self, local_session):
+        # Must be called for outgoing offers and accepts
+        local_channels = local_session["channels"] if local_session else []
         
         for i, local_channel in enumerate(local_channels):
-            if i < len(self.allocated_media):
-                mgw_sid, local_addr = self.allocated_media[i]
-            else:
-                ctype = local_channel["type"]
-                mgw_affinity = local_channel.get("mgw_affinity")
-                self.logger.debug("Allocating local media address for channel %d (%s@%s)" % (i, ctype, mgw_affinity))
-                
-                mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
-                local_addr = self.ground.allocate_media_address(mgw_sid)
-                
-                allocated_media = AllocatedMedia(mgw_sid, local_addr)
-                self.allocated_media.append(allocated_media)
-                
-            local_channel["rtp_local_addr"] = local_addr
+            am = self.allocated_media[i]
+            local_channel["rtp_local_addr"] = am.local_addr
             
             next_payload_type = 96
             used_payload_types = set()
@@ -262,39 +280,46 @@ class SessionHelper:
                         next_payload_type += 1
                         #raise Exception("Couldn't find payload type for %s!" % (encoding, clock))
 
+                    used_payload_types.add(pt)
+
                 f["rtp_local_payload_type"] = pt
-                used_payload_types.add(pt)
+            
         
-        for i, allocated_media in reversed(list(enumerate(self.allocated_media))):
-            if i >= len(local_channels):
-                mgw_sid, local_addr = allocated_media
-                self.logger.debug("Deallocating local media address for channel %d" % i)
-                self.ground.deallocate_media_address(local_addr)
-                self.allocated_media.pop()
+    def flatten_formats(self, formats, pt_key):
+        return { f[pt_key]: (f["encoding"], f["clock"], f["encp"], f["fmtp"]) for f in formats }
 
 
-    def realize_local_media(self):
-        # This must only be called after an answer is accepted
-        self.logger.debug("realize_local_media")
-        ss = self.leg.session_state
-        local_channels = ss.ground_session["channels"] if ss.ground_session else []
-        remote_channels = ss.party_session["channels"] if ss.party_session else []
+    def realize_local_media(self, local_session, remote_session):
+        # Must be called for all accepts
+        # Allocating resources must precede it, and deallocating them must follow
+        local_channels = local_session["channels"] if local_session else []
+        remote_channels = remote_session["channels"] if remote_session else []
         
         if len(local_channels) != len(remote_channels):
             raise Exception("Channel count mismatch!")
+            
+        channel_count = len(local_channels)
+        media_leg_count = self.leg.get_media_leg_count()
 
-        for i in range(len(local_channels)):
+        # Create
+        for i in range(media_leg_count, channel_count):
+            self.logger.debug("Making media leg for channel %d" % i)
+            am = self.allocated_media[i]
+            
+            ml = self.make_media_leg("net")
+            self.leg.add_media_leg(ml, am.mgw_sid)
+            ml.event_slot.plug(self.media_leg_notified, mli=i)
+            
+        # Delete (currently can only happen on shutdown, not on session exchange)
+        for i in reversed(range(channel_count, media_leg_count)):
+            self.leg.remove_media_leg()
+            
+        # Modify
+        for i in range(min(channel_count, media_leg_count)):
             lc = local_channels[i]
             rc = remote_channels[i]
-            am = self.allocated_media[i]
             ml = self.leg.get_media_leg(i)
-            
-            if not ml:
-                self.logger.debug("Making media leg for channel %d" % i)
-                mgw_sid = am.mgw_sid
-                ml = self.make_media_leg("net")
-                self.leg.set_media_leg(i, ml, mgw_sid)
-                ml.event_slot.plug(self.media_leg_notified)
+            am = self.allocated_media[i]
             
             params = {
                 'local_addr': lc["rtp_local_addr"],
@@ -303,53 +328,78 @@ class SessionHelper:
                 'recv_formats': self.flatten_formats(lc["formats"], "rtp_local_payload_type")
             }
             
-            self.logger.debug("Modifying media leg %d: %s" % (i, params))
-            ml.modify(params)
+            diff = {}
+            for key, value in params.items():
+                if value != am.cached_params.get(key):
+                    diff[key] = value
+            
+            if not diff:
+                self.logger.debug("No need to modify media leg %d." % i)
+            else:
+                self.logger.debug("Modifying media leg %d: %s" % (i, diff))
+                am.cached_params.update(diff)
+                ml.modify(diff)
             
             
-    def add_mgw_affinities(self, session):
-        remote_channels = session["channels"]
+    def add_remote_info(self, remote_session):
+        remote_channels = remote_session["channels"]
         
         for i in range(len(self.allocated_media)):
             remote_channels[i]["mgw_affinity"] = self.allocated_media[i].mgw_sid
 
 
     def process_incoming_sdp(self, sdp, is_answer):
-        if is_answer is None:
+        if sdp is None and is_answer is None:
             return None  # no SDP to process
             
-        session = self.sdp_parser.parse(sdp, is_answer)
+        remote_session = self.sdp_parser.parse(sdp, is_answer)
+        self.leg.session_state.set_party_session(remote_session)
+        local_session = self.leg.session_state.get_ground_session()
         
-        if not session.is_query():
-            self.leg.session_state.set_party_session(session)
+        if remote_session.is_offer():
+            self.add_remote_info(remote_session)
+        elif remote_session.is_accept():
+            self.add_remote_info(remote_session)
+            self.realize_local_media(local_session, remote_session)
+            self.deallocate_local_media(local_session)
+        elif remote_session.is_reject():
+            self.deallocate_local_media(local_session)
 
-        if session.is_reject():
-            self.refresh_local_media()  # deallocate media addresses
-        elif session.is_accept():
-            self.add_mgw_affinities(session)
-            self.realize_local_media()
-        elif session.is_offer():
-            self.add_mgw_affinities(session)
-                
-        # Nothing to do with queries?
-        
-        return session
+        return remote_session
             
     
-    def process_outgoing_session(self, session):
-        if not session:
+    def process_outgoing_session(self, local_session):
+        if not local_session:
             return None, None
             
-        is_answer = session.is_accept() or session.is_reject()
-            
-        if not session.is_query():
-            self.leg.session_state.set_ground_session(session)
-            self.refresh_local_media()
+        self.leg.session_state.set_ground_session(local_session)
+        remote_session = self.leg.session_state.get_party_session()
+        
+        if local_session.is_offer():
+            self.allocate_local_media(local_session)
+            self.add_local_info(local_session)
+        elif local_session.is_accept():
+            self.allocate_local_media(local_session)
+            self.add_local_info(local_session)
+            self.realize_local_media(local_session, remote_session)
+            self.deallocate_local_media(local_session)
+        elif local_session.is_reject():
+            pass
 
-            if session.is_accept():
-                self.realize_local_media()
-
-        sdp = self.sdp_builder.build(session)
+        sdp = self.sdp_builder.build(local_session)
+        is_answer = local_session.is_accept() or local_session.is_reject()
         
         return sdp, is_answer
+
+
+    def clear_local_media(self):
+        self.logger.info("Clearing local media")
         
+        fake_offer = Session.make_offer(channels=[])
+        fake_accept = Session.make_accept(channels=[])
+        
+        self.leg.session_state.set_party_session(fake_offer)
+        self.leg.session_state.set_ground_session(fake_accept)
+        
+        self.realize_local_media(fake_accept, fake_offer)
+        self.deallocate_local_media(fake_accept)

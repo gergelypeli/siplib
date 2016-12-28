@@ -540,7 +540,7 @@ class RecordingBridge(Bridge):
         
         
     def hack_media(self, li, answer):
-        old = len(self.legs[0].media_legs)
+        old = self.legs[0].get_media_leg_count()
         new = len(answer["channels"])
         
         for i in range(old, new):
@@ -556,8 +556,8 @@ class RecordingBridge(Bridge):
             this.pair(proxy(that))
             that.pair(proxy(this))
             
-            self.legs[0].set_media_leg(i, this, mgw_sid)
-            self.legs[1].set_media_leg(i, that, mgw_sid)
+            self.legs[0].add_media_leg(this, mgw_sid)
+            self.legs[1].add_media_leg(that, mgw_sid)
             
             format = ("L16", 8000, 1, None)
             this.modify(dict(filename="recorded.wav", format=format, record=True))

@@ -50,8 +50,6 @@ class MediaThing(Loggable):
             self.logger.debug("Oops, MGW message %s/%s failed!" % msgid)
 
 
-
-        
 class MediaLeg(MediaThing):
     def __init__(self, type):
         MediaThing.__init__(self)
@@ -146,14 +144,11 @@ class NetMediaLeg(MediaLeg):
         
 class MediaContext(MediaThing):
     def modify(self, params):
-        params = dict(params, type="proxy")  # legs:
-        
         if not self.is_created:
             self.is_created = True
-            self.logger.debug("Creating context")
+            params = dict(params, type="proxy")
             self.send_request("create_context", params)
         else:
-            self.logger.debug("Modifying context")
             self.send_request("modify_context", params)
     
     

@@ -273,7 +273,6 @@ class Ground(Loggable):
         
         
     def media_leg_appeared(self, slid, ci):
-        # Called after adding media legs, or linking legs.
         smleg = self.legs_by_oid[slid].get_media_leg(ci)
         tmleg = self.find_facing_media_leg(slid, ci)
         rmleg = self.find_similar_media_leg(slid, ci)
@@ -290,21 +289,20 @@ class Ground(Loggable):
         self.add_context(smleg, tmleg)
         
         
-    def media_leg_disappeared(self, slid, ci):
-        # Called before removing media legs, or unlinking legs.
+    def media_leg_disappearing(self, slid, ci):
         smleg = self.legs_by_oid[slid].get_media_leg(ci)
         tmleg = self.find_facing_media_leg(slid, ci)
         rmleg = self.find_similar_media_leg(slid, ci)
 
         if not tmleg:
-            self.logger.debug("Disappeared media leg had no facing pair, no context to remove.")
+            self.logger.debug("Disappearing media leg had no facing pair, no context to remove.")
             return
         
-        self.logger.info("Disappeared media leg had a facing pair, must remove context.")
+        self.logger.info("Disappearing media leg had a facing pair, must remove context.")
         self.remove_context(smleg, tmleg)
         
         if rmleg:
-            self.logger.debug("Disappeared media leg shadowed a similar leg, must add context.")
+            self.logger.debug("Disappearing media leg shadowed a similar leg, must add context.")
             self.add_context(rmleg, tmleg)
         
 
@@ -406,7 +404,7 @@ class SessionState:
         if not session:
             raise Error("No ground session specified!")
         elif session.is_query():
-            raise Error("Query ground session specified!")
+            return
         elif session.is_offer():
             # Offer
             
@@ -433,7 +431,7 @@ class SessionState:
         if not session:
             raise Error("No party session specified!")
         elif session.is_query():
-            raise Error("Query party session specified!")
+            return
         elif session.is_offer():
             # Offer
             
@@ -456,46 +454,12 @@ class SessionState:
                 self.pending_ground_session = None
             
 
-    def get_ground_offer(self):
-        if self.pending_ground_session:
-            return self.pending_ground_session
-        else:
-            raise Error("Ground offer not pending!")
+    def get_ground_session(self):
+        return self.ground_session
         
         
-    def get_party_offer(self):
-        if self.pending_party_session:
-            return self.pending_party_session
-        else:
-            raise Error("Party offer not pending!")
-            
-            
-    def get_ground_answer(self):
-        if self.pending_ground_session:
-            raise Error("Ground offer is pending!")
-        elif self.pending_party_session:
-            raise Error("Party offer still pending!")
-        elif not self.ground_session:
-            raise Error("No ground answer yet!")
-        elif not self.ground_session.is_answer():
-            raise Error("Ground was not the answering one!")
-        else:
-            return self.ground_session
-
-
-    def get_party_answer(self):
-        if self.pending_ground_session:
-            raise Error("Ground offer still pending!")
-        elif self.pending_party_session:
-            raise Error("Party offer is pending!")
-        elif not self.party_session:
-            raise Error("No party answer yet!")
-        elif not self.party_session.is_answer():
-            raise Error("Party was not the answering one!")
-        else:
-            return self.party_session
-
-
+    def get_party_session(self):
+        return self.party_session
         
         
 class Leg(GroundDweller):
@@ -514,37 +478,43 @@ class Leg(GroundDweller):
         
         
     def may_finish(self):
-        for ci in range(len(self.media_legs)):
-            self.set_media_leg(ci, None, None)
+        while self.media_legs:
+            self.remove_media_leg()
 
         self.logger.debug("Leg is finished.")
         self.ground.remove_leg(self.oid)
 
 
-    def set_media_leg(self, channel_index, media_leg, mgw_sid):
-        if channel_index > len(self.media_legs):
-            raise Exception("Invalid media leg index!")
-        elif channel_index == len(self.media_legs):
-            self.media_legs.append(None)
+    def add_media_leg(self, media_leg, mgw_sid):
+        ci = len(self.media_legs)
+
+        self.logger.debug("Adding media leg %s." % ci)
+        self.media_legs.append(media_leg)  # must add before media_leg_appeared
             
-        old = self.media_legs[channel_index]
+        media_leg.set_oid(self.oid.add("channel", ci))
+        self.ground.bind_media_leg(media_leg, mgw_sid)
+        self.ground.media_leg_appeared(self.oid, ci)
         
-        if old:
-            self.logger.debug("Deleting media leg %s." % channel_index)
-            self.ground.media_leg_disappeared(self.oid, channel_index)
-            old.delete()
+        return ci
+
+
+    def remove_media_leg(self):
+        ci = len(self.media_legs) - 1
+
+        self.logger.debug("Deleting media leg %s." % ci)
+        self.ground.media_leg_disappearing(self.oid, ci)
+        old = self.media_legs.pop()  # must remove after media_leg_disappearing
+        old.delete()
         
-        self.media_legs[channel_index] = media_leg
-        
-        if media_leg:
-            self.logger.debug("Adding media leg %s." % channel_index)
-            media_leg.set_oid(self.oid.add("channel", channel_index))
-            self.ground.bind_media_leg(media_leg, mgw_sid)
-            self.ground.media_leg_appeared(self.oid, channel_index)
+        return ci
         
 
     def get_media_leg(self, ci):
         return self.media_legs[ci] if ci < len(self.media_legs) else None
+
+
+    def get_media_leg_count(self):
+        return len(self.media_legs)
 
 
     def do(self, action):

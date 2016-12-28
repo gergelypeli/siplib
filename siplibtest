@@ -22,7 +22,7 @@ import resolver
 
 TEST_DIALIN = 1
 TEST_DIALOUT = 2
-TEST = TEST_DIALOUT
+TEST = TEST_DIALIN
 
 HOST = "otthon"
 A_ADDR = Addr(HOST, 5060)
@@ -91,8 +91,7 @@ class TestEndpoint(PlannedEndpoint):
 
             answer_channel["mgw_affinity"] = mgw_sid
             media_leg = self.make_media_leg("player")
-            self.leg.set_media_leg(0, media_leg, mgw_sid)
-            media_leg.play("playback.wav", ("PCMA", 8000, 1, None), volume=0.1, fade=3)
+            self.leg.add_media_leg(media_leg, mgw_sid)
         
         for c in answer["channels"]:
             c["send"], c["recv"] = c["recv"], c["send"]
@@ -101,6 +100,8 @@ class TestEndpoint(PlannedEndpoint):
         
         
     def idle(self):
+        self.leg.get_media_leg(0).play("playback.wav", ("PCMA", 8000, 1, None), volume=0.1, fade=3)
+
         while True:
             action = yield from self.wait_action()
             

@@ -329,7 +329,6 @@ class InviteClientState(InviteState):
             if has_reject:
                 return self.recv("rejected PRACK", ABORT)
             elif has_final:
-                # We never send offers in PRACK requests, so the response is irrelevant
                 return self.recv("PRACK response", KEEP, msg)
             else:
                 return self.recv("provisional PRACK response", KEEP)
@@ -548,26 +547,32 @@ class InviteServerState(InviteState):
                 if sdp:
                     prr = dict(status=Status(200))
                     self.send_message(prr, msg)
-                    return self.recv("PRACK with answer", EARLY_SESSION, None, sdp, True)
+                    return self.recv("PRACK with answer", EARLY_SESSION, msg, sdp, True)
                 else:
                     return self.recv("PRACK needs answer", ABORT)
             elif s in (RELIABLE_ANSWER,):
                 if sdp:
                     # Bleh
                     self.unanswered_prack = msg
-                    return self.recv("PRACK with offer", PRACK_OFFER, None, sdp, False)
+                    return self.recv("PRACK with offer", PRACK_OFFER, msg, sdp, False)
                 else:
                     prr = dict(status=Status(200))
                     self.send_message(prr, msg)
-                    return self.recv("PRACK", EARLY_SESSION)
-            elif s in (RELIABLE_PREANSWER, RELIABLE_POSTANSWER):
+                    return self.recv("plain PRACK", EARLY_SESSION, msg)
+            elif s in (RELIABLE_PREANSWER,):
                 if sdp:
-                    return self.recv("PRACK with unexpected SDP", ABORT)
+                    return self.recv("preanswer PRACK with unexpected SDP", ABORT)
                 else:
                     prr = dict(status=Status(200))
                     self.send_message(prr, msg)
-                    state = (EARLY_SESSION if s == RELIABLE_POSTANSWER else REQUEST_OFFER)
-                    return self.recv("plain PRACK", state)
+                    return self.recv("preanswer PRACK", REQUEST_OFFER, msg)
+            elif s in (RELIABLE_POSTANSWER,):
+                if sdp:
+                    return self.recv("postanswer PRACK with unexpected SDP", ABORT)
+                else:
+                    prr = dict(status=Status(200))
+                    self.send_message(prr, msg)
+                    return self.recv("postanswer PRACK", EARLY_SESSION, msg)
             else:
                 return self.recv("unexpected PRACK", ABORT)
                     
