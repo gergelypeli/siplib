@@ -92,6 +92,11 @@ class Endpoint(Party):
         self.do(action)
 
 
+    def forward(self, action):
+        self.leg.forward(action)
+
+
+
 
 class PlannedEndpoint(zap.Planned, Endpoint):
     def __init__(self):
@@ -178,11 +183,15 @@ class Bridge(Party):
         self.queued_leg_actions[li].append(action)
 
 
+    def forward(self, li, action):
+        self.legs[li].forward(action)
+        
+
     def dial(self, action, type=None, **kwargs):
         dst = dict(type=type, **kwargs) if type else None
         action = dict(action, dst=dst)
         li = self.add_leg()
-        self.legs[li].forward(action)
+        self.forward(li, action)
         
         return li
 
@@ -217,7 +226,7 @@ class Bridge(Party):
             
         self.is_ringing = True
         self.logger.debug("Sending artificial ringback.")
-        self.legs[0].forward(dict(type="ring"))
+        self.forward(0, dict(type="ring"))
 
 
     def accept_incoming_leg(self):
@@ -226,7 +235,7 @@ class Bridge(Party):
             
         self.is_accepted = True
         self.logger.warning("Accepting.")
-        self.legs[0].forward(dict(type="accept"))
+        self.forward(0, dict(type="accept"))
             
 
     def reject_incoming_leg(self, status):
@@ -234,7 +243,7 @@ class Bridge(Party):
             raise Exception("Incoming leg already accepted!")
             
         self.logger.warning("Rejecting with status %s" % (status,))
-        self.legs[0].forward(dict(type="reject", status=status))
+        self.forward(0, dict(type="reject", status=status))
         self.remove_leg(0)
             
 
@@ -248,11 +257,8 @@ class Bridge(Party):
         self.ground.legs_anchored(self.legs[0].oid, self.legs[li].oid)
         self.is_anchored = True
 
-        # FIXME: here we really need async action forwarding, because we don't want
-        # responses to these actions to arrive immediately. A Routing may want to remove
-        # itself from Ground before those responses arrive!
         for action in self.queued_leg_actions[li]:
-            self.legs[0].forward(action)
+            self.forward(0, action)
 
 
     def unanchor_legs(self):
@@ -295,7 +301,7 @@ class Bridge(Party):
                 
                 if self.is_accepted:
                     # We once sent an accept, so now we can forward the hangup
-                    self.legs[0].forward(dict(type="hangup"))
+                    self.forward(0, dict(type="hangup"))
                     self.remove_leg(0)
                 else:
                     # Havent accepted yet, so send a reject instead
@@ -349,8 +355,8 @@ class Bridge(Party):
                     self.hangup_outgoing_legs()
                     self.remove_leg(0)
             elif self.is_anchored:
-                out_li = max(self.legs.keys())
-                self.legs[out_li].forward(action)
+                oli = max(self.legs.keys())
+                self.forward(oli, action)
             else:
                 # The user accepted the incoming leg, and didn't handle the consequences.
                 raise Exception("Unexpected action from unanchored incoming leg: %s" % type)
@@ -371,13 +377,13 @@ class Bridge(Party):
 
                     if len(self.legs) == 1:
                         # No more incoming legs, so time to give up
-                        self.legs[0].forward(action)
+                        self.forward(0, action)
                         self.remove_leg(0)
                         
                     # TODO: shall we auto-anchor the last remaining outgoing leg?
             elif type == "accept":
                 if self.is_anchored:
-                    self.legs[0].forward(action)
+                    self.forward(0, action)
                 else:
                     self.queue_leg_action(li, action)
                     self.anchor_outgoing_leg(li)
@@ -404,7 +410,7 @@ class Bridge(Party):
 
                 if type != "ring":
                     if self.is_anchored:
-                        self.legs[0].forward(action)
+                        self.forward(0, action)
                     else:
                         self.queue_leg_action(li, action)
             
@@ -429,7 +435,7 @@ class Routing(Bridge):
         
     def anchor_outgoing_leg(self, li):
         # We overload this method completely. Skip the anchoring thing in Bridge,
-        # because we collapse instead of unanchoring. And the queued actions should
+        # because we collapse instead of unanchoring. And the queued actions will
         # only be sent once we're out of the game.
         
         self.logger.debug("Routing anchored to outgoing leg %d." % li)

@@ -63,10 +63,6 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
         self.dialog.send_response(response, related)
 
 
-    def forward(self, action):
-        self.leg.forward(action)
-
-
     def may_finish(self):
         self.clear_local_media()
         

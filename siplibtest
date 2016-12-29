@@ -108,7 +108,7 @@ class TestEndpoint(PlannedEndpoint):
             
             if action["type"] == "session":
                 answer = self.update_session(action["session"])
-                self.leg.forward(dict(type="session", session=answer))
+                self.forward(dict(type="session", session=answer))
             elif action["type"] == "tone":
                 self.logger.info("Okay, got a tone %s, fading out..." % action["name"])
                 break
@@ -119,7 +119,7 @@ class TestEndpoint(PlannedEndpoint):
             self.leg.media_legs[0].play(volume=0, fade=3)
             yield from self.sleep(3)
             
-        self.leg.forward(dict(type="hangup"))
+        self.forward(dict(type="hangup"))
 
 
 class UnreachableEndpoint(TestEndpoint):
@@ -140,7 +140,7 @@ class RejectingEndpoint(TestEndpoint):
         yield from self.wait_this_action("dial")
         self.logger.debug("Got dial, but not now rejecting it.")
 
-        self.leg.forward(dict(type="reject", status=Status(603)))
+        self.forward(dict(type="reject", status=Status(603)))
         self.logger.debug("And now done.")
 
 
@@ -151,7 +151,7 @@ class RingingEndpoint(TestEndpoint):
         yield from self.wait_this_action("dial")
         self.logger.debug("Got dial, now ringing forever.")
 
-        self.leg.forward(dict(type="ring"))
+        self.forward(dict(type="ring"))
 
         yield from self.wait_this_action("hangup")
         self.logger.debug("And now the caller hung up.")
@@ -167,19 +167,19 @@ class CalleeEndpoint(TestEndpoint):
         
         yield from self.sleep(1)
         answer = self.update_session(offer)
-        self.leg.forward(dict(type="ring", session=answer))
+        self.forward(dict(type="ring", session=answer))
         
         # Force an UPDATE
         yield from self.sleep(1)
         offer = answer.flipped()
-        self.leg.forward(dict(type="session", session=offer))
+        self.forward(dict(type="session", session=offer))
 
         action = yield from self.wait_this_action("session")
         answer = action.get("session")
         self.logger.debug("Got answer:\n%s" % repr(answer))
 
         yield from self.sleep(1)
-        self.leg.forward(dict(type="accept"))
+        self.forward(dict(type="accept"))
 
         yield from self.idle()
         
@@ -211,7 +211,7 @@ class CallerEndpoint(TestEndpoint):
             ctx={},
             session=offer
         )
-        self.leg.forward(action)
+        self.forward(action)
 
         while True:
             action = yield from self.wait_action()
@@ -229,11 +229,11 @@ class CallerEndpoint(TestEndpoint):
                     # This is the offer from an RPR, we'll answer in a PRACK request
                     offer = session
                     answer = self.update_session(offer)
-                    self.leg.forward(dict(type="session", session=answer))
+                    self.forward(dict(type="session", session=answer))
                     
                     # Then send another offer to force an UPDATE
                     offer = answer.flipped()
-                    self.leg.forward(dict(type="session", session=offer))
+                    self.forward(dict(type="session", session=offer))
                 else:
                     # This is the answer from the UPDATE response, no need to process it
                     pass
@@ -243,7 +243,7 @@ class CallerEndpoint(TestEndpoint):
         offer = action.get("session")
         if offer:
             answer = self.update_session(offer)
-            self.leg.forward(dict(type="session", session=answer))
+            self.forward(dict(type="session", session=answer))
 
         # Be more flexible here!
         yield from self.idle()
