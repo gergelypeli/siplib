@@ -22,9 +22,9 @@ class Thing(Loggable):
         self.mgw = mgw
 
 
-    def report(self, target, params, origin=None):
-        msgid = (self.owner_sid, target)
-        self.mgw.report(msgid, dict(params, label=self.label), origin=origin)
+    def report(self, ttag, params, origin=None):
+        target = (self.owner_sid, ttag)
+        self.mgw.send_request(target, dict(params, label=self.label), origin=origin)
         
         
     def modify(self, params):
@@ -218,6 +218,7 @@ class NetLeg(Leg):
                 return
         
         if addr != self.remote_addr:
+            # FIXME: is this not working?
             self.report("detected", { 'id': self.label, 'remote_addr': addr })
             self.remote_addr = addr
             
@@ -389,8 +390,8 @@ class MediaGateway(Loggable):
         return self.legs_by_label[label]
 
 
-    def report(self, msgid, params, origin=None):
-        self.msgp.send_request(msgid, params, origin=origin)
+    def send_request(self, target, params, origin=None):
+        self.msgp.send_request(target, params, origin=origin)
         
 
     # Things
@@ -490,9 +491,9 @@ class MediaGateway(Loggable):
         self.notify_thing(self.legs_by_label, label, type, params)
         
         
-    def process_request(self, target, msgid, params):
+    def process_request(self, source, target, params):
         try:
-            owner_sid, seq = msgid
+            owner_sid, seq = source
             label = params["label"]
             
             if target == "create_context":
@@ -519,13 +520,13 @@ class MediaGateway(Loggable):
                 raise Error("Invalid target %s!" % target)
         except Exception as e:
             self.logger.debug("Processing error: %s" % e, exc_info=True)
-            self.msgp.send_response(msgid, "error")
+            self.msgp.send_response(source, "error")
         else:
-            self.msgp.send_response(msgid, "ok")
+            self.msgp.send_response(source, "ok")
             
             if not self.legs_by_label and not self.contexts_by_label:
                 self.logger.info("Back to clean state.")
 
 
-    def process_response(self, origin, msgid, params):
+    def process_response(self, source, origin, params):
         self.logger.debug("Got response for %s: %s" % (origin, params))

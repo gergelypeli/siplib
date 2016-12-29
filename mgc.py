@@ -35,26 +35,26 @@ class MediaThing(Loggable):
         self.mgc.register_thing(self.label, self)
         
 
-    def send_request(self, target, params, drop_response=False):
+    def send_request(self, ttag, params, drop_response=False):
         params["label"] = self.label
-        msgid = (self.sid, target)
+        target = (self.sid, ttag)
         
-        self.mgc.send_request(msgid, params, self.label, drop_response)
+        self.mgc.send_request(target, params, self.label, drop_response)
 
 
-    def send_response(self, msgid, params):
-        self.mgc.send_response(msgid, params)
+    def send_response(self, target, params):
+        self.mgc.send_response(target, params)
         
 
-    def process_request(self, target, msgid, params):
+    def process_request(self, source, target, params):
         self.logger.warning("Unknown request %s from MGW!" % target)
 
 
-    def process_response(self, origin, msgid, params):
+    def process_response(self, source, origin, params):
         if params == "ok":
             pass  #self.logger.debug("Huh, MGW message %s/%s was successful." % msgid)
         else:
-            self.logger.debug("Oops, MGW message %s/%s failed!" % msgid)
+            self.logger.warning("Oops, MGW message %s/%s failed!" % source)
 
 
 class MediaLeg(MediaThing):
@@ -139,13 +139,13 @@ class NetMediaLeg(MediaLeg):
     #    self.modify(changes)
         
     
-    def process_request(self, target, msgid, params):
+    def process_request(self, source, target, params):
         if target == "tone":
             self.logger.debug("Yay, just detected a tone %s!" % (params,))
-            self.send_response(msgid, "OK")
+            self.send_response(source, "OK")
             self.event_slot.zap("tone", params)
         else:
-            MediaLeg.process_request(self, target, msgid, params)
+            MediaLeg.process_request(self, source, target, params)
             
         
         
@@ -209,19 +209,19 @@ class Controller(Loggable):
         self.wthings_by_label[label] = ref(thing)
         
     
-    def send_request(self, msgid, params, label=None, drop_response=False):
+    def send_request(self, target, params, label=None, drop_response=False):
         # If we pass an origin, the MGW must respond, otherwise our side will time out!
         origin = (label, drop_response) if label else None
-        self.msgp.send_request(msgid, params, origin=origin)
+        self.msgp.send_request(target, params, origin=origin)
 
 
-    def send_response(self, msgid, params, label=None, drop_response=False):
+    def send_response(self, target, params, label=None, drop_response=False):
         # If we pass an origin, the MGW must respond, otherwise our side will time out!
         origin = (label, drop_response) if label else None
-        self.msgp.send_response(msgid, params, origin=origin)
+        self.msgp.send_response(target, params, origin=origin)
         
         
-    def process_request(self, target, msgid, params):
+    def process_request(self, source, target, params):
         label = params.pop('label', None)
         
         if not label:
@@ -234,14 +234,14 @@ class Controller(Loggable):
                 thing = wthing()
                 
                 if thing:
-                    thing.process_request(target, msgid, params)
+                    thing.process_request(source, target, params)
                 else:
                     self.logger.debug("Ignoring request to just deleted thing %s!" % label)
             else:
                 self.logger.warning("Request to unknown thing %s!" % label)
 
 
-    def process_response(self, origin, msgid, params):
+    def process_response(self, source, origin, params):
         #self.logger.info("XXX Received response %s with %s tagged %s" % (msgid, params, origin))
         label, drop_response = origin
 
@@ -260,7 +260,7 @@ class Controller(Loggable):
                 thing = wthing()
             
                 if thing:
-                    thing.process_response(None, msgid, params)
+                    thing.process_response(source, None, params)
                 else:
                     self.logger.debug("Ignoring response to just deleted thing %s!" % label)
         

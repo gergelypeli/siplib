@@ -204,10 +204,10 @@ class TimedMessagePipe(MessagePipe):
         if not is_piped:
             self.error_slot.zap()
 
-        self.process_slot.zap(target, source, body)
+        self.process_slot.zap(source, target, body)
 
 
-    def try_sending(self, target, source, body):
+    def try_sending(self, source, target, body):
         message = source, target, body
         is_piped = self.send_message(message)
         if not is_piped:
@@ -323,7 +323,7 @@ class MsgpStream(Loggable):
     def send_item(self, seq, item):
         source = "#%d" % seq
         target = "#%d" % item.target if item.is_response else "$%s" % item.target
-        is_piped = self.pipe.try_sending(target, source, item.body)
+        is_piped = self.pipe.try_sending(source, target, item.body)
 
         if not is_piped:
             self.pipe_failed()
@@ -353,8 +353,8 @@ class MsgpStream(Loggable):
         self.unacked_items_by_seq[seq] = item
 
 
-    def send_request(self, target, body, origin=None, response_timeout=None):
-        self.queue_message(False, target, body, origin, response_timeout)
+    def send_request(self, ttag, body, origin=None, response_timeout=None):
+        self.queue_message(False, ttag, body, origin, response_timeout)
 
 
     def send_response(self, tseq, body, origin=None, response_timeout=None):
@@ -371,10 +371,10 @@ class MsgpStream(Loggable):
         if not item:
             raise Exception("Response timeout for a nonexistent item!")
             
-        self.response_slot.zap(item.origin, None, None)
+        self.response_slot.zap(None, item.origin, None)
     
     
-    def pipe_processed(self, target, source, body):
+    def pipe_processed(self, source, target, body):
         if source.startswith("#"):
             sseq = int(source[1:])
         else:
@@ -388,13 +388,13 @@ class MsgpStream(Loggable):
             raise Exception("WTF target?")
             
         if ttag:
-            self.request_slot.zap(ttag, sseq, body)
+            self.request_slot.zap(sseq, ttag, body)
         elif tseq:
             item = self.unresponded_items_by_seq.pop(tseq, None)
         
             if item:
                 item.response_plug.unplug()
-                self.response_slot.zap(item.origin, sseq, body)
+                self.response_slot.zap(sseq, item.origin, body)
             else:
                 self.logger.warning("Unexpected response for message #%d!" % tseq)
     
@@ -461,7 +461,7 @@ class MsgpDispatcher(Loggable):
         target = "@dude"
         body = self.make_handshake(addr)
         self.logger.debug("Sending handshake from %s to %s as %r" % (source, target, body))
-        is_piped = pipe.try_sending(target, source, body)
+        is_piped = pipe.try_sending(source, target, body)
         
         if not is_piped:
             self.handshake_failed(addr)
@@ -475,7 +475,7 @@ class MsgpDispatcher(Loggable):
         raise NotImplementedError()
 
         
-    def handshake_processed(self, target, source, body, addr):
+    def handshake_processed(self, source, target, body, addr):
         self.logger.debug("Received handshake from %s to %s as %r" % (source, target, body))
         h = self.handshakes_by_addr[addr]
 
@@ -493,7 +493,7 @@ class MsgpDispatcher(Loggable):
             source = "@bello"
             target = "@dude"
             self.logger.debug("Sending handshake from %s to %s as %r" % (source, target, body))
-            is_piped = h.pipe.try_sending(target, source, body)
+            is_piped = h.pipe.try_sending(source, target, body)
             if not is_piped:
                 self.handshake_failed(addr)
                 return
@@ -572,25 +572,25 @@ class MsgpDispatcher(Loggable):
     # way is that the target/origin use a different namespace, and their values
     # may overlap, and we can't tell them apart.
 
-    def process_request(self, target, sseq, body, name):
+    def process_request(self, sseq, target, body, name):
         if sseq is not None:
             self.logger.debug("Received request on @%s from #%d to $%s" % (name, sseq, target))
         else:
             # FIXME: can this happen anymore?
             self.logger.error("Not received request on @%s to $%s" % (name, target))
         
-        msgid = (name, sseq)
-        self.request_slot.zap(target, msgid, body)
+        source = (name, sseq)
+        self.request_slot.zap(source, target, body)
 
 
-    def process_response(self, origin, sseq, body, name):
+    def process_response(self, sseq, origin, body, name):
         if sseq is not None:
             self.logger.debug("Received response on @%s from #%d to %r" % (name, sseq, origin))
         else:
             self.logger.debug("Not received response on @%s to %r" % (name, origin))
             
-        msgid = (name, sseq)
-        self.response_slot.zap(origin, msgid, body)
+        source = (name, sseq)
+        self.response_slot.zap(source, origin, body)
 
     
     def process_error(self, name):
@@ -601,20 +601,20 @@ class MsgpDispatcher(Loggable):
         self.status_slot.zap(name, None)
 
     
-    def send_request(self, msgid, body, origin=None, response_timeout=None):
-        name, target = msgid
-        self.logger.debug("Sending request on @%s from %r to $%s" % (name, origin, target))
+    def send_request(self, target, body, origin=None, response_timeout=None):
+        name, ttag = target
+        self.logger.debug("Sending request on @%s from %r to $%s" % (name, origin, ttag))
         
         stream = self.streams_by_name.get(name)
         
         if stream:
-            stream.send_request(target, body, origin=origin, response_timeout=response_timeout)
+            stream.send_request(ttag, body, origin=origin, response_timeout=response_timeout)
         else:
             raise Exception("No such stream @%s" % (name,))
 
 
-    def send_response(self, msgid, body, origin=None, response_timeout=None):
-        name, tseq = msgid
+    def send_response(self, target, body, origin=None, response_timeout=None):
+        name, tseq = target
         self.logger.debug("Sending response on @%s from %r to #%d" % (name, origin, tseq))
         
         stream = self.streams_by_name.get(name)
