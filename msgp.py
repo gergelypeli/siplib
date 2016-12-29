@@ -4,7 +4,7 @@ import collections
 import datetime
 import socket
 import errno
-import types
+#import types
 
 from async_net import TcpReconnector, TcpListener
 from util import Loggable
@@ -29,7 +29,7 @@ class MessagePipe(Loggable):
             sent = self.socket.send(data)
         except IOError as e:
             self.logger.error("Socket error while sending: %s" % e)
-            self.process(None)
+            self.process_message(None)
             return None
         else:
             return data[sent:]
@@ -99,7 +99,7 @@ class MessagePipe(Loggable):
 
         if has_failed:
             self.readable_plug.unplug()
-            self.process(None)
+            self.process_message(None)
             
 
     def send_message(self, message):
@@ -281,8 +281,8 @@ class MsgpPipe(SimpleJsonPipe, TimedMessagePipe):
 # TODO: now that we no longer check for duplicate incoming messages, the peers
 # must agree not to send them again by exchanging the seq-s during the handshake!
 class MsgpStream(Loggable):
-    #Item = collections.namedtuple("Item", [ "target", "body", "response_handle", "response_handler" ])
-    class Item(types.SimpleNamespace): pass
+    Item = collections.namedtuple("Item", [ "is_response", "target", "body", "origin", "response_plug" ])
+    #class Item(types.SimpleNamespace): pass
     
     def __init__(self):
         Loggable.__init__(self)
@@ -293,39 +293,41 @@ class MsgpStream(Loggable):
 
         self.pipe = None
         self.last_sent_seq = 0
-        self.last_recved_seq = 0
-        self.outgoing_items_by_seq = collections.OrderedDict()
+
+        self.unacked_items_by_seq = collections.OrderedDict()
+        self.unresponded_items_by_seq = collections.OrderedDict()
 
         self.response_timeout = datetime.timedelta(seconds=5)  # FIXME: make configurable!
 
 
     def __del__(self):
-        for item in self.outgoing_items_by_seq.values():
-            if item.response_plug:
-                item.response_plug.unplug()
-                self.response_slot.zap(item.origin, None, None)
+        for item in self.unresponded_items_by_seq.values():
+            item.response_plug.unplug()
+            self.response_slot.zap(item.origin, None, None)
 
 
     def connect(self, pipe):
-        # TODO: is this seq thing implemented?
-        #if self.pipe:
-        #    if self.pipe.last_received_seq > self.last_recved_seq:
-        #        self.last_recved_seq = self.pipe.last_received_seq
-
         self.pipe = pipe
         
-        #if self.pipe.last_accepted_seq > self.last_sent_seq:
-        #    self.last_sent_seq = self.pipe.last_accepted_seq
-        
         # FIXME: on reconnects some items may have been already received by the peer
-        # but this must be decided during the handshake. Assume now that all outgoing
+        # but this must be decided during the handshake. Assume now that all unacked
         # messages should be retried.
-        for item in self.outgoing_items_by_seq.values():
-            item.is_piped = False
+        for seq, item in self.unacked_items_by_seq.items():
+            self.send_item(seq, item)
 
         pipe.process_slot.plug(self.pipe_processed)
         pipe.ack_slot.plug(self.pipe_acked)
         pipe.error_slot.plug(self.pipe_failed)
+
+
+    def send_item(self, seq, item):
+        source = "#%d" % seq
+        target = "#%d" % item.target if item.is_response else "$%s" % item.target
+        is_piped = self.pipe.try_sending(target, source, item.body)
+
+        if not is_piped:
+            self.pipe_failed()
+            return
 
         
     def queue_message(self, is_response, target, body, origin=None, response_timeout=None):
@@ -339,17 +341,16 @@ class MsgpStream(Loggable):
             response_plug = None
 
         #self.logger.debug("Queueing message %s" % seq)
-        self.outgoing_items_by_seq[seq] = self.Item(
+        item = self.Item(
+            is_response=is_response,
             target=target,
             body=body,
-            response_plug=response_plug,
             origin=origin,
-            is_response=is_response,
-            is_acked=False,
-            is_piped=False
+            response_plug=response_plug
         )
         
-        self.flush()
+        self.send_item(seq, item)
+        self.unacked_items_by_seq[seq] = item
 
 
     def send_request(self, target, body, origin=None, response_timeout=None):
@@ -360,23 +361,16 @@ class MsgpStream(Loggable):
         self.queue_message(True, tseq, body, origin, response_timeout)
         
 
-    def flush(self):
-        for seq, item in self.outgoing_items_by_seq.items():
-            if item.is_piped:
-                continue
-
-            source = "#%d" % seq
-            target = "#%d" % item.target if item.is_response else "$%s" % item.target
-            item.is_piped = self.pipe.try_sending(target, source, item.body)
-
-            if not item.is_piped:
-                self.pipe_failed()
-                return
-
-
     def response_timed_out(self, seq):
         self.logger.warning("Response timed out for message #%d" % seq)
-        item = self.outgoing_items_by_seq.pop(seq)
+        item = self.unresponded_items_by_seq.pop(seq, None)
+        
+        if not item:
+            item = self.unacked_items_by_seq.pop(seq, None)
+            
+        if not item:
+            raise Exception("Response timeout for a nonexistent item!")
+            
         self.response_slot.zap(item.origin, None, None)
     
     
@@ -396,7 +390,7 @@ class MsgpStream(Loggable):
         if ttag:
             self.request_slot.zap(ttag, sseq, body)
         elif tseq:
-            item = self.outgoing_items_by_seq.pop(tseq)
+            item = self.unresponded_items_by_seq.pop(tseq, None)
         
             if item:
                 item.response_plug.unplug()
@@ -411,14 +405,11 @@ class MsgpStream(Loggable):
         else:
             raise Exception("WTF ACK target?")
         
-        item = self.outgoing_items_by_seq.get(tseq)
+        item = self.unacked_items_by_seq.pop(tseq, None)
         
         if item:
-            if item.origin:
-                # wait for a response, too
-                item.is_acked = True
-            else:
-                self.outgoing_items_by_seq.pop(tseq)
+            if item.response_plug:
+                self.unresponded_items_by_seq[tseq] = item
         else:
             self.logger.debug("Unexpected ACK for message #%d" % tseq)
     
