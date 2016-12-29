@@ -390,7 +390,7 @@ class MediaGateway(Loggable):
 
 
     def report(self, msgid, params, origin=None):
-        self.msgp.send(msgid, params, origin=origin)
+        self.msgp.send_request(msgid, params, origin=origin)
         
 
     # Things
@@ -519,9 +519,9 @@ class MediaGateway(Loggable):
                 raise Error("Invalid target %s!" % target)
         except Exception as e:
             self.logger.debug("Processing error: %s" % e, exc_info=True)
-            self.msgp.send(msgid, "error")
+            self.msgp.send_response(msgid, "error")
         else:
-            self.msgp.send(msgid, "ok")
+            self.msgp.send_response(msgid, "ok")
             
             if not self.legs_by_label and not self.contexts_by_label:
                 self.logger.info("Back to clean state.")

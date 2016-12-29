@@ -39,11 +39,11 @@ class MediaThing(Loggable):
         params["label"] = self.label
         msgid = (self.sid, target)
         
-        self.mgc.send_message(msgid, params, self.label, drop_response)
+        self.mgc.send_request(msgid, params, self.label, drop_response)
 
 
     def send_response(self, msgid, params):
-        self.mgc.send_message(msgid, params)
+        self.mgc.send_response(msgid, params)
         
 
     def process_request(self, target, msgid, params):
@@ -209,10 +209,16 @@ class Controller(Loggable):
         self.wthings_by_label[label] = ref(thing)
         
     
-    def send_message(self, msgid, params, label=None, drop_response=False):
+    def send_request(self, msgid, params, label=None, drop_response=False):
         # If we pass an origin, the MGW must respond, otherwise our side will time out!
         origin = (label, drop_response) if label else None
-        self.msgp.send(msgid, params, origin=origin)
+        self.msgp.send_request(msgid, params, origin=origin)
+
+
+    def send_response(self, msgid, params, label=None, drop_response=False):
+        # If we pass an origin, the MGW must respond, otherwise our side will time out!
+        origin = (label, drop_response) if label else None
+        self.msgp.send_response(msgid, params, origin=origin)
         
         
     def process_request(self, target, msgid, params):
@@ -261,9 +267,9 @@ class Controller(Loggable):
         
     def status_changed(self, sid, remote_addr):
         if remote_addr:
-            self.logger.debug("MGW stream %s is now available at %s" % (sid, remote_addr))
+            self.logger.debug("MGW %s is reachable at %s" % (sid, remote_addr))
         else:
-            self.logger.error("MGW stream %s is now gone!" % sid)
+            self.logger.error("MGW %s is unreachable!" % sid)
             
         self.mgw_sid = sid if remote_addr else None
 
