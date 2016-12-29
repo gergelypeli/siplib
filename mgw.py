@@ -491,7 +491,7 @@ class MediaGateway(Loggable):
         self.notify_thing(self.legs_by_label, label, type, params)
         
         
-    def process_request(self, source, target, params):
+    def process_request(self, target, params, source):
         try:
             owner_sid, seq = source
             label = params["label"]
@@ -528,5 +528,5 @@ class MediaGateway(Loggable):
                 self.logger.info("Back to clean state.")
 
 
-    def process_response(self, source, origin, params):
+    def process_response(self, origin, params, source):
         self.logger.debug("Got response for %s: %s" % (origin, params))

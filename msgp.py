@@ -372,7 +372,7 @@ class MsgpStream(Loggable):
         if not item:
             raise Exception("Response timeout for a nonexistent item!")
             
-        self.response_slot.zap(None, item.origin, None)
+        self.response_slot.zap(item.origin, None, None)
     
     
     def pipe_processed(self, message):
@@ -391,13 +391,13 @@ class MsgpStream(Loggable):
             raise Exception("WTF target?")
             
         if ttag:
-            self.request_slot.zap(sseq, ttag, body)
+            self.request_slot.zap(ttag, body, sseq)
         elif tseq:
             item = self.unresponded_items_by_seq.pop(tseq, None)
         
             if item:
                 item.response_plug.unplug()
-                self.response_slot.zap(sseq, item.origin, body)
+                self.response_slot.zap(item.origin, body, sseq)
             else:
                 self.logger.warning("Unexpected response for message #%d!" % tseq)
     
@@ -578,7 +578,7 @@ class MsgpDispatcher(Loggable):
     # way is that the target/origin use a different namespace, and their values
     # may overlap, and we can't tell them apart.
 
-    def process_request(self, sseq, target, body, name):
+    def process_request(self, target, body, sseq, name):
         if sseq is not None:
             self.logger.debug("Received request on @%s from #%d to $%s" % (name, sseq, target))
         else:
@@ -586,17 +586,17 @@ class MsgpDispatcher(Loggable):
             self.logger.error("Not received request on @%s to $%s" % (name, target))
         
         source = (name, sseq)
-        self.request_slot.zap(source, target, body)
+        self.request_slot.zap(target, body, source)
 
 
-    def process_response(self, sseq, origin, body, name):
+    def process_response(self, origin, body, sseq, name):
         if sseq is not None:
             self.logger.debug("Received response on @%s from #%d to %r" % (name, sseq, origin))
         else:
             self.logger.debug("Not received response on @%s to %r" % (name, origin))
             
         source = (name, sseq)
-        self.response_slot.zap(source, origin, body)
+        self.response_slot.zap(origin, body, source)
 
     
     def process_error(self, name):

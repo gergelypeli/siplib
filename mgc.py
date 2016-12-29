@@ -46,11 +46,11 @@ class MediaThing(Loggable):
         self.mgc.send_response(target, params)
         
 
-    def process_request(self, source, target, params):
+    def process_request(self, target, params, source):
         self.logger.warning("Unknown request %s from MGW!" % target)
 
 
-    def process_response(self, source, origin, params):
+    def process_response(self, origin, params, source):
         if params == "ok":
             pass  #self.logger.debug("Huh, MGW message %s/%s was successful." % msgid)
         else:
@@ -139,13 +139,13 @@ class NetMediaLeg(MediaLeg):
     #    self.modify(changes)
         
     
-    def process_request(self, source, target, params):
+    def process_request(self, target, params, source):
         if target == "tone":
             self.logger.debug("Yay, just detected a tone %s!" % (params,))
             self.send_response(source, "OK")
             self.event_slot.zap("tone", params)
         else:
-            MediaLeg.process_request(self, source, target, params)
+            MediaLeg.process_request(self, target, params, source)
             
         
         
@@ -221,7 +221,7 @@ class Controller(Loggable):
         self.msgp.send_response(target, params, origin=origin)
         
         
-    def process_request(self, source, target, params):
+    def process_request(self, target, params, source):
         label = params.pop('label', None)
         
         if not label:
@@ -234,14 +234,14 @@ class Controller(Loggable):
                 thing = wthing()
                 
                 if thing:
-                    thing.process_request(source, target, params)
+                    thing.process_request(target, params, source)
                 else:
                     self.logger.debug("Ignoring request to just deleted thing %s!" % label)
             else:
                 self.logger.warning("Request to unknown thing %s!" % label)
 
 
-    def process_response(self, source, origin, params):
+    def process_response(self, origin, params, source):
         #self.logger.info("XXX Received response %s with %s tagged %s" % (msgid, params, origin))
         label, drop_response = origin
 
@@ -260,7 +260,7 @@ class Controller(Loggable):
                 thing = wthing()
             
                 if thing:
-                    thing.process_response(source, None, params)
+                    thing.process_response(None, params, source)
                 else:
                     self.logger.debug("Ignoring response to just deleted thing %s!" % label)
         
