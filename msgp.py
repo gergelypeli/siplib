@@ -204,15 +204,15 @@ class TimedMessagePipe(MessagePipe):
         if not is_piped:
             self.error_slot.zap()
 
-        self.process_slot.zap(source, target, body)
+        self.process_slot.zap(message)
 
 
-    def try_sending(self, source, target, body):
-        message = source, target, body
+    def try_sending(self, message):
         is_piped = self.send_message(message)
         if not is_piped:
             return False
         
+        source, target, body = message
         self.ack_plugs_by_source[source] = zap.time_slot(self.ack_timeout).plug(self.ack_timed_out, source=source)
         return True
         
@@ -323,7 +323,8 @@ class MsgpStream(Loggable):
     def send_item(self, seq, item):
         source = "#%d" % seq
         target = "#%d" % item.target if item.is_response else "$%s" % item.target
-        is_piped = self.pipe.try_sending(source, target, item.body)
+        message = (source, target, item.body)
+        is_piped = self.pipe.try_sending(message)
 
         if not is_piped:
             self.pipe_failed()
@@ -374,7 +375,9 @@ class MsgpStream(Loggable):
         self.response_slot.zap(None, item.origin, None)
     
     
-    def pipe_processed(self, source, target, body):
+    def pipe_processed(self, message):
+        source, target, body = message
+        
         if source.startswith("#"):
             sseq = int(source[1:])
         else:
@@ -461,7 +464,8 @@ class MsgpDispatcher(Loggable):
         target = "@dude"
         body = self.make_handshake(addr)
         self.logger.debug("Sending handshake from %s to %s as %r" % (source, target, body))
-        is_piped = pipe.try_sending(source, target, body)
+        message = (source, target, body)
+        is_piped = pipe.try_sending(message)
         
         if not is_piped:
             self.handshake_failed(addr)
@@ -475,7 +479,8 @@ class MsgpDispatcher(Loggable):
         raise NotImplementedError()
 
         
-    def handshake_processed(self, source, target, body, addr):
+    def handshake_processed(self, message, addr):
+        source, target, body = message
         self.logger.debug("Received handshake from %s to %s as %r" % (source, target, body))
         h = self.handshakes_by_addr[addr]
 
@@ -493,7 +498,8 @@ class MsgpDispatcher(Loggable):
             source = "@bello"
             target = "@dude"
             self.logger.debug("Sending handshake from %s to %s as %r" % (source, target, body))
-            is_piped = h.pipe.try_sending(source, target, body)
+            message = (source, target, body)
+            is_piped = h.pipe.try_sending(message)
             if not is_piped:
                 self.handshake_failed(addr)
                 return
