@@ -199,6 +199,10 @@ class UpdateHelper:
         return msg, sdp, is_answer
 
 
+    def update_is_active(self):
+        return self.update_state is not None
+        
+
 AllocatedMedia = namedtuple("AllocatedMedia", "mgw_sid local_addr cached_params")
 
 # Supposed to be a side class of an Endpoint

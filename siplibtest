@@ -22,7 +22,7 @@ import resolver
 
 TEST_DIALIN = 1
 TEST_DIALOUT = 2
-TEST = TEST_DIALIN
+TEST = TEST_DIALOUT
 
 HOST = "otthon"
 A_ADDR = Addr(HOST, 5060)
@@ -78,6 +78,9 @@ class TestEndpoint(PlannedEndpoint):
         
 
     def update_session(self, offer):
+        if not offer.is_offer():
+            raise Exception("Eiii...")
+            
         answer = offer.flipped()
         
         for c in answer["channels"]:
@@ -107,8 +110,10 @@ class TestEndpoint(PlannedEndpoint):
             action = yield from self.wait_action()
             
             if action["type"] == "session":
-                answer = self.update_session(action["session"])
-                self.forward(dict(type="session", session=answer))
+                session = action["session"]
+                if session.is_offer():
+                    answer = self.update_session(session)
+                    self.forward(dict(type="session", session=answer))
             elif action["type"] == "tone":
                 self.logger.info("Okay, got a tone %s, fading out..." % action["name"])
                 break
@@ -221,6 +226,12 @@ class CallerEndpoint(TestEndpoint):
                 return
             elif action["type"] == "accept":
                 self.logger.info("Yay, accepted!")
+                session = action.get("session")
+                
+                if session and session.is_offer():
+                    answer = self.update_session(session)
+                    self.forward(dict(type="session", session=answer))
+                    
                 break
             elif action["type"] == "session":
                 session = action.get("session")
@@ -240,10 +251,10 @@ class CallerEndpoint(TestEndpoint):
             else:
                 self.logger.error("Hm, we got: %s!" % action["type"])
             
-        offer = action.get("session")
-        if offer:
-            answer = self.update_session(offer)
-            self.forward(dict(type="session", session=answer))
+        #session = action.get("session")
+        #if session and session.is_offer():
+        #    answer = self.update_session(session)
+        #    self.forward(dict(type="session", session=answer))
 
         # Be more flexible here!
         yield from self.idle()
@@ -421,6 +432,7 @@ class TestLine(Bridge):
                 'from': Nameaddr(Uri(src_addr, src_username), src_name),
                 'to': Nameaddr(Uri(dst_addr, dst_username)),
                 'route': []
+                #'alert_info': "<http://www.notused.com>;info=alert-autoanswer;delay=0"  # FIXME
             }
         
             #self.dial("sip", dict(action, ctx=dst))

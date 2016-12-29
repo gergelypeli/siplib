@@ -154,7 +154,11 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
                 self.dialog.setup_outgoing(uri, fr, to, route, hop)
                 self.invite_new(is_outgoing=True)
                 
-                self.invite_outgoing(dict(method="INVITE"), sdp, is_answer)
+                req = dict(method="INVITE")
+                if "alert_info" in self.dst:
+                    req["alert_info"] = self.dst["alert_info"]
+                
+                self.invite_outgoing(req, sdp, is_answer)
                 self.change_state(self.DIALING_OUT)
                 
                 return
@@ -252,8 +256,10 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
                 # here, too, including sending UPDATE-s if the reinvite completed
                 # and "early" session, or a PRACK offer was received. All of these
                 # are fucked up for re-INVITE-s, but who knows?
-                
-                if not self.invite_is_active():
+
+                if self.update_is_active():
+                    self.update_outgoing_auto(sdp, is_answer)  # finish incomplete UPDATE
+                elif not self.invite_is_active():
                     self.invite_new(is_outgoing=True)
                     msg = dict(method="INVITE")
                     self.invite_outgoing(msg, sdp, is_answer)
