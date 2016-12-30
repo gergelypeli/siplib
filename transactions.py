@@ -56,7 +56,7 @@ class Error(Exception): pass
 
 def identify(params):
     try:
-        branch = params["via"][0].branch
+        branch = params["via"][0].params["branch"]
     except Exception:
         raise Error("No Via header in incoming message!")
 
@@ -158,7 +158,7 @@ class PlainClientTransaction(Transaction):
             raise Error("Don't mess with the request Via headers!")
 
         hop = msg["hop"]
-        msg["via"] = [ Via(hop.transport, hop.local_addr, self.branch) ]
+        msg["via"] = [ Via(hop.transport, hop.local_addr, dict(branch=self.branch)) ]
         Transaction.transmit(self, msg)
 
 

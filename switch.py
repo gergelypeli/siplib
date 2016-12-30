@@ -153,11 +153,11 @@ class Switch(Loggable):
 
         auth_policy = self.account_manager.get_account_auth_policy(from_uri)
         
-        if method in ("CANCEL", "ACK"):
+        if method in ("CANCEL", "ACK", "NAK"):
             self.logger.debug("Accepting request because it can't be authenticated anyway")
             return False
         elif method == "PRACK":
-            # TODO: this is only for debugging
+            # FIXME: this is only for debugging
             self.logger.debug("Accepting request because we're lazy to authenticate a PRACK")
             return False
         elif not auth_policy:

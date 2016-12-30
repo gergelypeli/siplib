@@ -1,4 +1,5 @@
 from collections import namedtuple, OrderedDict
+import urllib.parse
 import socket
 
 from async_net import HttpLikeMessage
@@ -20,15 +21,53 @@ class SipError(Exception):
         return "%d %s" % self.status
 
 
+def unescape(escaped):
+    return urllib.parse.unquote(escaped)
+    
+    
+def escape(raw, allow=''):
+    # The characters not needing escaping vary from entity to entity. But characters in
+    # the UNRESERVED class seems to be allowed always. That's ALPHANUM + MARK. This
+    # function never quotes alphanumeric characters and '_.-', so we only need to
+    # specify the rest explicitly.
+    
+    return urllib.parse.quote(raw, safe=MARK_NON_URLLIB + allow)
+    
+
+# unquoting happens during the parsing, otherwise quoted strings can't even be parsed
+def quote(raw):
+    return '"' + raw.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def token_or_quote(raw):
+    return raw if all(c in TOKEN for c in raw) else quote(raw)
+    
+
+# The _ESCAPED suffix just reminds us to unescape them after grabbing them from the parser.
 LWS = ' \t'
 ALPHANUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-MARK = "-_.!~*'()"
+MARK_URLLIB = '_.-'
+MARK_NON_URLLIB = "!~*'()"
+MARK = MARK_URLLIB + MARK_NON_URLLIB
 UNRESERVED = ALPHANUM + MARK
 RESERVED = ";/?:@&=+$,"
 ESCAPED = "%"  # followed by two hex digits, but we ignore that here
-URIC = RESERVED + UNRESERVED + ESCAPED
-REASON = URIC + LWS
+URIC_ESCAPED = RESERVED + UNRESERVED + ESCAPED
+REASON_ESCAPED = URIC_ESCAPED + LWS
 TOKEN = ALPHANUM + "-.!%*_+`'~"
+HOST_NONTOKEN = "[]:"
+
+URI_HEADER_UNRESERVED = "[]/?:+$"  # hnv
+URI_HEADER_ESCAPED = URI_HEADER_UNRESERVED + UNRESERVED + ESCAPED
+
+URI_PARAM_UNRESERVED = "[]/:&+$"
+URI_PARAM_ESCAPED = URI_PARAM_UNRESERVED + UNRESERVED + ESCAPED
+
+HEADER_KEY = TOKEN
+HEADER_VALUE = TOKEN + HOST_NONTOKEN  # plus quoted
+
+VIA_PARAM_KEY = TOKEN
+VIA_PARAM_VALUE = TOKEN + HOST_NONTOKEN
 
 
 class Parser:
@@ -56,20 +95,6 @@ class Parser:
             else:
                 return pos
             
-        
-    def grab_string(self, acceptable):
-        start = self.pos
-        pos = start
-        
-        while self.text[pos] in acceptable:
-            pos += 1
-            
-        end = pos
-        value = self.text[start:end]
-        self.pos = pos
-        
-        return value
-        
         
     def grab_newline(self):
         pos = self.pos
@@ -140,12 +165,12 @@ class Parser:
         if not self.can_grab_separator(wanted, left_pad, right_pad):
             raise Exception("Expected separator %r at %r" % (wanted, self))
             
-
-    def grab_token(self):
+        
+    def grab_token(self, acceptable=TOKEN):
         start = self.pos
         pos = start
         
-        while self.text[pos] in TOKEN:
+        while self.text[pos] in acceptable:
             pos += 1
             
         end = pos
@@ -183,11 +208,11 @@ class Parser:
         return quoted
 
 
-    def grab_token_or_quoted(self):
+    def grab_token_or_quoted(self, acceptable=TOKEN):
         if self.text[self.pos] in '"' + LWS:
             return self.grab_quoted()
         else:
-            return self.grab_token()
+            return self.grab_token(acceptable)
     
     
     def grab_word(self):  # To be used for callid only
@@ -305,10 +330,13 @@ class Rack(namedtuple("Rack", [ "rseq", "cseq", "method" ])):
         return cls(rseq, cseq, method)
 
 
-class Via(namedtuple("Via", [ "transport", "addr", "branch" ])):
+class Via(namedtuple("Via", [ "transport", "addr", "params" ])):
     def print(self):
-        return "SIP/2.0/%s %s;branch=%s" % (self.transport, self.addr, self.branch)
+        text = "SIP/2.0/%s %s" % (self.transport, self.addr)
+        text += "".join(";" + k + ('' if v is None else "=" + token_or_quote(v)) for k, v in self.params.items())
 
+        return text
+        
 
     @classmethod
     def parse(cls, parser):
@@ -328,18 +356,18 @@ class Via(namedtuple("Via", [ "transport", "addr", "branch" ])):
         params = {}
         
         while parser.can_grab_separator(';'):
-            key = parser.grab_token()
+            key = parser.grab_token(VIA_PARAM_KEY)
             value = None
             
             if parser.can_grab_separator('='):
-                value = parser.grab_token_or_quoted()
+                value = parser.grab_token_or_quoted(VIA_PARAM_VALUE)
                 
             params[key] = value
             
         # FIXME: we can relax this now
-        branch = params["branch"]
+        #branch = params["branch"]
 
-        return cls(transport, addr, branch)
+        return cls(transport, addr, params)
 
 
 # TODO: this shouldn't be here
@@ -466,42 +494,9 @@ class Auth(namedtuple("Auth",
         return cls(**params)
 
 
-def parse_parts(parts):
-    params = OrderedDict()
-
-    for part in parts:
-        if "=" in part:
-            k, v = part.split("=")
-            params[k] = v
-        else:
-            params[part] = True
-
-    return params
-
-
-def print_params(params):
-    return [ "%s=%s" % (k, v) if v is not True else k for k, v in params.items() if v]
-
-
-def parse_semicolon_params(parser):
-    params = {}
-    
-    while parser.can_grab_separator(";"):
-        key = parser.grab_token()
-        value = None
-    
-        if parser.can_grab_separator("="):
-            value = parser.grab_token_or_quoted()
-        
-        params[key] = value
-
-
-    return params
-    
-
-class Uri(namedtuple("Uri", "addr username scheme params")):
-    def __new__(cls, addr, username=None, scheme=None, params=None):
-        return super().__new__(cls, addr, username, scheme or "sip", params or {})
+class Uri(namedtuple("Uri", "addr username scheme params headers")):
+    def __new__(cls, addr, username=None, scheme=None, params=None, headers=None):
+        return super().__new__(cls, addr, username, scheme or "sip", params or {}, headers or {})
 
 
     def __hash__(self):
@@ -515,12 +510,20 @@ class Uri(namedtuple("Uri", "addr username scheme params")):
         
 
     def print(self):
-        parts = [ self.addr.print() ] + print_params(self.params)
-        rest = ";".join(parts)
-        rest = "%s@%s" % (self.username, rest) if self.username else rest
-        uri = "%s:%s" % (self.scheme, rest)
-
-        return uri
+        text = self.scheme + ":"
+        
+        if self.username:
+            text += escape(self.username) + "@"
+            
+        text += str(self.addr)
+        
+        if self.params:
+            text += "".join(";" + escape(k) + "=" + escape(v) for k, v in self.params.items())
+                
+        if self.headers:
+            text += "?" + "&".join(escape(k) + "=" + escape(v) for k, v in self.headers.items())
+            
+        return text
 
 
     @classmethod
@@ -528,15 +531,19 @@ class Uri(namedtuple("Uri", "addr username scheme params")):
         if bare_scheme:
             # It is given if the Uri was found not enclosed between angle brackets.
             # Then the parser already grabbed the scheme and the colon by accident.
-            # Also, in this case we have no URI parameters.
+            # Also, in this case we have no URI parameters or headers, because unenclosed
+            # URIs can't contain semicolon or question mark.
             scheme = bare_scheme
         else:
             scheme = parser.grab_token()
             parser.grab_separator(":")
 
         if scheme not in ("sip", "sips"):
-            uric = parser.grab_string(URIC)
-            return cls(None, None, scheme, uric)
+            uric_escaped = parser.grab_token(URIC_ESCAPED)
+            # This may contain escaped parts, but we don't know how to unescape it properly,
+            # because the separators are unknown, and only the separated parts are supposed
+            # to be unescaped. So just return it as we found it.
+            return cls(None, None, scheme, uric_escaped)
     
         username = None
         password = None
@@ -546,18 +553,41 @@ class Uri(namedtuple("Uri", "addr username scheme params")):
         if userinfo:
             if ":" in userinfo:
                 username, password = userinfo.split(":")
+                username = unescape(username)
+                #password = unescape(username)
                 raise Exception("Unexpected password!")  # FIXME
             else:
-                username = userinfo
+                username = unescape(userinfo)
             
         if parser.startswith("["):
             raise Exception("Can't parse IPV6 references yet!")
             
         addr = Addr.parse(parser)
+        params = {}
+        headers = {}
         
-        params = parse_semicolon_params(parser) if not bare_scheme else {}
-            
-        return cls(addr, username, scheme, params)
+        if not bare_scheme:
+            while parser.can_grab_separator(";"):
+                key = unescape(parser.grab_token(URI_PARAM_ESCAPED))
+                value = None
+    
+                if parser.can_grab_separator("="):
+                    value = unescape(parser.grab_token(URI_PARAM_ESCAPED))
+        
+                params[key] = value
+
+            if parser.can_grab_separator("?"):
+                while True:
+                    key = unescape(parser.grab_token(URI_HEADER_ESCAPED))
+                    parser.grab_separator("=")
+                    value = unescape(parser.grab_token(URI_HEADER_ESCAPED))
+                    
+                    headers[key] = value
+                    
+                    if not parser.can_grab_separator("&"):
+                        break
+        
+        return cls(addr, username, scheme, params, headers)
 
 
 class Nameaddr(namedtuple("Nameaddr", "uri name params")):
@@ -573,14 +603,14 @@ class Nameaddr(namedtuple("Nameaddr", "uri name params")):
         # If the URI contains URI parameters, not enclosing it in angle brackets would
         # be interpreted as header parameters. So enclose them always just to be safe.
 
-        uri = self.uri.print()
-        name = '"%s"' % self.name if self.name and " " in self.name else self.name
-        first_part = ["%s <%s>" % (name, uri) if name else "<%s>" % uri]
-        last_parts = print_params(self.params)
-        full = ";".join(first_part + last_parts)
+        text = "" if not self.name else token_or_quote(self.name) + " "
+        text += "<" + str(self.uri) + ">"
+        # Honestly "host" values need no quoting, but we'll be stricter, so even
+        # HOST_NONTOKEN characters will trigger quoting (may be a problem with IPv6).
+        text += "".join(";" + k + ('' if v is None else "=" + token_or_quote(v)) for k, v in self.params.items())
 
-        return full
-
+        return text
+    
 
     @classmethod
     def parse(cls, parser):
@@ -608,9 +638,18 @@ class Nameaddr(namedtuple("Nameaddr", "uri name params")):
             parser.grab_separator("<", True, False)
             uri = Uri.parse(parser)
             parser.grab_separator(">", False, True)
+
+        params = {}
         
-        params = parse_semicolon_params(parser)
+        while parser.can_grab_separator(";"):
+            key = parser.grab_token(HEADER_KEY)
+            value = None
+    
+            if parser.can_grab_separator("="):
+                value = parser.grab_token_or_quoted(HEADER_VALUE)
         
+            params[key] = value
+
         return cls(uri=uri, name=displayname, params=params)
         
         
@@ -628,7 +667,7 @@ class SipMessage(HttpLikeMessage):
 def print_structured_message(params):
     if params["is_response"] is True:
         code, reason = params["status"]
-        initial_line = "SIP/2.0 %d %s" % (code, reason)
+        initial_line = "SIP/2.0 %d %s" % (code, escape(reason, allow=' '))
     elif params["is_response"] is False:
         initial_line = "%s %s SIP/2.0" % (params["method"], params["uri"].print())
     else:
@@ -685,7 +724,7 @@ def parse_structured_message(message):
         code = parser.grab_number()
         parser.grab_whitespace()
         
-        reason = parser.grab_string(REASON)
+        reason = unescape(parser.grab_token(REASON_ESCAPED))
         
         p["is_response"] = True
         p["status"] = Status(code=code, reason=reason)

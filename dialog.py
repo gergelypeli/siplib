@@ -76,7 +76,7 @@ class Dialog(Loggable):
         self.hop = params["hop"]
 
         self.dialog_manager.register_by_local_tag(self.local_tag, self)
-        self.dialog_manager.register_by_incoming_branch(params["via"][0].branch, self)
+        self.dialog_manager.register_by_incoming_branch(params["via"][0].params["branch"], self)
         
         
     def setup_outgoing(self, request_uri, from_nameaddr, to_nameaddr, route, hop):
@@ -357,7 +357,7 @@ class DialogManager(Loggable):
         if method == "CANCEL" and not local_tag:
             if related_params and related_params["method"] == "INVITE":
                 # TODO: use hop, too, for safety!
-                branch = related_params["via"][0].branch
+                branch = related_params["via"][0].params["branch"]
                 dialog = self.dialogs_by_incoming_branch.get(branch)
                 
                 if dialog:

@@ -483,7 +483,7 @@ class Leg(GroundDweller):
 
     def add_media_leg(self, media_leg):
         ci = len(self.media_legs)
-        self.logger.debug("Adding %s media leg %s." % (type, ci))
+        self.logger.debug("Adding media leg %s." % ci)
 
         self.media_legs.append(media_leg)
         media_leg.set_oid(self.oid.add("channel", ci))

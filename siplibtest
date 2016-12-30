@@ -22,7 +22,7 @@ import resolver
 
 TEST_DIALIN = 1
 TEST_DIALOUT = 2
-TEST = TEST_DIALOUT
+TEST = TEST_DIALIN
 
 HOST = "otthon"
 A_ADDR = Addr(HOST, 5060)
@@ -534,7 +534,7 @@ class SwitchA(TestSwitch):
                 self.dial(action, "line", addr=ctx["src_addr"], username=ctx["src_username"])
                 return
 
-            if ctx["dst_username"] == "333":
+            if ctx["dst_username"] in ("222", "333"):
                 self.dial(action, "callee")
             else:
                 self.dial(action, "line", addr=ctx["dst_addr"], username=ctx["dst_username"])

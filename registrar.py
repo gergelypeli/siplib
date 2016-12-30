@@ -72,7 +72,7 @@ class Record(object):
         fetch = []
         for contact in self.contacts:
             seconds_left = int((contact.expiration - now).total_seconds())
-            fetch.append(Nameaddr(uri=contact.uri, params=dict(expires=seconds_left)))
+            fetch.append(Nameaddr(uri=contact.uri, params=dict(expires=str(seconds_left))))
 
         self.send_response(dict(status=Status(200, "OK"), contact=fetch), params)
 
@@ -196,6 +196,8 @@ class RecordManager(Loggable):
 
 
 class Registration(object):
+    EXPIRES = 300
+
     def __init__(self, registration_manager, registrar_uri, record_uri, hop):
         self.registration_manager = registration_manager
 
@@ -218,7 +220,7 @@ class Registration(object):
             'uri': self.registrar_uri,
             'from': Nameaddr(self.record_uri).tagged(self.local_tag),
             'to': Nameaddr(self.record_uri),
-            'contact': [ Nameaddr(self.contact_uri, params=dict(expires=300)) ]
+            'contact': [ Nameaddr(self.contact_uri, params=dict(expires=str(self.EXPIRES))) ]
         }
         
         self.send_request(user_params)
