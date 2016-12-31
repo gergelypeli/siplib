@@ -57,6 +57,10 @@ class Dialog(Loggable):
         self.last_recved_cseq = None
 
 
+    def get_remote_aor(self):
+        return self.remote_nameaddr.uri.canonical_aor() if self.remote_nameaddr else None
+                
+
     def get_remote_tag(self):
         return self.remote_nameaddr.params.get("tag") if self.remote_nameaddr else None
 
@@ -65,10 +69,18 @@ class Dialog(Loggable):
         return self.local_tag
         
         
+    def get_call_id(self):
+        return self.call_id
+
+        
+    def make_my_contact(self, hop):
+        return Nameaddr(Uri(hop.local_addr))
+        
+        
     def setup_incoming(self, params):
         self.local_nameaddr = params["to"].tagged(self.local_tag)
         self.remote_nameaddr = params["from"]
-        self.my_contact = Nameaddr(Uri(params["hop"].local_addr))
+        self.my_contact = self.make_my_contact(params["hop"])
         self.call_id = params["call_id"]
         
         self.peer_contact = first(params["contact"])
@@ -82,7 +94,7 @@ class Dialog(Loggable):
     def setup_outgoing(self, request_uri, from_nameaddr, to_nameaddr, route, hop):
         self.local_nameaddr = from_nameaddr.tagged(self.local_tag)
         self.remote_nameaddr = to_nameaddr
-        self.my_contact = Nameaddr(Uri(hop.local_addr))
+        self.my_contact = self.make_my_contact(hop)
         self.call_id = generate_call_id()
         
         self.peer_contact = Nameaddr(request_uri)
@@ -343,14 +355,20 @@ class DialogManager(Loggable):
         self.dialogs_by_incoming_branch[branch] = dialog
         self.logger.debug("Registered dialog with incoming branch %s" % (branch,))
     
+    
+    def find_dialog(self, params):
+        local_aor = params["from"] if params["is_response"] else params["to"]
+        local_tag = local_aor.params.get("tag")
+        
+        return self.dialogs_by_local_tag.get(local_tag)
+        
 
     def process_request(self, params, related_params=None):
         method = params["method"]
-        local_tag = params["to"].params.get("tag")
-        dialog = self.dialogs_by_local_tag.get(local_tag)
+        dialog = self.find_dialog(params)
         
         if dialog:
-            self.logger.debug("Found dialog for %s request: %s" % (method, local_tag,))
+            self.logger.debug("Found dialog for %s request: %s" % (method, dialog.get_local_tag()))
             dialog.recv_request(params)
             return True
 
@@ -371,11 +389,10 @@ class DialogManager(Loggable):
 
     def process_response(self, params, related_request):
         method = params["method"]
-        local_tag = params["from"].params.get("tag")
-        dialog = self.dialogs_by_local_tag.get(local_tag)
+        dialog = self.find_dialog(params)
         
         if dialog:
-            self.logger.debug("Found dialog for %s response: %s" % (method, local_tag,))
+            self.logger.debug("Found dialog for %s response: %s" % (method, dialog.get_local_tag()))
             dialog.recv_response(params, related_request)
             return True
 

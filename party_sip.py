@@ -15,7 +15,7 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
     UP = "UP"
     DISCONNECTING_OUT = "DISCONNECTING_OUT"
 
-    DEFAULT_ALLOWED_METHODS = { "INVITE", "CANCEL", "ACK", "PRACK", "BYE", "UPDATE" }
+    DEFAULT_ALLOWED_METHODS = { "INVITE", "CANCEL", "ACK", "PRACK", "BYE", "UPDATE", "REFER" }
 
     USE_RPR = True
 

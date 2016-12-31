@@ -603,6 +603,10 @@ class Uri(namedtuple("Uri", "addr username scheme params headers")):
         return cls(addr, username, scheme, params, headers)
 
 
+    def canonical_aor(self):
+        return self._replace(scheme="any", params={})
+
+
 class Nameaddr(namedtuple("Nameaddr", "uri name params")):
     def __new__(cls, uri, name=None, params=None):
         return super().__new__(cls, uri, name, params or {})

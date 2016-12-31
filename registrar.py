@@ -147,15 +147,11 @@ class RecordManager(Loggable):
         return record
 
 
-    def canonicalize_record_uri(self, uri):
-        return uri._replace(scheme="any", params={})
-                
-        
     def may_register(self, registering_uri, record_uri):
         # Third party registrations not supported yet
         # We'd need to know which account is allowed to register which
         
-        return self.canonicalize_record_uri(registering_uri) == record_uri
+        return registering_uri.canonical_aor() == record_uri
         
         
     def process_request(self, params):
@@ -163,7 +159,7 @@ class RecordManager(Loggable):
             raise Error("RecordManager has nothing to do with this request!")
         
         registering_uri = params["from"].uri
-        record_uri = self.canonicalize_record_uri(params["to"].uri)
+        record_uri = params["to"].uri.canonical_aor()
         
         if not self.may_register(registering_uri, record_uri):
             self.reject_request(params, Status(403, "Forbidden"))
@@ -178,13 +174,13 @@ class RecordManager(Loggable):
 
 
     def emulate_registration(self, record_uri, contact_uri, seconds, hop):
-        record_uri = self.canonicalize_record_uri(record_uri)
+        record_uri = record_uri.canonical_aor()
         expiration = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
         self.add_record(record_uri).add_contact(contact_uri, expiration, hop)
         
 
     def lookup_contacts(self, record_uri):
-        record_uri = self.canonicalize_record_uri(record_uri)
+        record_uri = record_uri.canonical_aor()
         record = self.records_by_uri.get(record_uri)
         
         if record:
