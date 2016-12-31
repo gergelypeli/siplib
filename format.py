@@ -21,28 +21,6 @@ class SipError(Exception):
         return "%d %s" % self.status
 
 
-def unescape(escaped):
-    return urllib.parse.unquote(escaped)
-    
-    
-def escape(raw, allow=''):
-    # The characters not needing escaping vary from entity to entity. But characters in
-    # the UNRESERVED class seems to be allowed always. That's ALPHANUM + MARK. This
-    # function never quotes alphanumeric characters and '_.-', so we only need to
-    # specify the rest explicitly.
-    
-    return urllib.parse.quote(raw, safe=MARK_NON_URLLIB + allow)
-    
-
-# unquoting happens during the parsing, otherwise quoted strings can't even be parsed
-def quote(raw):
-    return '"' + raw.replace('\\', '\\\\').replace('"', '\\"') + '"'
-
-
-def token_or_quote(raw):
-    return raw if all(c in TOKEN for c in raw) else quote(raw)
-    
-
 # The _ESCAPED suffix just reminds us to unescape them after grabbing them from the parser.
 LWS = ' \t'
 ALPHANUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -56,6 +34,8 @@ URIC_ESCAPED = RESERVED + UNRESERVED + ESCAPED
 REASON_ESCAPED = URIC_ESCAPED + LWS
 TOKEN = ALPHANUM + "-.!%*_+`'~"
 HOST_NONTOKEN = "[]:"
+WORD = ALPHANUM + "-.!%*_+`'~()<>:\/[]?{}" + '"'  # notably no semicolon, used for call-id
+CALLID = WORD + "@"  # although at most one @ is allowed, fuck that
 
 URI_HEADER_UNRESERVED = "[]/?:+$"  # hnv
 URI_HEADER_ESCAPED = URI_HEADER_UNRESERVED + UNRESERVED + ESCAPED
@@ -63,11 +43,8 @@ URI_HEADER_ESCAPED = URI_HEADER_UNRESERVED + UNRESERVED + ESCAPED
 URI_PARAM_UNRESERVED = "[]/:&+$"
 URI_PARAM_ESCAPED = URI_PARAM_UNRESERVED + UNRESERVED + ESCAPED
 
-HEADER_KEY = TOKEN
-HEADER_VALUE = TOKEN + HOST_NONTOKEN  # plus quoted
-
-VIA_PARAM_KEY = TOKEN
-VIA_PARAM_VALUE = TOKEN + HOST_NONTOKEN
+GENERIC_PARAM_KEY = TOKEN
+GENERIC_PARAM_VALUE = TOKEN + HOST_NONTOKEN  # plus quoted
 
 
 class Parser:
@@ -227,7 +204,56 @@ class Parser:
         self.pos = pos
         
         return word
+
+
+def unescape(escaped):
+    return urllib.parse.unquote(escaped)
+    
+    
+def escape(raw, allow=''):
+    # The characters not needing escaping vary from entity to entity. But characters in
+    # the UNRESERVED class seems to be allowed always. That's ALPHANUM + MARK. This
+    # function never quotes alphanumeric characters and '_.-', so we only need to
+    # specify the rest explicitly.
+    
+    return urllib.parse.quote(raw, safe=MARK_NON_URLLIB + allow)
+    
+
+# unquoting happens during the parsing, otherwise quoted strings can't even be parsed
+def quote(raw):
+    return '"' + raw.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def quote_if_not(acceptable, raw):
+    return raw if all(c in acceptable for c in raw) else quote(raw)
+    
+
+def parse_generic_params(parser):
+    params = {}
+    
+    while parser.can_grab_separator(';'):
+        key = parser.grab_token(GENERIC_PARAM_KEY)
+        value = None
         
+        if parser.can_grab_separator('='):
+            value = parser.grab_token_or_quoted(GENERIC_PARAM_VALUE)
+            
+        params[key] = value
+        
+    return params
+    
+    
+def print_generic_params(params):
+    text = ""
+    
+    for k, v in params.items():
+        text += ";" + k
+        
+        if v is not None:
+            text += "=" + quote_if_not(GENERIC_PARAM_VALUE, v)
+            
+    return text
+
 
 class Addr(namedtuple("Addr", [ "host", "port" ])):
     def __str__(self):
@@ -332,10 +358,7 @@ class Rack(namedtuple("Rack", [ "rseq", "cseq", "method" ])):
 
 class Via(namedtuple("Via", [ "transport", "addr", "params" ])):
     def print(self):
-        text = "SIP/2.0/%s %s" % (self.transport, self.addr)
-        text += "".join(";" + k + ('' if v is None else "=" + token_or_quote(v)) for k, v in self.params.items())
-
-        return text
+        return "SIP/2.0/%s %s%s" % (self.transport, self.addr, print_generic_params(self.params))
         
 
     @classmethod
@@ -353,19 +376,7 @@ class Via(namedtuple("Via", [ "transport", "addr", "params" ])):
             raise Exception("Expected vanilla Via!")
         
         addr = Addr.parse(parser)
-        params = {}
-        
-        while parser.can_grab_separator(';'):
-            key = parser.grab_token(VIA_PARAM_KEY)
-            value = None
-            
-            if parser.can_grab_separator('='):
-                value = parser.grab_token_or_quoted(VIA_PARAM_VALUE)
-                
-            params[key] = value
-            
-        # FIXME: we can relax this now
-        #branch = params["branch"]
+        params = parse_generic_params(parser)
 
         return cls(transport, addr, params)
 
@@ -413,12 +424,12 @@ def parse_digest(parser):
     parser.grab_whitespace()
     
     params = {}
-    
+
     while not params or parser.can_grab_separator(","):
         key = parser.grab_token()
         parser.grab_separator("=")
         value = parser.grab_token_or_quoted()
-        
+
         params[key] = value
 
     return params
@@ -486,6 +497,8 @@ class Auth(namedtuple("Auth",
 
     @classmethod
     def parse(cls, parser):
+        # Well, some of these field must be quoted-string, but we don't care,
+        # and just accept tokens unquoted.
         params = parse_digest(parser)
 
         if "nc" in params:
@@ -603,11 +616,9 @@ class Nameaddr(namedtuple("Nameaddr", "uri name params")):
         # If the URI contains URI parameters, not enclosing it in angle brackets would
         # be interpreted as header parameters. So enclose them always just to be safe.
 
-        text = "" if not self.name else token_or_quote(self.name) + " "
+        text = "" if self.name is None else quote_if_not(TOKEN, self.name) + " "
         text += "<" + str(self.uri) + ">"
-        # Honestly "host" values need no quoting, but we'll be stricter, so even
-        # HOST_NONTOKEN characters will trigger quoting (may be a problem with IPv6).
-        text += "".join(";" + k + ('' if v is None else "=" + token_or_quote(v)) for k, v in self.params.items())
+        text += print_generic_params(self.params)
 
         return text
     
@@ -639,16 +650,7 @@ class Nameaddr(namedtuple("Nameaddr", "uri name params")):
             uri = Uri.parse(parser)
             parser.grab_separator(">", False, True)
 
-        params = {}
-        
-        while parser.can_grab_separator(";"):
-            key = parser.grab_token(HEADER_KEY)
-            value = None
-    
-            if parser.can_grab_separator("="):
-                value = parser.grab_token_or_quoted(HEADER_VALUE)
-        
-            params[key] = value
+        params = parse_generic_params(parser)
 
         return cls(uri=uri, name=displayname, params=params)
         
@@ -658,6 +660,20 @@ class Nameaddr(namedtuple("Nameaddr", "uri name params")):
             return self
         else:
             return Nameaddr(self.uri, self.name, dict(self.params, tag=tag))
+
+
+# RFC 4538, option tag: tdialog
+class TargetDialog(namedtuple("TargetDialog", [ "callid", "params" ])):
+    def print(self):
+        return self.callid + print_generic_params(self.params)
+        
+
+    @classmethod
+    def parse(cls, parser):
+        callid = parser.grab_token(CALLID)
+        params = parse_generic_params(parser)
+        
+        return cls(callid, params)
 
 
 class SipMessage(HttpLikeMessage):
@@ -696,6 +712,8 @@ def print_structured_message(params):
         elif field in ("supported", "require", "allow"):
             y = ", ".join(sorted(x))  # TODO: sorted here?
         elif field in ("refer_to", "referred_by"):
+            y = x.print()
+        elif field in ("target_dialog",):
             y = x.print()
         elif field not in META_HEADER_FIELDS:
             y = x
@@ -792,6 +810,8 @@ def parse_structured_message(message):
             y = set( i.strip() for i in x.split(",") )  # TODO
         elif field in ("refer_to", "referred_by"):
             y = Uri.parse(Parser(x))
+        elif field in ("target_dialog",):
+            y = TargetDialog.parse(Parser(x))
         elif field not in META_HEADER_FIELDS:
             y = x
         else:

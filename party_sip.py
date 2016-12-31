@@ -15,7 +15,7 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
     UP = "UP"
     DISCONNECTING_OUT = "DISCONNECTING_OUT"
 
-    DEFAULT_ALLOWED_METHODS = ["INVITE", "CANCEL", "ACK", "PRACK", "BYE", "UPDATE"]
+    DEFAULT_ALLOWED_METHODS = { "INVITE", "CANCEL", "ACK", "PRACK", "BYE", "UPDATE" }
 
     USE_RPR = True
 
@@ -52,15 +52,19 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
         self.logger.debug("Changing state %s => %s" % (self.state, new_state))
         self.state = new_state
         
+        
+    def add_abilities(self, msg):
+        msg.setdefault("allow", set()).update(self.DEFAULT_ALLOWED_METHODS)
+        msg.setdefault("supported", set()).add("tdialog")
+        return msg
+        
 
     def send_request(self, request, related=None):
-        request["allow"] = self.DEFAULT_ALLOWED_METHODS
-        self.dialog.send_request(request, related)
+        self.dialog.send_request(self.add_abilities(request), related)
 
 
     def send_response(self, response, related):
-        response["allow"] = self.DEFAULT_ALLOWED_METHODS
-        self.dialog.send_response(response, related)
+        self.dialog.send_response(self.add_abilities(response), related)
 
 
     def may_finish(self):
