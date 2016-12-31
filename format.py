@@ -679,29 +679,32 @@ def print_structured_message(params):
     other_fields = [ f for f in params if f not in mandatory_fields + last_fields ]
 
     for field in mandatory_fields + other_fields + last_fields:
-        if params[field] is None:
-            pass
+        x = params[field]
+        
+        if x is None:
+            continue
         elif field in ("from", "to", "www_authenticate", "authorization", "rack"):
-            headers[field] = params[field].print()
+            y = x.print()
         elif field == "cseq":
-            headers[field] = "%d %s" % (params[field], params["method"])
+            y = "%d %s" % (x, params["method"])
         elif field in ("rseq", "expires"):
-            headers[field] = "%d" % params[field]
+            y = "%d" % x
         elif field in ("contact", "route"):
-            headers[field] = [ f.print() for f in params[field] ]
+            y = [ f.print() for f in x ]
         elif field in ("via",):
-            headers[field] = [ f.print() for f in params[field] ]
+            y = [ f.print() for f in x ]
         elif field in ("supported", "require", "allow"):
-            headers[field] = ", ".join(sorted(params[field]))  # TODO: sorted here?
+            y = ", ".join(sorted(x))  # TODO: sorted here?
+        elif field in ("refer_to", "referred_by"):
+            y = x.print()
         elif field not in META_HEADER_FIELDS:
-            headers[field] = params[field]
+            y = x
+        else:
+            continue
+            
+        headers[field] = y
 
     body = params.get("body", b"")
-    #sdp = params.get("sdp")
-    #if sdp:
-    #    body = sdp.print()
-    #    headers["content_type"] = "application/sdp"
-    #    headers["content_length"] = len(body)
 
     return SipMessage(initial_line, headers, body)
 
@@ -747,55 +750,55 @@ def parse_structured_message(message):
         p["method"] = method
         p["uri"] = uri
 
-    for field, header in message.headers.items():
+    for field, x in message.headers.items():
         # TODO: refactor a bit!
         if field in ("from", "to"):
-            p[field] = Nameaddr.parse(Parser(header))
+            y = Nameaddr.parse(Parser(x))
         elif field in ("contact", "route"):
-            p[field] = []
+            y = []
             
-            for h in header:
+            for h in x:
                 parser = Parser(h)
                 nameaddrs = []
                 
                 while not nameaddrs or parser.can_grab_separator(","):
                     nameaddrs.append(Nameaddr.parse(parser))
                     
-                p[field].extend(nameaddrs)
+                y.extend(nameaddrs)
         elif field in ("www_authenticate"):
-            p[field] = WwwAuth.parse(Parser(header))
+            y = WwwAuth.parse(Parser(x))
         elif field in ("authorization"):
-            p[field] = Auth.parse(Parser(header))
+            y = Auth.parse(Parser(x))
         elif field == "cseq":  # TODO
-            parser = Parser(header)
+            parser = Parser(x)
             number = parser.grab_number()
             parser.grab_whitespace()
             method = parser.grab_token().upper()
             
-            p[field] = number
+            y = number
+            
             if "method" in p:
                 if p["method"] != method:
                     raise FormatError("Mismatching method in CSeq field: %r vs %r" % (p["method"], method))
             else:
                 p["method"] = method  # Necessary for CANCEL responses
         elif field in ("rseq", "expires"):
-            p[field] = int(header)  # TODO
+            y = int(x)  # TODO
         elif field == "rack":
-            p[field] = Rack.parse(Parser(header))
+            y = Rack.parse(Parser(x))
         elif field == "via":
-            p[field] = [ Via.parse(Parser(h)) for h in header ]
+            y = [ Via.parse(Parser(h)) for h in x ]
         elif field in ("supported", "require", "allow"):
-            p[field] = set( x.strip() for x in header.split(",") )  # TODO
+            y = set( i.strip() for i in x.split(",") )  # TODO
+        elif field in ("refer_to", "referred_by"):
+            y = Uri.parse(Parser(x))
         elif field not in META_HEADER_FIELDS:
-            p[field] = header
+            y = x
         else:
-            print("Warning, header field ignored: '%s'!" % field)
+            continue
+            
+        p[field] = y
 
-    #sdp = None
-    #if message.body:
-    #    sdp = Sdp.parse(message.body)
-        
-    #p["sdp"] = sdp
     p["body"] = message.body
 
     return p
