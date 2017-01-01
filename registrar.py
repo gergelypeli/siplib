@@ -30,7 +30,7 @@ def generate_tag():
     return uuid.uuid4().hex[:8]
 
 
-RecordContact = collections.namedtuple("RecordContact", [ "uri", "hop", "expiration" ])
+RecordContact = collections.namedtuple("RecordContact", [ "cseq", "uri", "hop", "expiration" ])
 
 
 class Record(Loggable):
@@ -38,6 +38,8 @@ class Record(Loggable):
     AUTH_ALWAYS = "AUTH_ALWAYS"
     AUTH_IF_UNREGISTERED = "AUTH_IF_UNREGISTERED"
     AUTH_BY_HOP = "AUTH_BY_HOP"
+
+    DEFAULT_EXPIRES = 3600
 
     def __init__(self, record_manager, record_uri, authname, auth_policy):
         Loggable.__init__(self)
@@ -47,53 +49,61 @@ class Record(Loggable):
         self.authname = authname
         self.auth_policy = auth_policy
 
-        self.call_id = None  # FIXME: separate registrations!
-        self.cseq = None
+        #self.call_id = None  # FIXME: separate registrations!
+        #self.cseq = None
         
-        self.contacts = []
+        # It's kinda hard to decide when an incoming REGISTER corresponds to a
+        # previously received one, but let's assume clients are decent enough
+        # to generate unique callid-s. Also, we only allow one Contact per request.
+        self.contacts_by_call_id = {}
 
 
-    def add_contact(self, uri, hop, expiration):
-        self.contacts = [ contact for contact in self.contacts if contact.uri != uri ]
-        self.contacts.append(RecordContact(uri, hop, expiration))
+    def add_contact(self, callid, cseq, uri, hop, expiration):
+        self.contacts_by_call_id[callid] = RecordContact(cseq, uri, hop, expiration)
         self.logger.info("Registered %s from %s via %s until %s." % (self.record_uri, uri, hop, expiration))
+        
+        
+    def add_static_contact(self, uri, hop):
+        callid = generate_call_id()
+        cseq = None
+        expiration = None
+        
+        self.contacts_by_call_id[callid] = RecordContact(cseq, uri, hop, expiration)
+        self.logger.info("Registered %s from %s via %s permanently." % (self.record_uri, uri, hop))
         
 
     def get_contacts(self):
-        return self.contacts
+        return list(self.contacts_by_call_id.values())
 
+
+    def is_contact_hop(self, hop):
+        return any(contact.hop.contains(hop) for contact in self.contacts_by_call_id.values())
+        
 
     def authenticate_request(self, hop):
-        if self.auth_policy == Record.AUTH_NEVER:
+        # This is not about REGISTER requests, but about regular requests that
+        # just arrived.
+        
+        if self.auth_policy == self.AUTH_NEVER:
             self.logger.debug("Accepting request because authentication is never needed")
             return self.authname, True
-        elif self.auth_policy == Record.AUTH_ALWAYS:
+        elif self.auth_policy == self.AUTH_ALWAYS:
             self.logger.debug("Authenticating request because account always needs it")
             return self.authname, False
-        elif self.auth_policy == Record.AUTH_IF_UNREGISTERED:
-            allowed_hops = [ contact.hop for contact in self.contacts ]
-
-            self.logger.debug("Hop: %s, hops: %s" % (hop, allowed_hops))
-            is_allowed = any(allowed_hop.contains(hop) for allowed_hop in allowed_hops)
-            
-            if not is_allowed:
-                self.logger.debug("Authenticating request because account is not registered")
-                return self.authname, False
-            else:
+        elif self.auth_policy == self.AUTH_IF_UNREGISTERED:
+            if self.is_contact_hop(hop):
                 self.logger.debug("Accepting request because account is registered")
                 return self.authname, True
-        elif self.auth_policy == Record.AUTH_BY_HOP:
-            allowed_hops = [ contact.hop for contact in self.contacts ]
-
-            self.logger.debug("Hop: %s, hops: %s" % (hop, allowed_hops))
-            is_allowed = any(allowed_hop.contains(hop) for allowed_hop in allowed_hops)
-            
-            if not is_allowed:
+            else:
+                self.logger.debug("Authenticating request because account is not registered")
+                return self.authname, False
+        elif self.auth_policy == self.AUTH_BY_HOP:
+            if self.is_contact_hop(hop):
+                self.logger.debug("Accepting request because hop is allowed")
+                return self.authname, True
+            else:
                 self.logger.debug("Rejecting request because hop address is not allowed")
                 return None, True
-            else:
-                self.logger.debug("Accepting request because hop address is allowed")
-                return self.authname, True
         else:
             raise Exception("WTF?")
 
@@ -101,24 +111,32 @@ class Record(Loggable):
     def process_updates(self, params):
         # TODO: check authname!
         now = datetime.datetime.now()
+        call_id = params["call_id"]
+        cseq = params["cseq"]
+        contact_nameaddrs = params["contact"]
+        
+        if len(contact_nameaddrs) > 1:
+            self.logger.warning("Not supporting more than one Contact per request!")
+            self.send_response(dict(status=Status(501, "Too Many Contacts")), params)
+            return
 
         # No contact is valid for just fetching the registrations
-        for contact_nameaddr in params["contact"]:
+        for contact_nameaddr in contact_nameaddrs:
             expires = contact_nameaddr.params.get("expires", params.get("expires"))
-                
+            
             uri = contact_nameaddr.uri
-            seconds_left = int(expires) if expires is not None else 3600  # FIXME: proper default!
+            seconds_left = int(expires) if expires is not None else self.DEFAULT_EXPIRES
             expiration = now + datetime.timedelta(seconds=seconds_left)
             hop = params["hop"]
             
-            self.add_contact(uri, hop, expiration)
+            self.add_contact(call_id, cseq, uri, hop, expiration)
         
-        fetch = []
-        for contact in self.contacts:
+        fetched = []
+        for contact in self.contacts_by_call_id.values():
             seconds_left = int((contact.expiration - now).total_seconds())
-            fetch.append(Nameaddr(uri=contact.uri, params=dict(expires=str(seconds_left))))
+            fetched.append(Nameaddr(uri=contact.uri, params=dict(expires=str(seconds_left))))
 
-        self.send_response(dict(status=Status(200, "OK"), contact=fetch), params)
+        self.send_response(dict(status=Status(200, "OK"), contact=fetched), params)
 
 
     def take_request(self, params):
@@ -128,13 +146,12 @@ class Record(Loggable):
         call_id = params["call_id"]
         cseq = params["cseq"]
 
-        if call_id == self.call_id and cseq <= self.cseq:
+        contact = self.contacts_by_call_id.get(call_id)
+
+        if contact and cseq <= contact.cseq:
             # The RFC suggests 500, but that's a bit weird
             self.send_response(dict(status=Status(500, "Lower CSeq Is Not Our Fault")), params)
             return None
-
-        self.call_id = call_id
-        self.cseq = cseq
 
         return params
 
@@ -310,7 +327,7 @@ class Registration(object):
     def make_request(self, user_params):
         self.cseq += 1
 
-        dialog_params = {
+        nondialog_params = {
             "is_response": False,
             "call_id": self.call_id,
             "cseq": self.cseq,
@@ -319,7 +336,7 @@ class Registration(object):
             "user_params": user_params.copy()
         }
 
-        return safe_update(user_params, dialog_params)
+        return safe_update(user_params, nondialog_params)
 
 
     def take_response(self, params, related_request):

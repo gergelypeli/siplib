@@ -511,7 +511,7 @@ class TestSwitch(Switch):
         record = self.record_manager.add_record(uri, authname, policy)
         
         for hop in hops:
-            record.add_contact(uri, hop, None)  # assume same contact uri as the aor
+            record.add_static_contact(uri, hop)  # assume same contact uri as the aor
 
 
 def mkctx(src):

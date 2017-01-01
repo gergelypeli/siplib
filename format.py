@@ -509,6 +509,9 @@ class Auth(namedtuple("Auth",
 
 class Uri(namedtuple("Uri", "addr username scheme params headers")):
     def __new__(cls, addr, username=None, scheme=None, params=None, headers=None):
+        if scheme == "any":
+            raise Exception("Don't use scheme 'any'!")
+            
         return super().__new__(cls, addr, username, scheme or "sip", params or {}, headers or {})
 
 
@@ -523,7 +526,7 @@ class Uri(namedtuple("Uri", "addr username scheme params headers")):
         
 
     def print(self):
-        text = self.scheme + ":"
+        text = (self.scheme or "any") + ":"
         
         if self.username:
             text += escape(self.username) + "@"
@@ -603,8 +606,24 @@ class Uri(namedtuple("Uri", "addr username scheme params headers")):
         return cls(addr, username, scheme, params, headers)
 
 
+    def contains(self, other):
+        if not other:
+            return False
+
+        if self.scheme and self.scheme != other.scheme:
+            return False
+            
+        if self.username and self.username != other.username:
+            return False
+            
+        if self.addr and not self.addr.contains(other.addr):
+            return False
+            
+        return True
+        
+
     def canonical_aor(self):
-        return self._replace(scheme="any", params={})
+        return self._replace(scheme=None, params={})
 
 
 class Nameaddr(namedtuple("Nameaddr", "uri name params")):
