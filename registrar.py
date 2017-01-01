@@ -38,7 +38,7 @@ class Record(object):
         self.record_manager = record_manager
         self.record_uri = record_uri
 
-        self.call_id = None
+        self.call_id = None  # FIXME: separate registrations!
         self.cseq = None
         
         self.contacts = []
@@ -135,16 +135,17 @@ class RecordManager(Loggable):
 
 
     def add_record(self, record_uri):
-        record = self.records_by_uri.get(record_uri)
+        record_uri = record_uri.canonical_aor()
         
-        if record:
-            self.logger.debug("Found record: '%s'" % (record_uri,))
+        if record_uri in self.records_by_uri:
+            self.logger.error("Record already added: '%s'" % (record_uri,))
+            return None
         else:
-            self.logger.debug("Created record: %s" % (record_uri,))
+            self.logger.debug("Creating record: %s" % (record_uri,))
             record = Record(proxy(self), record_uri)
             self.records_by_uri[record_uri] = record
             
-        return record
+        return proxy(record)
 
 
     def may_register(self, registering_uri, record_uri):
@@ -165,7 +166,12 @@ class RecordManager(Loggable):
             self.reject_request(params, Status(403, "Forbidden"))
             return
         
-        record = self.add_record(record_uri)
+        record = self.records_by_uri.get(record_uri)
+        if not record:
+            self.logger.warning("Record not found: %s" % record_uri)
+            self.reject_request(params, Status(404))
+            return
+        
         record.recv_request(params)
         
         

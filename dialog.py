@@ -372,7 +372,7 @@ class DialogManager(Loggable):
             dialog.recv_request(params)
             return True
 
-        if method == "CANCEL" and not local_tag:
+        if method == "CANCEL" and not params["to"].params.get("tag"):
             if related_params and related_params["method"] == "INVITE":
                 # TODO: use hop, too, for safety!
                 branch = related_params["via"][0].params["branch"]

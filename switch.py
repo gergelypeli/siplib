@@ -10,7 +10,7 @@ from ground import Ground
 from authority import Authority
 from registrar import RegistrationManager, RecordManager
 from subscript import SubscriptionManager
-from account import Account, AccountManager
+from account import AccountManager
 from util import Loggable
 from mgc import Controller
 
@@ -85,6 +85,7 @@ class Switch(Loggable):
         return self.authority.provide_auth(response, request, creds)
         
         
+    # FIXME: is this still needed?
     def send_message(self, msg, related_msg=None):
         return self.transaction_manager.send_message(msg, related_msg)
         
@@ -148,10 +149,6 @@ class Switch(Loggable):
         
     def auth_request(self, params):
         method = params["method"]
-        from_uri = params["from"].uri
-        hop = params["hop"]
-
-        auth_policy = self.account_manager.get_account_auth_policy(from_uri)
         
         if method in ("CANCEL", "ACK", "NAK"):
             self.logger.debug("Accepting request because it can't be authenticated anyway")
@@ -160,44 +157,18 @@ class Switch(Loggable):
             # FIXME: this is only for debugging
             self.logger.debug("Accepting request because we're lazy to authenticate a PRACK")
             return False
-        elif not auth_policy:
-            self.logger.debug("Rejecting request because account is unknown")
+
+        creds = self.account_manager.auth_request(params)
+            
+        if not creds:
             self.reject_request(params, Status(403, "Forbidden"))
             return True
-        elif auth_policy == Account.AUTH_NEVER:
-            self.logger.debug("Accepting request because authentication is never needed")
+            
+        authname, ha1 = creds
+        
+        if not ha1:
             return False
-        elif auth_policy == Account.AUTH_ALWAYS:
-            self.logger.debug("Authenticating request because account always needs it")
-        elif auth_policy == Account.AUTH_IF_UNREGISTERED:
-            contacts = self.record_manager.lookup_contacts(from_uri)
-            allowed_hops = [ contact.hop for contact in contacts ]
 
-            self.logger.debug("Hop: %s, hops: %s" % (hop, allowed_hops))
-            is_allowed = any(allowed_hop.contains(hop) for allowed_hop in allowed_hops)
-            
-            if not is_allowed:
-                self.logger.debug("Authenticating request because account is not registered")
-            else:
-                self.logger.debug("Accepting request because account is registered")
-                return False
-        elif auth_policy == Account.AUTH_BY_HOP:
-            allowed_hops = self.account_manager.get_account_hops(from_uri)
-
-            self.logger.debug("Hop: %s, hops: %s" % (hop, allowed_hops))
-            is_allowed = any(allowed_hop.contains(hop) for allowed_hop in allowed_hops)
-            
-            if not is_allowed:
-                self.logger.debug("Rejecting request because hop address is not allowed")
-                self.reject_request(params, Status(403, "Forbidden"))
-                return True
-            else:
-                self.logger.debug("Accepting request because hop address is allowed")
-                return False
-        else:
-            raise Exception("WTF?")
-
-        creds = self.account_manager.get_account_credentials(from_uri)
         challenge = self.authority.require_auth(params, creds)
         
         if challenge:
