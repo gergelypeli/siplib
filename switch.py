@@ -7,7 +7,6 @@ from dialog import Dialog, DialogManager
 from party import Bridge, RecordingBridge, Routing
 from party_sip import SipEndpoint
 from ground import Ground
-from authority import Authority
 from registrar import RegistrationManager, RecordManager
 from subscript import SubscriptionManager
 from account import AccountManager
@@ -18,7 +17,7 @@ from mgc import Controller
 class Switch(Loggable):
     def __init__(self,
         transport_manager=None, transaction_manager=None,
-        record_manager=None, authority=None, registration_manager=None, subscription_manager=None,
+        record_manager=None, registration_manager=None, subscription_manager=None,
         dialog_manager=None, mgc=None, account_manager=None
     ):
         Loggable.__init__(self)
@@ -32,8 +31,6 @@ class Switch(Loggable):
         )
         self.record_manager = record_manager or RecordManager(
             proxy(self)
-        )
-        self.authority = authority or Authority(
         )
         self.registration_manager = registration_manager or RegistrationManager(
             proxy(self)
@@ -61,7 +58,6 @@ class Switch(Loggable):
         Loggable.set_oid(self, oid)
 
         self.account_manager.set_oid(oid.add("accman"))
-        self.authority.set_oid(oid.add("authority"))
         self.record_manager.set_oid(oid.add("recman"))
         self.registration_manager.set_oid(oid.add("regman"))
         self.subscription_manager.set_oid(oid.add("subman"))
@@ -81,8 +77,7 @@ class Switch(Loggable):
         
 
     def provide_auth(self, response, request):
-        creds = self.account_manager.get_our_credentials()
-        return self.authority.provide_auth(response, request, creds)
+        return self.account_manager.provide_auth(response, request)
         
         
     # FIXME: is this still needed?
@@ -96,9 +91,8 @@ class Switch(Loggable):
 
 
     def challenge_request(self, msg, challenge):
-        if msg:
-            response = make_simple_response(msg, Status(401, "Hey"), challenge)
-            self.transaction_manager.send_message(response, msg)
+        response = make_simple_response(msg, Status(401, "Come Again"), challenge)
+        self.transaction_manager.send_message(response, msg)
 
 
     def make_dialog(self):
@@ -148,6 +142,25 @@ class Switch(Loggable):
         
         
     def auth_request(self, params):
+        authname, sure = self.record_manager.authenticate_request(params)
+            
+        if not authname:
+            if sure:
+                self.reject_request(params, Status(403, "Hop not allowed"))
+                return True
+            else:
+                self.reject_request(params, Status(403, "Sender not allowed"))
+                return True
+
+        if sure:
+            return False
+            
+        account = self.account_manager.get_account(authname)
+        if not account:
+            self.logger.error("Account %s referred, but not found!" % authname)
+            self.reject_request(params, Status(500))
+            return True
+            
         method = params["method"]
         
         if method in ("CANCEL", "ACK", "NAK"):
@@ -157,20 +170,9 @@ class Switch(Loggable):
             # FIXME: this is only for debugging
             self.logger.debug("Accepting request because we're lazy to authenticate a PRACK")
             return False
-
-        creds = self.account_manager.auth_request(params)
             
-        if not creds:
-            self.reject_request(params, Status(403, "Forbidden"))
-            return True
-            
-        authname, ha1 = creds
-        
-        if not ha1:
-            return False
+        challenge = account.challenge_request(params)
 
-        challenge = self.authority.require_auth(params, creds)
-        
         if challenge:
             self.logger.debug("Challenging request without proper authentication")
             self.challenge_request(params, challenge)

@@ -1,149 +1,219 @@
 from weakref import proxy
-
+import uuid
+import hashlib
+from format import Auth, WwwAuth
 from util import Loggable
 
+# Note: ha1 = md5("authname:realm:password")
 
-class Account(object):
-    AUTH_NEVER = "AUTH_NEVER"
-    AUTH_ALWAYS = "AUTH_ALWAYS"
-    AUTH_IF_UNREGISTERED = "AUTH_IF_UNREGISTERED"
-    AUTH_BY_HOP = "AUTH_BY_HOP"
+
+def generate_nonce():
+    return uuid.uuid4().hex[:8]
+
+
+def md5(x):
+    return hashlib.md5(x.encode()).hexdigest()
     
-    def __init__(self, manager, authname, policy, ha1):
+
+def digest(method, uri, ha1, nonce, qop=None, cnonce=None, nc=None):
+    if not qop:
+        ha2 = md5("%s:%s" % (method, uri))
+        response = md5("%s:%s:%s" % (ha1, nonce, ha2))
+        return response
+    elif qop == "auth":
+        ha2 = md5("%s:%s" % (method, uri))
+        response = md5("%s:%s:%08x:%s:%s:%s" % (ha1, nonce, nc, cnonce, qop, ha2))
+        return response
+    else:
+        raise Exception("Don't know QOP %s!" % qop)
+        
+
+
+class Authority(Loggable):
+    def __init__(self):
+        Loggable.__init__(self)
+
+        self.nonces = set()
+
+
+    def get_realm(self, params):
+        return params["to"].uri.addr.host
+            
+
+    def check_digest_ha1(self, params, ha1):
+        method = params["method"]
+        uri = params["uri"].print()
+        auth = params.get("authorization")
+        
+        if not auth:
+            self.logger.debug("No Authorization header!")
+            return False
+
+        if not ha1:
+            self.logger.debug("No ha1!")
+            return False
+
+        if auth.realm != self.get_realm(params):
+            self.logger.debug("Wrong realm!")
+            return False
+        
+        if auth.nonce not in self.nonces:
+            self.logger.debug("Wrong nonce!")
+            auth.stale = True
+            return False
+        
+        if auth.uri != uri:  # TODO: this can be more complex than this
+            self.logger.debug("Wrong uri")
+            return False
+
+        if auth.qop != "auth":
+            self.logger.debug("QOP is not auth!")
+            return False
+        
+        if auth.algorithm not in (None, "MD5"):
+            self.logger.debug("Digest algorithm not MD5!")
+            return False
+        
+        if not auth.cnonce:
+            self.logger.debug("Cnonce not set!")
+            return False
+
+        if not auth.nc:
+            self.logger.debug("Nc not set!")
+            return False
+
+        response = digest(method, uri, ha1, auth.nonce, auth.qop, auth.cnonce, auth.nc)
+        
+        if auth.response != response:
+            self.logger.debug("Wrong response!")
+            return False
+            
+        self.nonces.remove(auth.nonce)
+        return True
+
+
+    def get_digest_authname(self, params):
+        auth = params.get("authorization")
+        
+        return auth.username if auth else None
+        
+
+    def check_auth(self, params, creds):
+        cred_authname, cred_ha1 = creds
+    
+        authname = self.get_digest_authname(params)
+        if not authname:
+            self.logger.debug("No credentials in request")
+            return False
+            
+        if authname != cred_authname:
+            self.logger.debug("Wrong authname in request '%s'" % (authname,))
+            return False
+        
+        if not self.check_digest_ha1(params, cred_ha1):
+            self.logger.debug("Incorrect digest in request")
+            return False
+
+        self.logger.debug("Request authorized for '%s'" % (authname,))
+        return True
+
+
+    def require_auth(self, params, creds):
+        # At this point we already decided the this request must be authorized
+        if params["method"] in ("CANCEL", "ACK", "NAK"):
+            raise Exception("Method %s can't be authenticated!" % params["method"])
+
+        ok = self.check_auth(params, creds)
+        if ok:
+            return None
+            
+        auth = params.get("authorization")
+        realm = self.get_realm(params)
+        stale = auth.stale if auth else False
+        nonce = generate_nonce()
+        self.nonces.add(nonce)  # TODO: must clean these up
+        www = WwwAuth(realm, nonce, stale=stale, qop=[ "auth" ])
+        
+        return { 'www_authenticate': www }
+
+
+    def provide_auth(self, response, request, creds):
+        www_auth = response.get("www_authenticate")
+        if not www_auth:
+            self.logger.debug("No known challenge found, sorry!")
+            return None
+            
+        if "authorization" in request and not www_auth.stale:
+            self.logger.debug("Already tried and not even stale, sorry!")
+            return None
+
+        if "auth" not in www_auth.qop:
+            self.logger.debug("Digest QOP auth not available!")
+            return None
+        
+        if www_auth.algorithm not in (None, "MD5"):
+            self.logger.debug("Digest algorithm not MD5!")
+            return None
+
+        authname, ha1 = creds
+        
+        method = request["method"]
+        uri = request["uri"].print()
+        realm = www_auth.realm
+        nonce = www_auth.nonce
+        opaque = www_auth.opaque
+        qop = "auth"
+        cnonce = generate_nonce()
+        nc = 1  # we don't reuse server nonce-s
+
+        response = digest(method, uri, ha1, nonce, qop, cnonce, nc)
+        auth = Auth(realm, nonce, authname, uri, response, opaque=opaque, qop=qop, cnonce=cnonce, nc=nc)
+        return { 'authorization':  auth }
+
+
+class Account:
+    def __init__(self, manager, authname, ha1):
         self.manager = manager
         self.authname = authname
-        self.policy = policy
         self.ha1 = ha1
         
-        self.records_by_aor = {}
-        self.hops = set() if policy == self.AUTH_BY_HOP else None
         
-        
-    def add_record(self, record):
-        aor = record.record_uri
-        
-        self.records_by_aor[aor] = record
-        self.manager.map_aor(aor, self.authname)
-        
-        
-    def add_hop(self, hop):
-        self.hops.add(hop)
-        
-        
-    def get_policy(self):
-        return self.policy
-        
-        
-    def get_ha1(self):
-        return self.ha1
-        
+    def challenge_request(self, params):
+        if not self.ha1:
+            raise Exception("Can't challenge without ha1!")
+            
+        creds = self.authname, self.ha1
+        return self.manager.authority.require_auth(params, creds)
         
 
 class AccountManager(Loggable):
     def __init__(self):
         Loggable.__init__(self)
-        
-        self.authnames_by_aor = {}
+
+        self.authority = Authority()
         self.accounts_by_authname = {}
         self.our_credentials = None  # TODO: improve!
+
+
+    def set_oid(self, oid):
+        Loggable.set_oid(self, oid)
+        
+        self.authority.set_oid(oid.add("authority"))
         
         
-    def add_account(self, authname, policy, ha1=None):
+    def add_account(self, authname, ha1):
         if authname in self.accounts_by_authname:
             raise Exception("Account already exists: %s!" % (authname,))
             
-        if policy in (Account.AUTH_ALWAYS, Account.AUTH_IF_UNREGISTERED) and not ha1:
-            raise Exception("Policy %s needs a password!" % policy)
-            
-        self.logger.info("Adding account %s with policy %s." % (authname, policy))
-        account = Account(proxy(self), authname, policy, ha1)
+        self.logger.info("Adding account %s." % (authname,))
+        account = Account(proxy(self), authname, ha1)
         self.accounts_by_authname[authname] = account
         
         return proxy(account)
 
 
-    def map_aor(self, aor, authname):
-        if aor in self.authnames_by_aor:
-            raise Exception("AoR %s already mapped to %s!" % (aor, self.authnames_by_aor[aor]))
-            
-        self.logger.info("Mapping %s to authname %s." % (aor, authname))
-        self.authnames_by_aor[aor] = authname
-        
-        
-    def unmap_aor(self, aor):
-        self.authnames_by_aor.pop(aor, None)
-        
-        
-    def get_account_by_authname(self, authname):
+    def get_account(self, authname):
         return self.accounts_by_authname.get(authname)
-        
-        
-    def get_account_by_aor(self, aor):
-        authname = self.authnames_by_aor.get(aor) or self.authnames_by_aor.get(aor._replace(username=None))
-        
-        return self.accounts_by_authname.get(authname)
-        
-        
-    def auth_request(self, params):
-        # Returns:
-        #  (authname, None) to accept
-        #  (authname, ha1) to challenge
-        #  None to reject
-
-        aor = params["from"].uri.canonical_aor()
-        hop = params["hop"]
-
-        authname = self.authnames_by_aor.get(aor) or self.authnames_by_aor.get(aor._replace(username=None))
-        
-        if not authname:
-            self.logger.warning("Rejecting request because record is unknown")
-            return None
-            
-        account = self.accounts_by_authname.get(authname)
-        
-        if not account:
-            self.logger.error("Rejecting request because account is unknown!")
-            return None
-        elif account.policy == Account.AUTH_NEVER:
-            self.logger.debug("Accepting request because authentication is never needed")
-            return authname, None
-        elif account.policy == Account.AUTH_ALWAYS:
-            self.logger.debug("Authenticating request because account always needs it")
-        elif account.policy == Account.AUTH_IF_UNREGISTERED:
-            record = account.records_by_aor.get(aor)
-            contacts = record.get_contacts()
-            allowed_hops = [ contact.hop for contact in contacts ]
-
-            self.logger.debug("Hop: %s, hops: %s" % (hop, allowed_hops))
-            is_allowed = any(allowed_hop.contains(hop) for allowed_hop in allowed_hops)
-            
-            if not is_allowed:
-                self.logger.debug("Authenticating request because account is not registered")
-            else:
-                self.logger.debug("Accepting request because account is registered")
-                return authname, None
-        elif account.policy == Account.AUTH_BY_HOP:
-            allowed_hops = account.hops
-
-            self.logger.debug("Hop: %s, hops: %s" % (hop, allowed_hops))
-            is_allowed = any(allowed_hop.contains(hop) for allowed_hop in allowed_hops)
-            
-            if not is_allowed:
-                self.logger.debug("Rejecting request because hop address is not allowed")
-                return None
-            else:
-                self.logger.debug("Accepting request because hop address is allowed")
-                return authname, None
-        else:
-            raise Exception("WTF?")
-
-        ha1 = account.get_ha1()
-        
-        if not ha1:
-            # Should have been AUTH_NEVER
-            self.logger.error("No password set for account %s!" % authname)
-        
-        return authname, ha1
         
 
     def set_our_credentials(self, authname, ha1):
@@ -151,5 +221,5 @@ class AccountManager(Loggable):
         self.our_credentials = (authname, ha1)
         
         
-    def get_our_credentials(self):
-        return self.our_credentials
+    def provide_auth(self, response, request):
+        return self.authority.provide_auth(response, request, self.our_credentials)

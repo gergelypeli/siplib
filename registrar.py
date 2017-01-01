@@ -33,10 +33,19 @@ def generate_tag():
 RecordContact = collections.namedtuple("RecordContact", [ "uri", "hop", "expiration" ])
 
 
-class Record(object):
-    def __init__(self, record_manager, record_uri):
+class Record(Loggable):
+    AUTH_NEVER = "AUTH_NEVER"
+    AUTH_ALWAYS = "AUTH_ALWAYS"
+    AUTH_IF_UNREGISTERED = "AUTH_IF_UNREGISTERED"
+    AUTH_BY_HOP = "AUTH_BY_HOP"
+
+    def __init__(self, record_manager, record_uri, authname, auth_policy):
+        Loggable.__init__(self)
+    
         self.record_manager = record_manager
         self.record_uri = record_uri
+        self.authname = authname
+        self.auth_policy = auth_policy
 
         self.call_id = None  # FIXME: separate registrations!
         self.cseq = None
@@ -47,11 +56,46 @@ class Record(object):
     def add_contact(self, uri, hop, expiration):
         self.contacts = [ contact for contact in self.contacts if contact.uri != uri ]
         self.contacts.append(RecordContact(uri, hop, expiration))
-        self.record_manager.logger.info("Registered %s from %s via %s until %s." % (self.record_uri, uri, hop, expiration))
+        self.logger.info("Registered %s from %s via %s until %s." % (self.record_uri, uri, hop, expiration))
         
 
     def get_contacts(self):
         return self.contacts
+
+
+    def authenticate_request(self, hop):
+        if self.auth_policy == Record.AUTH_NEVER:
+            self.logger.debug("Accepting request because authentication is never needed")
+            return self.authname, True
+        elif self.auth_policy == Record.AUTH_ALWAYS:
+            self.logger.debug("Authenticating request because account always needs it")
+            return self.authname, False
+        elif self.auth_policy == Record.AUTH_IF_UNREGISTERED:
+            allowed_hops = [ contact.hop for contact in self.contacts ]
+
+            self.logger.debug("Hop: %s, hops: %s" % (hop, allowed_hops))
+            is_allowed = any(allowed_hop.contains(hop) for allowed_hop in allowed_hops)
+            
+            if not is_allowed:
+                self.logger.debug("Authenticating request because account is not registered")
+                return self.authname, False
+            else:
+                self.logger.debug("Accepting request because account is registered")
+                return self.authname, True
+        elif self.auth_policy == Record.AUTH_BY_HOP:
+            allowed_hops = [ contact.hop for contact in self.contacts ]
+
+            self.logger.debug("Hop: %s, hops: %s" % (hop, allowed_hops))
+            is_allowed = any(allowed_hop.contains(hop) for allowed_hop in allowed_hops)
+            
+            if not is_allowed:
+                self.logger.debug("Rejecting request because hop address is not allowed")
+                return None, True
+            else:
+                self.logger.debug("Accepting request because hop address is allowed")
+                return self.authname, True
+        else:
+            raise Exception("WTF?")
 
 
     def process_updates(self, params):
@@ -134,7 +178,7 @@ class RecordManager(Loggable):
         self.transmit(response, request)
 
 
-    def add_record(self, record_uri):
+    def add_record(self, record_uri, authname, auth_policy):
         record_uri = record_uri.canonical_aor()
         
         if record_uri in self.records_by_uri:
@@ -142,7 +186,8 @@ class RecordManager(Loggable):
             return None
         else:
             self.logger.debug("Creating record: %s" % (record_uri,))
-            record = Record(proxy(self), record_uri)
+            record = Record(proxy(self), record_uri, authname, auth_policy)
+            record.set_oid(self.oid.add("record", str(record_uri)))
             self.records_by_uri[record_uri] = record
             
         return proxy(record)
@@ -196,6 +241,25 @@ class RecordManager(Loggable):
             self.logger.debug("Not found contacts for: %s" % (record_uri,))
             return []
 
+
+    def authenticate_request(self, params):
+        # Returns:
+        #   authname, True -  accept
+        #   authname, False - challenge
+        #   None, True -      reject
+        #   None, False -     ignore
+        
+        record_uri = params["from"].uri.canonical_aor()
+        hop = params["hop"]
+        
+        record = self.records_by_uri.get(record_uri) or self.records_by_uri.get(record_uri._replace(username=None))
+        
+        if not record:
+            self.logger.warning("Rejecting request because account is unknown!")
+            return None, False
+        
+        return record.authenticate_request(hop)
+        
 
 class Registration(object):
     EXPIRES = 300

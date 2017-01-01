@@ -829,7 +829,7 @@ def parse_structured_message(message):
 
 
 def make_simple_response(request, status, others=None):
-    tag = "ROTFLMAO" if status.code > 100 else None
+    tag = "goodbye" if status.code > 100 else None
     
     params = {
         "is_response": True,

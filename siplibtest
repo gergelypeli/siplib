@@ -9,10 +9,8 @@ from weakref import proxy
 from format import Addr, Uri, Nameaddr, Status, Hop
 from party import PlannedEndpoint, PlannedRouting, Bridge, Routing
 from sdp import Sdp
-from authority import Authority
-from registrar import RecordManager
+from registrar import RecordManager, Record
 from subscript import SubscriptionManager, MessageSummaryEventSource, DialogEventSource
-from account import Account
 from util import setup_logging, my_exchandler, Oid
 from mgw import MediaGateway
 from mgc import Controller  #, PlayerMediaLeg  #, EchoMediaLeg
@@ -269,10 +267,6 @@ class TestRecordManager(RecordManager):
     pass
         
 
-class TestAuthority(Authority):
-    pass
-
-
 class VoicemailEventSource(MessageSummaryEventSource):
     def identify(self, params):
         self.mailbox = params["mailbox"]
@@ -465,13 +459,12 @@ class TestSwitch(Switch):
         mgw_addr.assert_resolved()
         
         record_manager = TestRecordManager(proxy(self))
-        authority = TestAuthority()
         subman = TestSubscriptionManager(proxy(self))
         mgc = TestController(media_ports)
 
         Switch.__init__(
             self,
-            record_manager=record_manager, authority=authority, registration_manager=None,
+            record_manager=record_manager, registration_manager=None,
             subscription_manager=subman,
             dialog_manager=None, mgc=mgc, account_manager=None
         )
@@ -511,6 +504,15 @@ class TestSwitch(Switch):
         os.system("wget -q --output-document=/dev/null --post-data='%s' '%s'" % (post_data, url))
 
 
+    def add_record_account(self, uri, authname, ha1, policy, hops=[]):
+        if not self.account_manager.get_account(authname):
+            self.account_manager.add_account(authname, ha1)
+            
+        record = self.record_manager.add_record(uri, authname, policy)
+        
+        for hop in hops:
+            record.add_contact(uri, hop, None)  # assume same contact uri as the aor
+
 
 def mkctx(src):
     if src["type"] != "sip":
@@ -547,26 +549,20 @@ class SwitchA(TestSwitch):
         TestSwitch.start(self)
         
         # CALLEE lives on switch-b, but registers here to take calls from here
-        callee_account = self.account_manager.add_account(B_AUTHNAME, Account.AUTH_IF_UNREGISTERED, B_HA1)
         callee_uri = Uri(Addr(A_DOMAIN, None), CALLEE_NUMBER)
-        callee_record = self.record_manager.add_record(callee_uri)
-        callee_account.add_record(callee_record)
+        self.add_record_account(callee_uri, B_AUTHNAME, B_HA1, Record.AUTH_IF_UNREGISTERED)
         #self.account_manager.add_account(callee_uri, "Callee", Account.AUTH_IF_UNREGISTERED, B_CRED[0], B_CRED[1])
         
         # SNOM lives on its own device, but also registers here
-        snom_account = self.account_manager.add_account(SNOM_AUTHNAME, Account.AUTH_IF_UNREGISTERED, SNOM_HA1)
         snom_uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
-        snom_record = self.record_manager.add_record(snom_uri)
-        snom_account.add_record(snom_record)
+        self.add_record_account(snom_uri, SNOM_AUTHNAME, SNOM_HA1, Record.AUTH_IF_UNREGISTERED)
         #self.account_manager.add_account(snom_uri, "Snom", Account.AUTH_IF_UNREGISTERED, SNOM_CRED[0], SNOM_CRED[1])
         
         # Allow calls from anyone on switch-b as long as they use this hop
-        #b_uri = Uri(Addr(B_DOMAIN, None), None)
+        b_uri = Uri(Addr(B_DOMAIN, None), None)
         hop1 = Hop('UDP', 'eth0', A_ADDR.resolved(), B_ADDR.resolved())
         hop2 = Hop('TCP', 'eth0', A_ADDR.resolved(), B_ADDR._replace(port=None).resolved())
-        b_account = self.account_manager.add_account("b", Account.AUTH_BY_HOP)
-        b_account.add_hop(hop1)
-        b_account.add_hop(hop2)
+        self.add_record_account(b_uri, B_AUTHNAME, B_HA1, Record.AUTH_BY_HOP, [ hop1, hop2 ])
         #b_uri, "B", Account.AUTH_BY_HOP, None, None, hops=[ hop1, hop2 ])
         
         # Allow us to register at other places
@@ -651,9 +647,7 @@ class SwitchB(TestSwitch):
         TestSwitch.start(self)
         
         phone_uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
-        phone_account = self.account_manager.add_account(A_AUTHNAME, Account.AUTH_IF_UNREGISTERED, A_HA1)
-        phone_record = self.record_manager.add_record(phone_uri)
-        phone_account.add_record(phone_record)
+        self.add_record_account(phone_uri, A_AUTHNAME, A_HA1, Record.AUTH_IF_UNREGISTERED)
         
         #self.account_manager.add_account(phone_uri, "Phone", Account.AUTH_IF_UNREGISTERED, A_CRED[0], A_CRED[1])
         
