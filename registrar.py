@@ -1,7 +1,7 @@
 import uuid
 import datetime
 import collections
-from weakref import proxy
+from weakref import proxy, WeakValueDictionary
 
 from format import Nameaddr, Status, Uri
 from transactions import make_simple_response
@@ -30,7 +30,14 @@ def generate_tag():
     return uuid.uuid4().hex[:8]
 
 
-RecordContact = collections.namedtuple("RecordContact", [ "cseq", "uri", "hop", "expiration" ])
+class NondialogInfo:
+    def __init__(self, cseq):
+        self.cseq = cseq
+        
+
+UriHop = collections.namedtuple("UriHop", [ "uri", "hop" ])
+#NondialogInfo = collections.namedtuple("NondialogInfo", [ "cseq" ])
+ContactInfo = collections.namedtuple("ContactInfo", [ "expiration", "nondialog_info" ])
 
 
 class Record(Loggable):
@@ -49,35 +56,36 @@ class Record(Loggable):
         self.authname = authname
         self.auth_policy = auth_policy
 
-        #self.call_id = None  # FIXME: separate registrations!
-        #self.cseq = None
+        self.contact_infos_by_uri_hop = {}
+        self.nondialog_infos_by_call_id = WeakValueDictionary()
         
         # It's kinda hard to decide when an incoming REGISTER corresponds to a
         # previously received one, but let's assume clients are decent enough
         # to generate unique callid-s. Also, we only allow one Contact per request.
-        self.contacts_by_call_id = {}
+        #self.contacts_by_call_id = {}
 
 
-    def add_contact(self, callid, cseq, uri, hop, expiration):
-        self.contacts_by_call_id[callid] = RecordContact(cseq, uri, hop, expiration)
+    def add_contact(self, uri, hop, expiration, nondialog_info):
+        urihop = UriHop(uri, hop)
+        self.contact_infos_by_uri_hop[urihop] = ContactInfo(expiration, nondialog_info)
         self.logger.info("Registered %s from %s via %s until %s." % (self.record_uri, uri, hop, expiration))
         
         
     def add_static_contact(self, uri, hop):
-        callid = generate_call_id()
-        cseq = None
         expiration = None
+        nondialog_info = None
+        urihop = UriHop(uri, hop)
         
-        self.contacts_by_call_id[callid] = RecordContact(cseq, uri, hop, expiration)
+        self.contact_infos_by_uri_hop[urihop] = ContactInfo(expiration, nondialog_info)
         self.logger.info("Registered %s from %s via %s permanently." % (self.record_uri, uri, hop))
         
 
     def get_contacts(self):
-        return list(self.contacts_by_call_id.values())
+        return list(self.contact_infos_by_uri_hop.keys())
 
 
     def is_contact_hop(self, hop):
-        return any(contact.hop.contains(hop) for contact in self.contacts_by_call_id.values())
+        return any(urihop.hop.contains(hop) for urihop in self.contact_infos_by_uri_hop.keys())
         
 
     def authenticate_request(self, hop):
@@ -111,30 +119,27 @@ class Record(Loggable):
     def process_updates(self, params):
         # TODO: check authname!
         now = datetime.datetime.now()
+        hop = params["hop"]
         call_id = params["call_id"]
         cseq = params["cseq"]
         contact_nameaddrs = params["contact"]
         
-        if len(contact_nameaddrs) > 1:
-            self.logger.warning("Not supporting more than one Contact per request!")
-            self.send_response(dict(status=Status(501, "Too Many Contacts")), params)
-            return
-
+        nondialog_info = NondialogInfo(cseq)
+        self.nondialog_infos_by_call_id[call_id] = nondialog_info
+        
         # No contact is valid for just fetching the registrations
         for contact_nameaddr in contact_nameaddrs:
-            expires = contact_nameaddr.params.get("expires", params.get("expires"))
-            
             uri = contact_nameaddr.uri
+            expires = contact_nameaddr.params.get("expires", params.get("expires"))
             seconds_left = int(expires) if expires is not None else self.DEFAULT_EXPIRES
             expiration = now + datetime.timedelta(seconds=seconds_left)
-            hop = params["hop"]
             
-            self.add_contact(call_id, cseq, uri, hop, expiration)
+            self.add_contact(uri, hop, expiration, nondialog_info)
         
         fetched = []
-        for contact in self.contacts_by_call_id.values():
-            seconds_left = int((contact.expiration - now).total_seconds())
-            fetched.append(Nameaddr(uri=contact.uri, params=dict(expires=str(seconds_left))))
+        for urihop, contact_info in self.contact_infos_by_uri_hop.items():
+            seconds_left = int((contact_info.expiration - now).total_seconds())
+            fetched.append(Nameaddr(uri=urihop.uri, params=dict(expires=str(seconds_left))))
 
         self.send_response(dict(status=Status(200, "OK"), contact=fetched), params)
 
@@ -146,9 +151,9 @@ class Record(Loggable):
         call_id = params["call_id"]
         cseq = params["cseq"]
 
-        contact = self.contacts_by_call_id.get(call_id)
+        nondialog_info = self.nondialog_infos_by_call_id.get(call_id)
 
-        if contact and cseq <= contact.cseq:
+        if nondialog_info and cseq <= nondialog_info.cseq:
             # The RFC suggests 500, but that's a bit weird
             self.send_response(dict(status=Status(500, "Lower CSeq Is Not Our Fault")), params)
             return None
