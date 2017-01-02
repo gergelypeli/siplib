@@ -35,7 +35,7 @@ REASON_ESCAPED = URIC_ESCAPED + LWS
 TOKEN = ALPHANUM + "-.!%*_+`'~"
 HOST_NONTOKEN = "[]:"
 WORD = ALPHANUM + "-.!%*_+`'~()<>:\/[]?{}" + '"'  # notably no semicolon, used for call-id
-CALLID = WORD + "@"  # although at most one @ is allowed, fuck that
+CALL_ID = WORD + "@"  # although at most one @ is allowed, fuck that
 
 URI_HEADER_UNRESERVED = "[]/?:+$"  # hnv
 URI_HEADER_ESCAPED = URI_HEADER_UNRESERVED + UNRESERVED + ESCAPED
@@ -537,7 +537,7 @@ class Uri(namedtuple("Uri", "addr username scheme params headers")):
             text += "".join(";" + escape(k) + "=" + escape(v) for k, v in self.params.items())
                 
         if self.headers:
-            text += "?" + "&".join(escape(k) + "=" + escape(v) for k, v in self.headers.items())
+            text += "?" + "&".join(escape(k.replace("_", "-").title()) + "=" + escape(v) for k, v in self.headers.items())
             
         return text
 
@@ -598,7 +598,7 @@ class Uri(namedtuple("Uri", "addr username scheme params headers")):
                     parser.grab_separator("=")
                     value = unescape(parser.grab_token(URI_HEADER_ESCAPED))
                     
-                    headers[key] = value
+                    headers[key.replace("-", "_").lower()] = value
                     
                     if not parser.can_grab_separator("&"):
                         break
@@ -685,18 +685,17 @@ class Nameaddr(namedtuple("Nameaddr", "uri name params")):
             return Nameaddr(self.uri, self.name, dict(self.params, tag=tag))
 
 
-# RFC 4538, option tag: tdialog
-class TargetDialog(namedtuple("TargetDialog", [ "callid", "params" ])):
+class TargetDialog(namedtuple("TargetDialog", [ "call_id", "params" ])):
     def print(self):
-        return self.callid + print_generic_params(self.params)
+        return self.call_id + print_generic_params(self.params)
         
 
     @classmethod
     def parse(cls, parser):
-        callid = parser.grab_token(CALLID)
+        call_id = parser.grab_token(CALL_ID)
         params = parse_generic_params(parser)
         
-        return cls(callid, params)
+        return cls(call_id, params)
 
 
 class SipMessage(HttpLikeMessage):
@@ -736,7 +735,7 @@ def print_structured_message(params):
             y = ", ".join(sorted(x))  # TODO: sorted here?
         elif field in ("refer_to", "referred_by"):
             y = x.print()
-        elif field in ("target_dialog",):
+        elif field in ("target_dialog", "replaces"):
             y = x.print()
         elif field not in META_HEADER_FIELDS:
             y = x
@@ -833,7 +832,7 @@ def parse_structured_message(message):
             y = set( i.strip() for i in x.split(",") )  # TODO
         elif field in ("refer_to", "referred_by"):
             y = Uri.parse(Parser(x))
-        elif field in ("target_dialog",):
+        elif field in ("target_dialog", "replaces"):
             y = TargetDialog.parse(Parser(x))
         elif field not in META_HEADER_FIELDS:
             y = x

@@ -20,6 +20,8 @@ class Ground(Loggable):
         self.context_count = 0
         self.parties_by_oid = {}
         self.leg_oids_by_anchor = {}
+        self.transfers_by_id = {}
+        self.transfer_count = 0
         
         
     def generate_context_oid(self):
@@ -100,6 +102,8 @@ class Ground(Loggable):
             
         self.targets_by_source.pop(leg_oid0)
         self.targets_by_source.pop(leg_oid1)
+        
+        return leg_oid1
 
 
     def collapse_legs(self, leg_oid0, leg_oid1, queue0=None, queue1=None):
@@ -344,6 +348,32 @@ class Ground(Loggable):
             
         if not self.parties_by_oid:
             self.logger.info("No more parties left.")
+        
+        
+    def make_transfer(self):
+        self.transfer_count += 1
+        tid = self.transfer_count
+        
+        self.transfers_by_id[tid] = None
+        
+        return tid
+        
+        
+    def transfer_leg(self, leg_oid0, tid):
+        if not self.transfers_by_id[tid]:
+            self.transfers_by_id[tid] = leg_oid0
+            return
+            
+        leg_oid1 = self.transfers_by_id.pop(tid)
+        self.logger.info("Transferring legs %s and %s." % (leg_oid0, leg_oid1))
+        
+        leg_oid0x = self.unlink_legs(leg_oid0)
+        self.legs_by_oid[leg_oid0x].do(dict(type="hangup"))
+        
+        leg_oid1x = self.unlink_legs(leg_oid1)
+        self.legs_by_oid[leg_oid1x].do(dict(type="hangup"))
+        
+        self.link_legs(leg_oid0, leg_oid1)
         
 
     def select_hop_slot(self, next_uri):

@@ -1,7 +1,10 @@
-from format import Status
+from weakref import WeakValueDictionary, proxy
+
+from format import Status, TargetDialog, Parser
 from party import Endpoint
 from party_sip_helpers import InviteHelper, UpdateHelper, SessionHelper
 from sdp import Session
+from util import Loggable
 
 import zap
 
@@ -20,12 +23,13 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
     USE_RPR = True
 
 
-    def __init__(self, dialog):
+    def __init__(self, manager, dialog):
         Endpoint.__init__(self)
         InviteHelper.__init__(self, use_rpr=True)
         UpdateHelper.__init__(self)
         SessionHelper.__init__(self)
 
+        self.manager = manager
         self.state = self.DOWN
         self.pending_actions = []
 
@@ -55,7 +59,7 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
         
     def add_abilities(self, msg):
         msg.setdefault("allow", set()).update(self.DEFAULT_ALLOWED_METHODS)
-        msg.setdefault("supported", set()).add("tdialog")
+        #msg.setdefault("supported", set()).add("tdialog")
         return msg
         
 
@@ -453,6 +457,55 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
                         self.forward(dict(type="session", session=session))
                     
                     return
+            elif method == "REFER":
+                if is_response:
+                    self.logger.warning("Ignoring REFER response!")
+                    return
+                    
+                refer_to = msg.get("refer_to")
+                if not refer_to:
+                    self.logger.warning("No Refer-To header!")
+                    self.send_response(dict(status=Status(400)), msg)
+                    return
+                    
+                replaces = refer_to.headers.get("replaces")
+                if not replaces:
+                    self.logger.warning("No Replaces header in Refer-To URI!")
+                    self.send_response(dict(status=Status(400)), msg)
+                    return
+                
+                td = TargetDialog.parse(Parser(replaces))
+                local_tag = td.params["to-tag"]
+                remote_tag = td.params["from-tag"]
+                call_id = td.call_id
+                
+                other = self.manager.get_endpoint(local_tag, remote_tag, call_id)
+                
+                if not other:
+                    self.logger.warning("No target dialog found, l=%s, r=%s, c=%s" % (local_tag, remote_tag, call_id))
+                    self.send_response(dict(status=Status(404)), msg)
+                    return
+                    
+                self.send_response(dict(status=Status(200)), msg)
+                
+                notify = dict(
+                    method="NOTIFY",
+                    event="refer",
+                    subscription_state="terminated;reason=noresource",
+                    content_type="message/sipfrag",
+                    body="SIP/2.0 200 OK".encode("utf8")
+                )
+                
+                self.send_request(notify)
+
+                tid = self.ground.make_transfer()
+                other.initiate_transfer(tid)
+                self.initiate_transfer(tid)
+                return
+            elif method == "NOTIFY":
+                if is_response:
+                    # Ahhh, this is the response for a REFER-initiated NOTIFY
+                    return
             elif method == "BYE":
                 if not is_response:
                     self.send_response(dict(status=Status(200, "OK")), msg)
@@ -461,22 +514,60 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
                     self.may_finish()
                     return
         elif self.state == self.DISCONNECTING_OUT:
-            if is_response and method == "BYE":
-                self.change_state(self.DOWN)
-                self.may_finish()
-                return
+            if method == "BYE":
+                if is_response:
+                    self.change_state(self.DOWN)
+                    self.may_finish()
+                    return
+                else:
+                    self.logger.debug("Mutual BYE, finishing immediately.")
+                    self.send_response(dict(status=Status(200)), msg)
+                    self.change_state(self.DOWN)
+                    self.may_finish()
+                    return
                 
-            elif is_response and method == "INVITE":
-                self.logger.debug("Got cancelled invite response: %s" % (status,))
-                # This was ACKed by the transaction layer
-                self.change_state(self.DOWN)
-                self.may_finish()
-                return
+            elif method == "INVITE":
+                if is_response:
+                    self.logger.debug("Got late INVITE response: %s" % (status,))
+                    # This was ACKed by the transaction layer
+                    self.change_state(self.DOWN)
+                    self.may_finish()
+                    return
                 
-            elif is_response and method == "CANCEL":
-                self.logger.debug("Got cancel response: %s" % (status,))
-                return
+            elif method == "CANCEL":
+                if is_response:
+                    self.logger.debug("Got late CANCEL response: %s" % (status,))
+                    return
+
+            elif method == "NOTIFY":
+                if is_response:
+                    self.logger.debug("Got late NOTIFY response: %s" % (status,))
+                    return
                 
         if msg or sdp:
             raise Exception("Weird message %s %s in state %s!" % (method, "response" if is_response else "request", self.state))
 
+
+class SipManager(Loggable):
+    def __init__(self):
+        Loggable.__init__(self)
+        
+        self.endpoints_by_local_tag = WeakValueDictionary()
+        
+        
+    def make_endpoint(self, dialog):
+        endpoint = SipEndpoint(proxy(self), dialog)
+        self.endpoints_by_local_tag[dialog.get_local_tag()] = endpoint
+        
+        return endpoint
+
+        
+    def get_endpoint(self, local_tag, remote_tag, call_id):
+        endpoint = self.endpoints_by_local_tag.get(local_tag)
+        if endpoint:
+            dialog = endpoint.get_dialog()
+            
+            if dialog.get_remote_tag() == remote_tag and dialog.get_call_id() == call_id:
+                return endpoint
+            
+        return None

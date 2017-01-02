@@ -5,7 +5,7 @@ from transport import TransportManager
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
 from party import Bridge, RecordingBridge, Routing
-from party_sip import SipEndpoint
+from party_sip import SipManager
 from ground import Ground
 from registrar import RegistrationManager, RecordManager
 from subscript import SubscriptionManager
@@ -18,7 +18,7 @@ class Switch(Loggable):
     def __init__(self,
         transport_manager=None, transaction_manager=None,
         record_manager=None, registration_manager=None, subscription_manager=None,
-        dialog_manager=None, mgc=None, account_manager=None
+        dialog_manager=None, sip_manager=None, mgc=None, account_manager=None
     ):
         Loggable.__init__(self)
 
@@ -40,6 +40,8 @@ class Switch(Loggable):
         )
         self.dialog_manager = dialog_manager or DialogManager(
             proxy(self)
+        )
+        self.sip_manager = sip_manager or SipManager(
         )
         self.mgc = mgc or Controller(
         )
@@ -64,6 +66,7 @@ class Switch(Loggable):
         self.transport_manager.set_oid(oid.add("tportman"))
         self.transaction_manager.set_oid(oid.add("tactman"))
         self.dialog_manager.set_oid(oid.add("diaman"))
+        self.sip_manager.set_oid(oid.add("sipman"))
         self.mgc.set_oid(oid.add("mgc"))
         self.ground.set_oid(oid.add("ground"))
 
@@ -85,8 +88,8 @@ class Switch(Loggable):
         return self.transaction_manager.send_message(msg, related_msg)
         
     
-    def reject_request(self, request, status):
-        response = make_simple_response(request, status)
+    def reject_request(self, request, code, reason=None):
+        response = make_simple_response(request, Status(code, reason))
         self.transaction_manager.send_message(response, request)
 
 
@@ -103,7 +106,7 @@ class Switch(Loggable):
         if type == "routing":
             return Routing()  # this does nothing useful, though
         elif type == "sip":
-            return SipEndpoint(self.make_dialog())
+            return self.sip_manager.make_endpoint(self.make_dialog())
         elif type == "bridge":
             return Bridge()
         elif type == "record":
@@ -146,10 +149,10 @@ class Switch(Loggable):
             
         if not authname:
             if sure:
-                self.reject_request(params, Status(403, "Hop not allowed"))
+                self.reject_request(params, 403, "Hop not allowed")
                 return True
             else:
-                self.reject_request(params, Status(403, "Sender not allowed"))
+                self.reject_request(params, 403, "Sender not allowed")
                 return True
 
         if sure:
@@ -158,7 +161,7 @@ class Switch(Loggable):
         account = self.account_manager.get_account(authname)
         if not account:
             self.logger.error("Account %s referred, but not found!" % authname)
-            self.reject_request(params, Status(500))
+            self.reject_request(params, 500)
             return True
             
         method = params["method"]
@@ -208,17 +211,17 @@ class Switch(Loggable):
                     self.dialog_manager.process_request(params, related_params)
                     return
                 else:
-                    self.reject_request(params, Status(481, "Transaction Does Not Exist"))
+                    self.reject_request(params, 481, "Transaction Does Not Exist")
                     return
     
-            self.reject_request(params, Status(501, "Method Not Implemented"))
+            self.reject_request(params, 501, "Method Not Implemented")
         else:
             # In dialog requests
             processed = self.dialog_manager.process_request(params)
             if processed:
                 return
     
-            self.reject_request(params, Status(481, "Dialog Does Not Exist"))
+            self.reject_request(params, 481, "Dialog Does Not Exist")
 
 
     def process_response(self, params, related_request):

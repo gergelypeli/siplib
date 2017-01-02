@@ -376,7 +376,7 @@ class TestController(Controller):
         
 class TestLine(Bridge):
     def identify(self, params):
-        self.is_outgoing = None
+        self.is_outgoing = None  # if the device dialed out
         self.is_confirmed = None
         
         self.addr = params["addr"]
@@ -437,6 +437,15 @@ class TestLine(Bridge):
         else:
             self.logger.debug("Has %d registered SIP contacts: %s" % (len(contacts), record_uri))
             self.reject_incoming_leg(Status(404))
+            
+            
+    def process_leg_transfer(self, li, action):
+        if not self.is_outgoing and li > 0:
+            self.forward(0, action)
+        elif self.is_outgoing and li == 0:
+            self.forward(max(self.legs.keys()), action)
+        else:
+            Bridge.process_leg_transfer(self, li, action)
             
             
     def do_slot(self, li, action):

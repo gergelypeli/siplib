@@ -94,6 +94,11 @@ class Endpoint(Party):
 
     def forward(self, action):
         self.leg.forward(action)
+        
+        
+    def initiate_transfer(self, tid):
+        action = dict(type="transfer", transfer_id=tid)
+        self.forward(action)
 
 
 
@@ -194,22 +199,6 @@ class Bridge(Party):
         self.forward(li, action)
         
         return li
-
-
-    #def dial(self, type, action):
-    #    if action["type"] != "dial":
-    #        raise Exception("Dial action is not a dial: %s" % action["type"])
-
-    #    self.logger.debug("Dialing out to: %s" % (type,))
-        
-    #    leg = self.add_leg()
-    #    li = leg.number
-        
-    #    party = self.ground.make_party(type, self.call_oid, self.path + [ li ])
-    #    party_leg = party.start()
-    #    self.ground.link_legs(leg.oid, party_leg.oid)
-
-    #    leg.forward(action)
 
 
     def hangup_outgoing_legs(self, except_li=None):
@@ -320,6 +309,11 @@ class Bridge(Party):
         self.dial(action)
 
 
+    def process_leg_transfer(self, li, action):
+        tid = action["transfer_id"]
+        self.ground.transfer_leg(self.legs[li].oid, tid)
+
+
     def process_leg_action(self, li, action):
         type = action["type"]
         self.logger.debug("Got %s from leg %d." % (type, li))
@@ -354,6 +348,8 @@ class Bridge(Party):
                 else:
                     self.hangup_outgoing_legs()
                     self.remove_leg(0)
+            elif type == "transfer":
+                self.process_leg_transfer(0, action)
             elif self.is_anchored:
                 oli = max(self.legs.keys())
                 self.forward(oli, action)
@@ -397,6 +393,8 @@ class Bridge(Party):
                     # didn't anchor the leg, and now it's hanging up. If this was the last
                     # outgoing leg, may_finish will clean up this mess.
                     pass
+            elif type == "transfer":
+                self.process_leg_transfer(li, action)
             else:
                 # The less important actions
             
