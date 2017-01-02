@@ -59,7 +59,7 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
         
     def add_abilities(self, msg):
         msg.setdefault("allow", set()).update(self.DEFAULT_ALLOWED_METHODS)
-        #msg.setdefault("supported", set()).add("tdialog")
+        msg.setdefault("supported", set()).add("norefersub")
         return msg
         
 
@@ -461,7 +461,7 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
                 if is_response:
                     self.logger.warning("Ignoring REFER response!")
                     return
-                    
+                
                 refer_to = msg.get("refer_to")
                 if not refer_to:
                     self.logger.warning("No Refer-To header!")
@@ -485,18 +485,20 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
                     self.logger.warning("No target dialog found, l=%s, r=%s, c=%s" % (local_tag, remote_tag, call_id))
                     self.send_response(dict(status=Status(404)), msg)
                     return
+                
+                refer_sub = "false" if msg.get("refer_sub") == "false" else "true"
+                self.send_response(dict(status=Status(200), refer_sub=refer_sub), msg)
                     
-                self.send_response(dict(status=Status(200)), msg)
+                if refer_sub != "false":
+                    notify = dict(
+                        method="NOTIFY",
+                        event="refer",
+                        subscription_state="terminated;reason=noresource",
+                        content_type="message/sipfrag",
+                        body="SIP/2.0 200 OK".encode("utf8")
+                    )
                 
-                notify = dict(
-                    method="NOTIFY",
-                    event="refer",
-                    subscription_state="terminated;reason=noresource",
-                    content_type="message/sipfrag",
-                    body="SIP/2.0 200 OK".encode("utf8")
-                )
-                
-                self.send_request(notify)
+                    self.send_request(notify)
 
                 tid = self.ground.make_transfer()
                 other.initiate_transfer(tid)
