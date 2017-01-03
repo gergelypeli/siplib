@@ -507,6 +507,29 @@ class Auth(namedtuple("Auth",
         return cls(**params)
 
 
+class AbsoluteUri(namedtuple("AbsoluteUri", [ "scheme", "rest" ])):
+    def __str__(self):
+        return self.print()
+        
+        
+    def print(self):
+        return self.scheme + ":" + self.rest
+        
+        
+    @classmethod
+    def parse(cls, parser, scheme=None):
+        if not scheme:
+            scheme = parser.grab_token()
+            parser.grab_separator(":")
+
+        # This may contain escaped parts, but we don't know how to unescape it properly,
+        # because the separators are unknown, and only the separated parts are supposed
+        # to be unescaped. So just return it as we found it.
+        rest = parser.grab_token(URIC_ESCAPED)
+        
+        return cls(scheme, rest)
+        
+
 class Uri(namedtuple("Uri", "addr username scheme params headers")):
     def __new__(cls, addr, username=None, scheme=None, params=None, headers=None):
         if scheme == "any":
@@ -555,11 +578,7 @@ class Uri(namedtuple("Uri", "addr username scheme params headers")):
             parser.grab_separator(":")
 
         if scheme not in ("sip", "sips"):
-            uric_escaped = parser.grab_token(URIC_ESCAPED)
-            # This may contain escaped parts, but we don't know how to unescape it properly,
-            # because the separators are unknown, and only the separated parts are supposed
-            # to be unescaped. So just return it as we found it.
-            return cls(None, None, scheme, uric_escaped)
+            return AbsoluteUri.parse(parser, bare_scheme)
     
         username = None
         password = None
@@ -698,6 +717,21 @@ class TargetDialog(namedtuple("TargetDialog", [ "call_id", "params" ])):
         return cls(call_id, params)
 
 
+class CallInfo(namedtuple("CallInfo", [ "uri", "params" ])):
+    def print(self):
+        return "<" + self.uri.print() + ">" + print_generic_params(self.params)
+        
+        
+    @classmethod
+    def parse(cls, parser):
+        parser.grab_separator("<")
+        uri = AbsoluteUri.parse(parser)
+        parser.grab_separator(">")
+        params = parse_generic_params(parser)
+        
+        return cls(uri, params)
+
+
 class SipMessage(HttpLikeMessage):
     LIST_HEADER_FIELDS = [ "via", "route", "record_route", "contact" ]
     
@@ -737,6 +771,8 @@ def print_structured_message(params):
             y = x.print()
         elif field in ("target_dialog", "replaces"):
             y = x.print()
+        elif field in ("call_info", "alert_info"):
+            y = ", ".join(f.print() for f in x)
         elif field not in META_HEADER_FIELDS:
             y = x
         else:
@@ -747,6 +783,16 @@ def print_structured_message(params):
     body = params.get("body", b"")
 
     return SipMessage(initial_line, headers, body)
+
+
+def parse_comma_separated(Item, header):
+    items = []
+    parser = Parser(header)
+    
+    while not items or parser.can_grab_separator(","):
+        items.append(Item.parse(parser))
+        
+    return items
 
 
 def parse_structured_message(message):
@@ -798,13 +844,7 @@ def parse_structured_message(message):
             y = []
             
             for h in x:
-                parser = Parser(h)
-                nameaddrs = []
-                
-                while not nameaddrs or parser.can_grab_separator(","):
-                    nameaddrs.append(Nameaddr.parse(parser))
-                    
-                y.extend(nameaddrs)
+                y.extend(parse_comma_separated(Nameaddr, h))
         elif field in ("www_authenticate"):
             y = WwwAuth.parse(Parser(x))
         elif field in ("authorization"):
@@ -834,6 +874,8 @@ def parse_structured_message(message):
             y = Uri.parse(Parser(x))
         elif field in ("target_dialog", "replaces"):
             y = TargetDialog.parse(Parser(x))
+        elif field in ("call_info", "alert_info"):
+            y = parse_comma_separated(CallInfo, x)
         elif field not in META_HEADER_FIELDS:
             y = x
         else:
