@@ -35,9 +35,10 @@ class Error(Exception):
 
 
 class InviteState(Loggable):
-    def __init__(self, use_rpr):
+    def __init__(self, is_outgoing, use_rpr):
         Loggable.__init__(self)
         
+        self.is_outgoing = is_outgoing
         self.message_slot = zap.EventSlot()
         
         self.state = START
@@ -115,7 +116,7 @@ class InviteState(Loggable):
         
 class InviteClientState(InviteState):
     def __init__(self, use_rpr):
-        InviteState.__init__(self, use_rpr)
+        InviteState.__init__(self, True, use_rpr)
         
         self.unanswered_rpr = None
 
@@ -171,6 +172,7 @@ class InviteClientState(InviteState):
                 add_sdp(msg, sdp)
                 return self.send("request with offer", REQUEST_OFFER, msg)
             else:
+                # This is the only known place to send a session query
                 return self.send("request without offer", REQUEST_EMPTY, msg)
         elif method == "ACK":
             if s == FINAL_OFFER:
@@ -341,7 +343,7 @@ class InviteClientState(InviteState):
 
 class InviteServerState(InviteState):
     def __init__(self, use_rpr):
-        InviteState.__init__(self, use_rpr)
+        InviteState.__init__(self, False, use_rpr)
 
         self.unanswered_prack = None  # only used for PRACK offers
         self.provisional_sdp = None  # only used without rpr
@@ -514,7 +516,7 @@ class InviteServerState(InviteState):
                 if sdp:
                     return self.recv("request with offer", REQUEST_OFFER, msg, sdp, False)
                 else:
-                    # This is the only known place to generate a session query
+                    # This is the only known place to receive a session query
                     return self.recv("request without offer", REQUEST_EMPTY, msg, None, False)
             else:
                 return self.recv("INVITE request after started", ABORT)

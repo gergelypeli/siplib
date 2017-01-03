@@ -419,6 +419,16 @@ class Error(Exception):
 
 
 class SessionState:
+    FORWARD = "FORWARD"
+    
+    IGNORE_UNEXPECTED = "IGNORE_UNEXPECTED"
+    IGNORE_RESOLVED = "IGNORE_RESOLVED"
+    
+    REJECT_DUPLICATE = "REJECT_DUPLICATE"
+    REJECT_COLLIDING = "REJECT_COLLIDING"
+    
+    IGNORE_STALE = "IGNORE_STALE"
+    
     def __init__(self):
         self.ground_session = None
         self.party_session = None
@@ -430,55 +440,69 @@ class SessionState:
         if not session:
             raise Error("No ground session specified!")
         elif session.is_query():
-            return
-        elif session.is_offer():
-            # Offer
-            
             if self.pending_ground_session:
-                raise Error("Ground offer already pending!")
+                return self.IGNORE_UNEXPECTED
             elif self.pending_party_session:
-                raise Error("Party offer also pending!")
+                return self.IGNORE_RESOLVED
+            else:
+                return self.FORWARD
+        elif session.is_offer():
+            if self.pending_ground_session:
+                return self.REJECT_DUPLICATE
+            elif self.pending_party_session:
+                return self.REJECT_COLLIDING
             else:
                 self.pending_ground_session = session
-        else:
-            # Answer
-
+                return self.FORWARD
+        elif session.is_accept():
             if not self.pending_party_session:
-                raise Error("Party offer not pending!")
-            elif session.is_reject():
-                self.pending_party_session = None
+                return self.IGNORE_STALE
             else:
                 self.party_session = self.pending_party_session
-                self.ground_session = session
                 self.pending_party_session = None
+                self.ground_session = session
+                return self.FORWARD
+        elif session.is_reject():
+            if not self.pending_party_session:
+                return self.IGNORE_STALE
+            else:
+                self.pending_party_session = None
+                return self.FORWARD
 
 
     def set_party_session(self, session):
         if not session:
             raise Error("No party session specified!")
         elif session.is_query():
-            return
+            if self.pending_party_session:
+                return self.IGNORE_UNEXPECTED
+            elif self.pending_ground_session:
+                return self.IGNORE_RESOLVED
+            else:
+                return self.FORWARD
         elif session.is_offer():
-            # Offer
-            
-            if self.pending_ground_session:
-                raise Error("Ground offer also pending!")
-            elif self.pending_party_session:
-                raise Error("Party offer already pending!")
+            if self.pending_party_session:
+                return self.REJECT_DUPLICATE
+            elif self.pending_ground_session:
+                return self.REJECT_COLLIDING
             else:
                 self.pending_party_session = session
-        else:
-            # Answer
-            
+                return self.FORWARD
+        elif session.is_accept():
             if not self.pending_ground_session:
-                raise Error("Ground offer not pending!")
-            elif session.is_reject():
-                self.pending_ground_session = None
+                return self.IGNORE_STALE
             else:
                 self.ground_session = self.pending_ground_session
-                self.party_session = session
                 self.pending_ground_session = None
-            
+                self.party_session = session
+                return self.FORWARD
+        elif session.is_reject():
+            if not self.pending_ground_session:
+                return self.IGNORE_STALE
+            else:
+                self.pending_ground_session = None
+                return self.FORWARD
+
 
     def get_ground_session(self):
         return self.ground_session

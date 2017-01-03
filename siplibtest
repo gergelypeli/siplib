@@ -6,7 +6,7 @@ import logging.config
 import sys
 from weakref import proxy
 
-from format import Addr, Uri, Nameaddr, Status, Hop, AbsoluteUri, AlertInfo
+from format import Addr, Uri, Nameaddr, Status, Hop, AbsoluteUri, CallInfo
 from party import PlannedEndpoint, PlannedRouting, Bridge, Routing
 from sdp import Sdp
 from registrar import RecordManager, Record
@@ -20,7 +20,7 @@ import resolver
 
 TEST_DIALIN = 1
 TEST_DIALOUT = 2
-TEST = TEST_DIALOUT
+TEST = TEST_DIALIN
 
 HOST = "otthon"
 A_ADDR = Addr(HOST, 5060)
@@ -428,9 +428,8 @@ class TestLine(Bridge):
                 'hop': contact.hop,
                 'from': Nameaddr(Uri(src_addr, src_username), src_name),
                 'to': Nameaddr(Uri(dst_addr, dst_username)),
-                'route': [],
-                'alert_info': [ CallInfo(AbsoluteUri("http", "//www.notused.com"), dict(info="alert-autoanswer", delay="0")) ]
-                #'alert_info': "<http://www.notused.com>;info=alert-autoanswer;delay=0"  # FIXME
+                'route': []
+                #'alert_info': [ CallInfo(AbsoluteUri("http", "//www.notused.com"), dict(info="alert-autoanswer", delay="0")) ]
             }
         
             #self.dial("sip", dict(action, ctx=dst))

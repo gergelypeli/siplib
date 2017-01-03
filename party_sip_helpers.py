@@ -3,6 +3,7 @@ from collections import namedtuple
 from format import Status
 from party_sip_invite import InviteClientState, InviteServerState
 from sdp import add_sdp, get_sdp, SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES, Session
+from ground import SessionState
 
 
 class InviteHelper:
@@ -98,6 +99,10 @@ class InviteHelper:
         return self.invite_state.is_session_pracking()
 
 
+    def invite_is_outgoing(self):
+        return self.invite_state.is_outgoing
+        
+
 class UpdateHelper:
     def __init__(self):
         self.update_state = None
@@ -178,25 +183,6 @@ class UpdateHelper:
             self.logger.info("Processing message: UPDATE request with offer")
             sdp = get_sdp(msg)
             return msg, sdp, False
-
-
-    def update_outgoing_auto(self, sdp, is_answer):
-        if not is_answer:
-            self.update_new(is_outgoing=True)
-            self.update_outgoing(dict(method="UPDATE"), sdp, is_answer)
-        else:
-            code = 200 if sdp else 488
-            self.update_outgoing(dict(status=Status(code)), sdp, is_answer)
-
-
-    def update_incoming_auto(self, msg):
-        if not msg["is_response"]:
-            self.update_new(is_outgoing=False)
-            msg, sdp, is_answer = self.update_incoming(msg)
-        else:
-            msg, sdp, is_answer = self.update_incoming(msg)
-            
-        return msg, sdp, is_answer
 
 
     def update_is_active(self):
@@ -355,10 +341,20 @@ class SessionHelper:
 
     def process_incoming_sdp(self, sdp, is_answer):
         if sdp is None and is_answer is None:
-            return None  # no SDP to process
+            return None  # no session to process
             
         remote_session = self.sdp_parser.parse(sdp, is_answer)
-        self.leg.session_state.set_party_session(remote_session)
+        result = self.leg.session_state.set_party_session(remote_session)
+        
+        if result in (SessionState.IGNORE_UNEXPECTED, SessionState.IGNORE_RESOLVED, SessionState.IGNORE_STALE):
+            self.logger.info("Won't process incoming session: %s." % result)
+            return None
+        elif result in (SessionState.REJECT_DUPLICATE, SessionState.REJECT_COLLIDING):
+            self.logger.error("Can't process incoming session: %s!" % result)
+            # TODO: let the offerer know if it was just a collision
+            # FIXME: and now what?
+            return None
+        
         local_session = self.leg.session_state.get_ground_session()
         
         if remote_session.is_offer():
@@ -374,10 +370,27 @@ class SessionHelper:
             
     
     def process_outgoing_session(self, local_session):
+        # Results:
+        #   None, None  - nothing to do
+        #   sdp, False  - offer
+        #   sdp, True   - accept
+        #   None, False - query
+        #   None, True  - reject
         if not local_session:
             return None, None
             
-        self.leg.session_state.set_ground_session(local_session)
+        result = self.leg.session_state.set_ground_session(local_session)
+        
+        if result in (SessionState.IGNORE_UNEXPECTED, SessionState.IGNORE_RESOLVED, SessionState.IGNORE_STALE):
+            self.logger.info("Won't send outgoing session: %s." % result)
+            return None, None
+        elif result in (SessionState.REJECT_DUPLICATE, SessionState.REJECT_COLLIDING):
+            self.logger.warning("Can't send outgoing session: %s!" % result)
+            # TODO: let the offerer know if it was just a collision
+            action = dict(type="session", session=Session.make_reject())
+            self.forward(action)
+            return None, None
+        
         remote_session = self.leg.session_state.get_party_session()
         
         if local_session.is_offer():
