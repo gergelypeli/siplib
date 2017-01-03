@@ -315,6 +315,8 @@ class InviteServerTransaction(PlainServerTransaction):
             if not self.incoming_msg:
                 self.incoming_msg = request
                 self.manager.report_request(request)
+                # TODO: maybe we shouldn't send this for re-INVITE-s
+                # TODO: maybe the SipEndpoint should send this, with a tag
                 self.send(make_simple_response(request, Status(100, "Trying")))
         elif self.state == self.PROVISIONING:
             self.retransmit()

@@ -88,7 +88,9 @@ class Dialog(Loggable):
         self.hop = params["hop"]
 
         self.dialog_manager.register_by_local_tag(self.local_tag, self)
-        self.dialog_manager.register_by_incoming_branch(params["via"][0].params["branch"], self)
+        
+        # Forge To tag to make it possible for CANCEL-s to find this dialog
+        params["to"] = self.local_nameaddr
         
         
     def setup_outgoing(self, request_uri, from_nameaddr, to_nameaddr, route, hop):
@@ -333,9 +335,7 @@ class DialogManager(Loggable):
         Loggable.__init__(self)
 
         self.switch = switch
-        #self.process_response_plug = transaction_manager.process_response_slot.plug(self.process_response)
         self.dialogs_by_local_tag = WeakValueDictionary()
-        self.dialogs_by_incoming_branch = WeakValueDictionary()
 
         
     def provide_auth(self, params, related_request):
@@ -351,11 +351,6 @@ class DialogManager(Loggable):
         self.logger.debug("Registered dialog with local tag %s" % (local_tag,))
         
         
-    def register_by_incoming_branch(self, branch, dialog):
-        self.dialogs_by_incoming_branch[branch] = dialog
-        self.logger.debug("Registered dialog with incoming branch %s" % (branch,))
-    
-    
     def find_dialog(self, params):
         local_aor = params["from"] if params["is_response"] else params["to"]
         local_tag = local_aor.params.get("tag")
@@ -372,17 +367,17 @@ class DialogManager(Loggable):
             dialog.recv_request(params)
             return True
 
-        if method == "CANCEL" and not params["to"].params.get("tag"):
-            if related_params and related_params["method"] == "INVITE":
-                # TODO: use hop, too, for safety!
-                branch = related_params["via"][0].params["branch"]
-                dialog = self.dialogs_by_incoming_branch.get(branch)
+        if method == "CANCEL" and not params["to"].params.get("tag") and related_params:
+            # TODO: use hop, too, for safety!
+            forged_to_tag = related_params["to"].params.get("tag")
+            
+            if forged_to_tag:
+                dialog = self.dialogs_by_local_tag.get(forged_to_tag)
                 
                 if dialog:
-                    self.logger.debug("Found dialog for INVITE CANCEL: %s" % branch)
+                    self.logger.debug("Found dialog for INVITE CANCEL: %s" % forged_to_tag)
                     dialog.recv_request(params)
                     return True
-                
             
         return False
         
