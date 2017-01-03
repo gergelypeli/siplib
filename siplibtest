@@ -118,6 +118,9 @@ class TestEndpoint(PlannedEndpoint):
             elif action["type"] == "tone":
                 self.logger.info("Okay, got a tone %s, fading out..." % action["name"])
                 break
+            elif action["type"] == "transfer":
+                self.logger.info("Got a transfer, being transferred...")
+                self.process_transfer(action)
             else:
                 self.logger.debug("Don't know what to do with %s, continuing..." % action["type"])
         
@@ -428,8 +431,8 @@ class TestLine(Bridge):
                 'hop': contact.hop,
                 'from': Nameaddr(Uri(src_addr, src_username), src_name),
                 'to': Nameaddr(Uri(dst_addr, dst_username)),
-                'route': []
-                #'alert_info': [ CallInfo(AbsoluteUri("http", "//www.notused.com"), dict(info="alert-autoanswer", delay="0")) ]
+                'route': [],
+                'x_alert_info': [ CallInfo(AbsoluteUri("http", "//www.notused.com"), dict(info="alert-autoanswer", delay="0")) ]
             }
         
             #self.dial("sip", dict(action, ctx=dst))

@@ -107,13 +107,8 @@ class Ground(Loggable):
 
 
     def collapse_legs(self, leg_oid0, leg_oid1, queue0=None, queue1=None):
-        prev_leg_oid = self.targets_by_source[leg_oid0]
-        if not prev_leg_oid:
-            raise Exception("No previous leg before collapsed leg %s!" % leg_oid0)
-            
-        next_leg_oid = self.targets_by_source[leg_oid1]
-        if not next_leg_oid:
-            raise Exception("No next leg after collapsed leg %s!" % leg_oid1)
+        # It is possible that some legs are already unlinked, it happens with
+        # transfers. So in that case there will be no relinking.
         
         self.logger.info("Collapsing legs.")
         
@@ -145,21 +140,27 @@ class Ground(Loggable):
             if pmleg and nmleg:
                 self.add_context(pmleg, nmleg)
         
-        self.targets_by_source.pop(leg_oid0)
-        self.targets_by_source.pop(leg_oid1)
-        self.targets_by_source[prev_leg_oid] = next_leg_oid
-        self.targets_by_source[next_leg_oid] = prev_leg_oid
+        prev_leg_oid = self.targets_by_source.pop(leg_oid0, None)
+        next_leg_oid = self.targets_by_source.pop(leg_oid1, None)
         
-        #self.unlink_legs(prev_leg_oid)
-        #self.unlink_legs(next_leg_oid)
-        #self.link_legs(prev_leg_oid, next_leg_oid)
-
+        if prev_leg_oid:
+            self.targets_by_source[prev_leg_oid] = next_leg_oid
+            
+        if next_leg_oid:
+            self.targets_by_source[next_leg_oid] = prev_leg_oid
+        
         if queue0:
+            if not prev_leg_oid:
+                raise Exception("No previous leg to queue events to!")
+                
             for action in queue0:
                 self.logger.debug("Forwarding queued action to previous leg: %s" % action["type"])
                 self.legs_by_oid[prev_leg_oid].do(action)
 
         if queue1:
+            if not next_leg_oid:
+                raise Exception("No next leg to queue events to!")
+
             for action in queue1:
                 self.logger.debug("Forwarding queued action to next leg: %s" % action["type"])
                 self.legs_by_oid[next_leg_oid].do(action)

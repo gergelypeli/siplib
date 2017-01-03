@@ -94,14 +94,12 @@ class Endpoint(Party):
 
     def forward(self, action):
         self.leg.forward(action)
+
         
+    def process_transfer(self, action):
+        tid = action["transfer_id"]
+        self.ground.transfer_leg(self.leg.oid, tid)
         
-    def initiate_transfer(self, tid):
-        action = dict(type="transfer", transfer_id=tid)
-        self.forward(action)
-
-
-
 
 class PlannedEndpoint(zap.Planned, Endpoint):
     def __init__(self):
