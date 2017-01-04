@@ -242,8 +242,8 @@ class CallerEndpoint(TestEndpoint):
         
         src = {
             'type': "sip",  # FIXME: we lie here for mkctx
-            'from': Nameaddr(Uri(Addr(DDI_DOMAIN), NUMBER_DDI_CALLER), "Caller"),
-            'to': Nameaddr(Uri(Addr(A_DOMAIN), NUMBER_A_SNOM_1))
+            'from': Nameaddr(Uri(Addr(B_DOMAIN), NUMBER_DDI_CALLER), "Caller"),
+            'to': Nameaddr(Uri(Addr(B_DOMAIN), NUMBER_A_SNOM_1))
         }
         
         offer = None
@@ -608,10 +608,10 @@ class SwitchA(TestSwitch):
                 # Numbers for switch B
                 dst = {
                     'type': "sip",
-                    #'uri': Uri(B_ADDR, number),
+                    'uri': Uri(B_ADDR),
                     #'hop': contact.hop,
                     'from': Nameaddr(Uri(Addr(A_DOMAIN), ctx["src_username"]), ctx["src_name"]),
-                    'to': Nameaddr(Uri(Addr(B_DOMAIN), number))
+                    'to': Nameaddr(Uri(Addr(B_DOMAIN), number))  # divert to B
                     #'route': []
                 }
                 
@@ -678,7 +678,8 @@ class SwitchB(TestSwitch):
             
             if dst_addr == Addr(A_DOMAIN):
                 if dst_username == NUMBER_A_REMOTE_CALLEE:
-                    # This was forwarded here from A because we registered there
+                    # This was forwarded here from A because we registered there,
+                    # so the domain remained A_DOMAIN.
                     self.dial(action, "callee")
                     return
             elif dst_addr == Addr(B_DOMAIN):
@@ -688,6 +689,7 @@ class SwitchB(TestSwitch):
                 elif dst_username == NUMBER_B_LOCAL_RECORD:  # was: 555
                     ctx["dst_username"] = NUMBER_B_LOCAL_FORK
                     self.dial(action, "record", id="rekord")
+                    return
                 elif dst_username == NUMBER_B_LOCAL_FORK:  # was: 444
                     self.dial(action, "unreachable")
                     self.dial(action, "ringing")
@@ -696,14 +698,15 @@ class SwitchB(TestSwitch):
                 elif dst_username >= "200" and dst_username < "300":
                     dst = {
                         'type': "sip",
-                        #'uri': Uri(A_ADDR, SNOM_NUMBER),
+                        'uri': Uri(A_ADDR),
                         #'hop': contact.hop,
                         'from': Nameaddr(Uri(src_addr, src_username), src_name),
-                        'to': Nameaddr(Uri(Addr(A_DOMAIN), dst_username)),
+                        'to': Nameaddr(Uri(Addr(A_DOMAIN), dst_username)),  # divert to A
                         #'route': []
                     }
                 
                     self.dial(action, **dst)
+                    return
             
             self.logger.error("Not found: %s" % dst_username)
             
