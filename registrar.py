@@ -269,7 +269,7 @@ class RecordManager(Loggable):
         #   authname, True -  accept
         #   authname, False - challenge
         #   None, True -      reject
-        #   None, False -     ignore
+        #   None, False -     not found
         
         record_uri = params["from"].uri.canonical_aor()
         hop = params["hop"]
@@ -277,7 +277,7 @@ class RecordManager(Loggable):
         record = self.records_by_uri.get(record_uri) or self.records_by_uri.get(record_uri._replace(username=None))
         
         if not record:
-            self.logger.warning("Rejecting request because account is unknown!")
+            self.logger.warning("Rejecting request because caller is unknown!")
             return None, False
         
         return record.authenticate_request(hop)

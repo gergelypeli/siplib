@@ -323,6 +323,10 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
                 self.send_request(msg)
                 self.change_state(self.DISCONNECTING_OUT)
                 return
+                
+            elif type == "transfer":
+                self.process_transfer(action)
+                return
             
         raise Exception("Weird thing to do %s in state %s!" % (type, self.state))
 

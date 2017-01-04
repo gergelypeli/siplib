@@ -146,7 +146,12 @@ class Switch(Loggable):
         
     def auth_request(self, params):
         authname, sure = self.record_manager.authenticate_request(params)
-            
+        # Returned:
+        #   authname, True -  accept
+        #   authname, False - challenge
+        #   None, True -      reject
+        #   None, False -     not found
+
         if not authname:
             if sure:
                 self.reject_request(params, 403, "Hop not allowed")
