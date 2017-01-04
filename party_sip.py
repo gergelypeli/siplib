@@ -515,24 +515,32 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
                     self.send_response(dict(status=Status(400)), msg)
                     return
                     
-                replaces = refer_to.headers.get("replaces")
+                replaces = refer_to.uri.headers.get("replaces")
                 if not replaces:
-                    self.logger.warning("No Replaces header in Refer-To URI!")
-                    self.send_response(dict(status=Status(400)), msg)
-                    return
+                    self.logger.info("Blind transfer to %s." % (refer_to,))
+                    other = None
+                    src = dict(refer_to=refer_to)
+                else:
+                    td = TargetDialog.parse(Parser(replaces))
+                    
+                    # Moronic RFC 3891:
+                    # In other words, the to-tag parameter is compared to the local tag,
+                    # and the from-tag parameter is compared to the remote tag.
+                    local_tag = td.params["to-tag"]
+                    remote_tag = td.params["from-tag"]
+                    call_id = td.call_id
                 
-                td = TargetDialog.parse(Parser(replaces))
-                local_tag = td.params["to-tag"]
-                remote_tag = td.params["from-tag"]
-                call_id = td.call_id
+                    other = self.manager.get_endpoint(local_tag, remote_tag, call_id)
                 
-                other = self.manager.get_endpoint(local_tag, remote_tag, call_id)
-                
-                if not other:
-                    self.logger.warning("No target dialog found, l=%s, r=%s, c=%s" % (local_tag, remote_tag, call_id))
-                    self.send_response(dict(status=Status(404)), msg)
-                    return
-                
+                    if not other:
+                        self.logger.warning("No target dialog found, l=%s, r=%s, c=%s" % (local_tag, remote_tag, call_id))
+                        self.send_response(dict(status=Status(404)), msg)
+                        return
+                        
+                    self.logger.info("Attended transfer to SIP endpoint %s." % local_tag)
+                    tid = self.ground.make_attended_transfer()
+                    src = dict(attended_transfer=tid)
+                    
                 refer_sub = "false" if msg.get("refer_sub") == "false" else "true"
                 self.send_response(dict(status=Status(200), refer_sub=refer_sub), msg)
                     
@@ -547,12 +555,11 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
                 
                     self.send_request(notify)
 
-                tid = self.ground.make_transfer()
-                
-                action = other.make_action(msg, type="transfer", transfer_id=tid)
-                other.forward(action)
+                if other:
+                    action = other.make_action(msg, type="transfer", call_info=other.call_info, src=src)
+                    other.forward(action)
 
-                action = self.make_action(msg, type="transfer", transfer_id=tid)
+                action = self.make_action(msg, type="transfer", call_info=self.call_info, src=src)
                 self.forward(action)
 
                 return

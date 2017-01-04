@@ -165,6 +165,24 @@ class Ground(Loggable):
                 self.logger.debug("Forwarding queued action to next leg: %s" % action["type"])
                 self.legs_by_oid[next_leg_oid].do(action)
 
+
+    def spawn(self, leg_oid, action):
+        if action["type"] != "dial":
+            raise Exception("Oops, not a dial used for spawn!")
+
+        dst = action.pop("dst", None)
+        call_info = action.get("call_info")
+        
+        if not call_info:
+            raise Exception("Missing call_info from dial action!")
+        
+        type = dst.pop("type") if dst else "routing"
+        party = self.make_party(type, dst, call_info)
+
+        party_leg = party.start()
+        self.link_legs(leg_oid, party_leg.oid)
+        party_leg.do(action)
+        
         
     def forward(self, leg_oid, action):
         target = self.targets_by_source.get(leg_oid)
@@ -175,18 +193,7 @@ class Ground(Loggable):
             leg.do(action)
             return
         elif action["type"] == "dial":
-            dst = action.pop("dst", None)
-            call_info = action.get("call_info")
-            
-            if not call_info:
-                raise Exception("Missing call_info from dial action!")
-            
-            type = dst.pop("type") if dst else "routing"
-            party = self.make_party(type, dst, call_info)
-
-            party_leg = party.start()
-            self.link_legs(leg_oid, party_leg.oid)
-            party_leg.do(action)
+            self.spawn(leg_oid, action)
         else:
             self.logger.error("Couldn't forward %s from %s!" % (action["type"], leg_oid))
 
@@ -324,13 +331,11 @@ class Ground(Loggable):
         party = self.switch.make_party(type)
         party.set_call_info(call_info)
         identity = party.identify(params)
-        oid = call_info["oid"].add(type, identity)
+        
+        num = call_info["party_count"]
+        call_info["party_count"] += 1
+        oid = call_info["oid"].add("party", num).add(type, identity)
         self.logger.info("Made party %s" % oid)
-        
-        #party.set_path(call_oid, path)
-        
-        #pathstr = ".".join(str(x) for x in path) if path else None
-        #oid = call_oid.add(type, pathstr)
         
         if oid in self.parties_by_oid:
             raise Exception("Duplicate party oid: %s" % oid)
@@ -351,30 +356,45 @@ class Ground(Loggable):
             self.logger.info("No more parties left.")
         
         
-    def make_transfer(self):
-        self.transfer_count += 1
-        tid = self.transfer_count
-        
-        self.transfers_by_id[tid] = None
-        
+    def make_attended_transfer(self):
+        self.attended_transfer_count += 1
+        tid = self.attended_transfer_count
+
         return tid
+
+
+    def transfer_leg(self, leg_oid0, action):
+        call_info = action["call_info"]
+        src = action["src"]
         
-        
-    def transfer_leg(self, leg_oid0, tid):
-        if not self.transfers_by_id[tid]:
-            self.transfers_by_id[tid] = leg_oid0
-            return
+        if "refer_to" in src:
+            # blind transfer
+            self.logger.info("Blind transfer from leg %s to %s." % (leg_oid0, src["refer_to"]))
             
-        leg_oid1 = self.transfers_by_id.pop(tid)
-        self.logger.info("Transferring legs %s and %s." % (leg_oid0, leg_oid1))
+            leg_oid0x = self.unlink_legs(leg_oid0)
+            self.legs_by_oid[leg_oid0x].do(dict(type="hangup"))
+            
+            action = dict(type="dial", call_info=call_info, ctx={}, src=dict(src, type="transfer"))
+            self.spawn(leg_oid0, action)
+        elif "attended_transfer" in src:
+            # attended transfer
+            tid = src["attended_transfer"]
+            
+            if tid not in self.attended_transfers_by_id:
+                self.attended_transfers_by_id[tid] = leg_oid0
+                return
+            
+            leg_oid1 = self.attended_transfers_by_id.pop(tid)
+            self.logger.info("Attended transfer %s between legs %s and %s." % (tid, leg_oid0, leg_oid1))
         
-        leg_oid0x = self.unlink_legs(leg_oid0)
-        self.legs_by_oid[leg_oid0x].do(dict(type="hangup"))
+            leg_oid0x = self.unlink_legs(leg_oid0)
+            self.legs_by_oid[leg_oid0x].do(dict(type="hangup"))
         
-        leg_oid1x = self.unlink_legs(leg_oid1)
-        self.legs_by_oid[leg_oid1x].do(dict(type="hangup"))
+            leg_oid1x = self.unlink_legs(leg_oid1)
+            self.legs_by_oid[leg_oid1x].do(dict(type="hangup"))
         
-        self.link_legs(leg_oid0, leg_oid1)
+            self.link_legs(leg_oid0, leg_oid1)
+            # TODO: correct media, and ringing state!
         
 
     def select_hop_slot(self, next_uri):

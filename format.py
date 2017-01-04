@@ -755,10 +755,12 @@ def print_structured_message(params):
         
         if x is None:
             continue
-        elif field in ("from", "to", "www_authenticate", "authorization", "rack"):
+        elif field in ("from", "to", "refer_to", "referred_by"):
             y = x.print()
         elif field == "cseq":
             y = "%d %s" % (x, params["method"])
+        elif field in ("www_authenticate", "authorization", "rack"):  # FIXME: separate
+            y = x.print()
         elif field in ("rseq", "expires"):
             y = "%d" % x
         elif field in ("contact", "route"):
@@ -838,7 +840,7 @@ def parse_structured_message(message):
 
     for field, x in message.headers.items():
         # TODO: refactor a bit!
-        if field in ("from", "to"):
+        if field in ("from", "to", "refer_to", "referred_by"):
             y = Nameaddr.parse(Parser(x))
         elif field in ("contact", "route"):
             y = []
@@ -870,8 +872,6 @@ def parse_structured_message(message):
             y = [ Via.parse(Parser(h)) for h in x ]
         elif field in ("supported", "require", "allow"):
             y = set( i.strip() for i in x.split(",") )  # TODO
-        elif field in ("refer_to", "referred_by"):
-            y = Uri.parse(Parser(x))
         elif field in ("target_dialog", "replaces"):
             y = TargetDialog.parse(Parser(x))
         elif field in ("call_info", "alert_info"):

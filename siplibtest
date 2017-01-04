@@ -444,8 +444,16 @@ class TestLine(Bridge):
             
     def process_leg_transfer(self, li, action):
         if not self.is_outgoing and li > 0:
+            src = action["src"]
+            src["xfr_addr"] = self.addr
+            src["xfr_username"] = self.username
+            src["xfr_name"] = "Mr Transfer"
             self.forward(0, action)
         elif self.is_outgoing and li == 0:
+            src = action["src"]
+            src["xfr_addr"] = self.addr
+            src["xfr_username"] = self.username
+            src["xfr_name"] = "Mr Transfer"
             self.forward(max(self.legs.keys()), action)
         else:
             Bridge.process_leg_transfer(self, li, action)
@@ -527,17 +535,26 @@ class TestSwitch(Switch):
 
 
 def mkctx(src):
-    if src["type"] != "sip":
-        raise Exception("Uh-oh, not a SIP-like caller?")
-    
-    return dict(
-        src_addr=src["from"].uri.addr,
-        src_username=src["from"].uri.username,
-        src_name=src["from"].name,
-        dst_addr=src["to"].uri.addr,
-        dst_username=src["to"].uri.username,
-        dst_name=src["to"].name
-    )
+    if src["type"] == "sip":
+        return dict(
+            src_addr=src["from"].uri.addr,
+            src_username=src["from"].uri.username,
+            src_name=src["from"].name,
+            dst_addr=src["to"].uri.addr,
+            dst_username=src["to"].uri.username,
+            dst_name=src["to"].name
+        )
+    elif src["type"] == "transfer":
+        return dict(
+            src_addr=src["xfr_addr"],
+            src_username=src["xfr_username"],
+            src_name=src["xfr_name"],
+            dst_addr=src["refer_to"].uri.addr,
+            dst_username=src["refer_to"].uri.username,
+            dst_name=src["refer_to"].name
+        )
+    else:
+        raise Exception("Unknown src type: %s!" % src["type"])
     
 
 class SwitchA(TestSwitch):
@@ -551,7 +568,7 @@ class SwitchA(TestSwitch):
                 self.dial(action, "line", addr=ctx["src_addr"], username=ctx["src_username"])
                 return
 
-            if ctx["dst_username"] in ("222", "333"):
+            if ctx["dst_username"] in ("111", "222", "333"):
                 self.dial(action, "callee")
             else:
                 self.dial(action, "line", addr=ctx["dst_addr"], username=ctx["dst_username"])

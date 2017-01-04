@@ -97,8 +97,7 @@ class Endpoint(Party):
 
         
     def process_transfer(self, action):
-        tid = action["transfer_id"]
-        self.ground.transfer_leg(self.leg.oid, tid)
+        self.ground.transfer_leg(self.leg.oid, action)
         
 
 class PlannedEndpoint(zap.Planned, Endpoint):
@@ -308,8 +307,7 @@ class Bridge(Party):
 
 
     def process_leg_transfer(self, li, action):
-        tid = action["transfer_id"]
-        self.ground.transfer_leg(self.legs[li].oid, tid)
+        self.ground.transfer_leg(self.legs[li].oid, action)
 
 
     def process_leg_action(self, li, action):
