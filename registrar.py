@@ -30,13 +30,13 @@ def generate_tag():
     return uuid.uuid4().hex[:8]
 
 
+# Must be a class, because we need a weakref.proxy to it.
 class NondialogInfo:
     def __init__(self, cseq):
         self.cseq = cseq
         
 
 UriHop = collections.namedtuple("UriHop", [ "uri", "hop" ])
-#NondialogInfo = collections.namedtuple("NondialogInfo", [ "cseq" ])
 ContactInfo = collections.namedtuple("ContactInfo", [ "expiration", "nondialog_info" ])
 
 
@@ -59,11 +59,6 @@ class Record(Loggable):
         self.contact_infos_by_uri_hop = {}
         self.nondialog_infos_by_call_id = WeakValueDictionary()
         
-        # It's kinda hard to decide when an incoming REGISTER corresponds to a
-        # previously received one, but let's assume clients are decent enough
-        # to generate unique callid-s. Also, we only allow one Contact per request.
-        #self.contacts_by_call_id = {}
-
 
     def add_contact(self, uri, hop, expiration, nondialog_info):
         urihop = UriHop(uri, hop)
@@ -144,6 +139,10 @@ class Record(Loggable):
         self.send_response(dict(status=Status(200, "OK"), contact=fetched), params)
 
 
+    # REGISTER requests don't create a dialog. Even if we have to generate a To tag
+    # for each response, clients may generate a new From tag for every new request.
+    # Only the call id is kept, and the cseq is incremented. So we have these methods
+    # here that kinda resemble their counterparts in Dialog, but they're much simpler.
     def take_request(self, params):
         if params["is_response"]:
             raise Error("Not a request!")
@@ -176,7 +175,6 @@ class Record(Loggable):
 
 
     def send_response(self, user_params, related_request):
-        #self.logger.debug("Will send response: %s" % str(user_params))
         params = self.make_response(user_params, related_request)
         self.record_manager.transmit(params, related_request)
         
