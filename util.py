@@ -108,7 +108,7 @@ def setup_logging():
                 'datefmt': '%F %T'
             },
             'file': {
-                'format': '%(asctime)s.%(msecs)06d | %(mark)s | %(oid)s | %(message)s',
+                'format': '%(asctime)s.%(msecs)03d | %(mark)s | %(oid)s | %(message)s',
                 'datefmt': '%T'
             }
 

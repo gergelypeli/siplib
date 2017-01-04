@@ -228,7 +228,7 @@ class Channel(object):
         elif key == "c":
             self.connection = Connection.parse(value)
         elif key == "a":
-            x = value.split(":", 1) if ":" in value else (value, None)
+            x = tuple(value.split(":", 1)) if ":" in value else (value, None)
 
             if x[0] == "rtpmap":
                 pt, rtpmap = x[1].split(None, 1)

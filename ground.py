@@ -1,5 +1,6 @@
 from weakref import proxy, WeakValueDictionary
 
+from sdp import Session
 from util import Loggable
 
 
@@ -22,6 +23,7 @@ class Ground(Loggable):
         self.leg_oids_by_anchor = {}
         self.transfers_by_id = {}
         self.transfer_count = 0
+        self.blind_transfer_ids_by_leg_oid = {}
         
         
     def generate_context_oid(self):
@@ -177,8 +179,9 @@ class Ground(Loggable):
             raise Exception("Missing call_info from dial action!")
         
         type = dst.pop("type") if dst else "routing"
+        self.logger.info("Spawning a %s from leg %s." % (type, leg_oid))
+        
         party = self.make_party(type, dst, call_info)
-
         party_leg = party.start()
         self.link_legs(leg_oid, party_leg.oid)
         party_leg.do(action)
@@ -194,8 +197,16 @@ class Ground(Loggable):
             return
         elif action["type"] == "dial":
             self.spawn(leg_oid, action)
-        else:
-            self.logger.error("Couldn't forward %s from %s!" % (action["type"], leg_oid))
+            return
+        elif action["type"] == "session":
+            tid = self.blind_transfer_ids_by_leg_oid.pop(leg_oid, None)
+            
+            if tid:
+                self.transfers_by_id[tid]["action"]["session"] = action["session"]
+                self.blind_transfer(tid)
+                return
+            
+        self.logger.error("Couldn't forward %s from %s!" % (action["type"], leg_oid))
 
 
     def legs_anchored(self, leg_oid0, leg_oid1):
@@ -356,35 +367,37 @@ class Ground(Loggable):
             self.logger.info("No more parties left.")
         
         
-    def make_attended_transfer(self):
-        self.attended_transfer_count += 1
-        tid = self.attended_transfer_count
-
+    def make_transfer(self, type):
+        self.transfer_count += 1
+        tid = self.transfer_count
+        self.transfers_by_id[tid] = dict(type=type)
+        
         return tid
 
 
-    def transfer_leg(self, leg_oid0, action):
-        call_info = action["call_info"]
-        src = action["src"]
+    def blind_transfer(self, tid):
+        self.logger.info("Blind transfer %s dialing out with offer." % (tid,))
+        t = self.transfers_by_id.pop(tid)
+        leg_oid = t["leg_oid"]
+        action = t["action"]
+        self.spawn(leg_oid, dict(action, type="dial"))
         
-        if "refer_to" in src:
-            # blind transfer
-            self.logger.info("Blind transfer from leg %s to %s." % (leg_oid0, src["refer_to"]))
+        
+    def transfer_leg(self, leg_oid0, action):
+        if action["type"] != "transfer":
+            raise Exception("Not a transfer action!")
             
-            leg_oid0x = self.unlink_legs(leg_oid0)
-            self.legs_by_oid[leg_oid0x].do(dict(type="hangup"))
+        tid = action["transfer_id"]
+        t = self.transfers_by_id[tid]
+        
+        if t["type"] == "attended":
+            leg_oid1 = t.get("leg_oid")
             
-            action = dict(type="dial", call_info=call_info, ctx={}, src=dict(src, type="transfer"))
-            self.spawn(leg_oid0, action)
-        elif "attended_transfer" in src:
-            # attended transfer
-            tid = src["attended_transfer"]
-            
-            if tid not in self.attended_transfers_by_id:
-                self.attended_transfers_by_id[tid] = leg_oid0
+            if not leg_oid1:
+                t["leg_oid"] = leg_oid0
                 return
             
-            leg_oid1 = self.attended_transfers_by_id.pop(tid)
+            self.transfers_by_id.pop(tid)
             self.logger.info("Attended transfer %s between legs %s and %s." % (tid, leg_oid0, leg_oid1))
         
             leg_oid0x = self.unlink_legs(leg_oid0)
@@ -395,6 +408,26 @@ class Ground(Loggable):
         
             self.link_legs(leg_oid0, leg_oid1)
             # TODO: correct media, and ringing state!
+        elif t["type"] == "blind":
+            self.logger.info("Blind transfer %s from leg %s." % (tid, leg_oid0))
+            
+            leg_oid0x = self.unlink_legs(leg_oid0)
+            self.legs_by_oid[leg_oid0x].do(dict(type="hangup"))
+            
+            t["leg_oid"] = leg_oid0
+            t["action"] = action
+
+            if action.get("session"):
+                self.blind_transfer(tid)
+            else:
+                self.logger.info("Suspending blind transfer %s until a session is available." % tid)
+                self.blind_transfer_ids_by_leg_oid[leg_oid0] = tid
+            
+                query = dict(type="session", session=Session.make_query())
+                self.legs_by_oid[leg_oid0].do(query)
+            
+                # We'll continue when the transferred leg yields a session offer, and
+                # we realize it is not linked to anything yet, see self.forward.
         
 
     def select_hop_slot(self, next_uri):

@@ -160,6 +160,15 @@ class NetLeg(Leg):
         self.recved_plug = None
         
         
+    def __del__(self):
+        # TODO: it seems like sometimes the plug does not get uplugged, while the
+        # socket object is destroyed, then the Kernel will poll POLLNVAL events from
+        # this descriptor, and has to purge it from the poll set. So do this explicitly.
+        
+        if self.recved_plug:
+            self.recved_plug.unplug()
+            
+        
     def set_oid(self, oid):
         Leg.set_oid(self, oid)
         

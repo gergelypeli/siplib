@@ -5,10 +5,11 @@ import logging
 import logging.config
 import sys
 from weakref import proxy
+#from pprint import pformat
 
 from format import Addr, Uri, Nameaddr, Status, Hop, AbsoluteUri, CallInfo
 from party import PlannedEndpoint, PlannedRouting, Bridge, Routing
-from sdp import Sdp
+from sdp import Sdp, Session
 from registrar import RecordManager, Record
 from subscript import SubscriptionManager, MessageSummaryEventSource, DialogEventSource
 from util import setup_logging, my_exchandler, Oid
@@ -77,31 +78,64 @@ class TestEndpoint(PlannedEndpoint):
         assert action and action["type"] == action_type
         return action
         
+        
+    def add_media_leg(self, channel):
+        ctype = channel["type"]
+        mgw_affinity = channel.get("mgw_affinity")
+        mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
 
-    def update_session(self, offer):
-        if not offer.is_offer():
+        channel["mgw_affinity"] = mgw_sid
+        media_leg = self.make_media_leg("player")
+        media_leg.set_mgw(mgw_sid)
+        self.leg.add_media_leg(media_leg)
+    
+
+    def update_session(self, session):
+        if session.is_query():
+            self.logger.info("TestEndpoint received a session query.")
+            
+            offer = Session.make_offer(
+                attributes=[],
+                bandwidth=None,
+                channels=[ {
+                    'type': 'audio',
+                    'proto': 'RTP/AVP',
+                    'send': True,
+                    'recv': True,
+                    'attributes': [('ptime', '20')],
+                    'formats': [ {
+                        'clock': 8000, 'encoding': 'PCMA', 'encp': 1, 'fmtp': None
+                    }, {
+                        'clock': 8000, 'encoding': 'telephone-event', 'encp': 1, 'fmtp': '0-15'
+                    } ]
+                } ]
+            )
+            
+            return offer
+        elif session.is_offer():
+            self.logger.info("TestEndpoint received a session offer.")
+            
+            answer = session.flipped()
+        
+            for c in answer["channels"]:
+                c["formats"] = [ f for f in c["formats"] if f["encoding"] in ("PCMA", "telephone-event") ]
+                c["send"], c["recv"] = c["recv"], c["send"]
+
+            if not self.leg.media_legs:
+                self.add_media_leg(answer["channels"][0])
+        
+            return answer
+        elif session.is_accept():
+            self.logger.info("TestEndpoint received a session accept.")
+            
+            if not self.leg.media_legs:
+                self.add_media_leg(session["channels"][0])
+                
+            return None
+        elif session.is_reject():
+            self.logger.info("TestEndpoint received a session reject.")
+            
             raise Exception("Eiii...")
-            
-        answer = offer.flipped()
-        
-        for c in answer["channels"]:
-            c["formats"] = [ f for f in c["formats"] if f["encoding"] in ("PCMA", "telephone-event") ]
-
-        if not self.leg.media_legs:
-            answer_channel = answer["channels"][0]
-            ctype = answer_channel["type"]
-            mgw_affinity = answer_channel.get("mgw_affinity")
-            mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
-
-            answer_channel["mgw_affinity"] = mgw_sid
-            media_leg = self.make_media_leg("player")
-            media_leg.set_mgw(mgw_sid)
-            self.leg.add_media_leg(media_leg)
-        
-        for c in answer["channels"]:
-            c["send"], c["recv"] = c["recv"], c["send"]
-            
-        return answer
         
         
     def idle(self):
@@ -109,26 +143,31 @@ class TestEndpoint(PlannedEndpoint):
 
         while True:
             action = yield from self.wait_action()
+            type = action["type"]
+            self.logger.info("Got a %s while idle." % type)
             
-            if action["type"] == "session":
-                session = action["session"]
-                if session.is_offer():
-                    answer = self.update_session(session)
-                    self.forward(dict(type="session", session=answer))
-            elif action["type"] == "tone":
+            if type == "session":
+                session = self.update_session(action["session"])
+                if session:
+                    self.forward(dict(type="session", session=session))
+            elif type == "tone":
                 self.logger.info("Okay, got a tone %s, fading out..." % action["name"])
                 break
-            elif action["type"] == "transfer":
+            elif type == "hangup":
+                self.logger.info("Okay, got a hangup, fading out...")
+                break
+            elif type == "transfer":
                 self.logger.info("Got a transfer, being transferred...")
                 self.process_transfer(action)
             else:
-                self.logger.debug("Don't know what to do with %s, continuing..." % action["type"])
+                self.logger.critical("Don't know what to do with %s, continuing..." % type)
         
         if self.leg.media_legs:
             self.leg.media_legs[0].play(volume=0, fade=3)
             yield from self.sleep(3)
             
-        self.forward(dict(type="hangup"))
+        if type != "hangup":
+            self.forward(dict(type="hangup"))
 
 
 class UnreachableEndpoint(TestEndpoint):
@@ -444,16 +483,16 @@ class TestLine(Bridge):
             
     def process_leg_transfer(self, li, action):
         if not self.is_outgoing and li > 0:
-            src = action["src"]
-            src["xfr_addr"] = self.addr
-            src["xfr_username"] = self.username
-            src["xfr_name"] = "Mr Transfer"
+            #src = action["src"]
+            #src["xfr_addr"] = self.addr
+            #src["xfr_username"] = self.username
+            #src["xfr_name"] = "Mr Transfer"
             self.forward(0, action)
         elif self.is_outgoing and li == 0:
-            src = action["src"]
-            src["xfr_addr"] = self.addr
-            src["xfr_username"] = self.username
-            src["xfr_name"] = "Mr Transfer"
+            #src = action["src"]
+            #src["xfr_addr"] = self.addr
+            #src["xfr_username"] = self.username
+            #src["xfr_name"] = "Mr Transfer"
             self.forward(max(self.legs.keys()), action)
         else:
             Bridge.process_leg_transfer(self, li, action)
@@ -544,15 +583,15 @@ def mkctx(src):
             dst_username=src["to"].uri.username,
             dst_name=src["to"].name
         )
-    elif src["type"] == "transfer":
-        return dict(
-            src_addr=src["xfr_addr"],
-            src_username=src["xfr_username"],
-            src_name=src["xfr_name"],
-            dst_addr=src["refer_to"].uri.addr,
-            dst_username=src["refer_to"].uri.username,
-            dst_name=src["refer_to"].name
-        )
+#    elif src["type"] == "transfer":
+#        return dict(
+#            src_addr=src["xfr_addr"],
+#            src_username=src["xfr_username"],
+#            src_name=src["xfr_name"],
+#            dst_addr=src["refer_to"].uri.addr,
+#            dst_username=src["refer_to"].uri.username,
+#            dst_name=src["refer_to"].name
+#        )
     else:
         raise Exception("Unknown src type: %s!" % src["type"])
     

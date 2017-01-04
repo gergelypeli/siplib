@@ -519,7 +519,12 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
                 if not replaces:
                     self.logger.info("Blind transfer to %s." % (refer_to,))
                     other = None
-                    src = dict(refer_to=refer_to)
+                    tid = self.ground.make_transfer("blind")
+                    src = {
+                        'type': "sip",
+                        'from': msg["from"],
+                        'to': refer_to
+                    }
                 else:
                     td = TargetDialog.parse(Parser(replaces))
                     
@@ -538,8 +543,8 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
                         return
                         
                     self.logger.info("Attended transfer to SIP endpoint %s." % local_tag)
-                    tid = self.ground.make_attended_transfer()
-                    src = dict(attended_transfer=tid)
+                    tid = self.ground.make_transfer("attended")
+                    src = None
                     
                 refer_sub = "false" if msg.get("refer_sub") == "false" else "true"
                 self.send_response(dict(status=Status(200), refer_sub=refer_sub), msg)
@@ -555,12 +560,17 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
                 
                     self.send_request(notify)
 
-                if other:
-                    action = other.make_action(msg, type="transfer", call_info=other.call_info, src=src)
+                if not other:
+                    # blind
+                    action = self.make_action(msg, type="transfer", transfer_id=tid, call_info=self.call_info, ctx={}, src=src)
+                    self.forward(action)
+                else:
+                    # attended
+                    action = other.make_action(msg, type="transfer", transfer_id=tid)
                     other.forward(action)
 
-                action = self.make_action(msg, type="transfer", call_info=self.call_info, src=src)
-                self.forward(action)
+                    action = self.make_action(msg, type="transfer", transfer_id=tid)
+                    self.forward(action)
 
                 return
             elif method == "NOTIFY":

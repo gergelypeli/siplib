@@ -258,6 +258,12 @@ class Kernel(Loggable):
 
             if event & select.POLLOUT:
                 self.slots_by_key[(fd, True)].zap()
+                
+            if event & ~(select.POLLIN | select.POLLOUT):
+                self.logger.error("Unexpected file descriptor event for fd %d, purging slot!" % fd)
+                # Keep the Slot object, even registered, because it should eventually be
+                # destroyed and unregistered then.
+                self.poll.unregister(fd)
 
         while self.time_heap:
             key = self.get_earliest_key()
@@ -495,7 +501,6 @@ def loop():
             scheduled_tasks = collections.OrderedDict()
         
             for task in tasks:
-                #kernel.logger.debug("Running task...")
                 task()
         
         #kernel.logger.debug("Polling")
