@@ -10,7 +10,7 @@ from ground import Ground
 from registrar import RegistrationManager, RecordManager
 from subscript import SubscriptionManager
 from account import AccountManager
-from util import Loggable
+from log import Loggable
 from mgc import Controller
 
 

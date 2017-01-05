@@ -2,7 +2,7 @@ import datetime
 
 from format import Status
 from transactions import make_simple_response
-from util import Loggable
+from log import Loggable
 import zap
 
 

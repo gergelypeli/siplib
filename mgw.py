@@ -2,8 +2,8 @@ import socket
 from weakref import ref, proxy, WeakValueDictionary
 
 from rtp import read_wav, write_wav, RtpPlayer, RtpRecorder, RtpBuilder, RtpParser, DtmfExtractor, DtmfInjector, Format
-from msgp import MsgpPeer  # MsgpServer
-from util import Loggable
+from msgp import MsgpPeer
+from log import Loggable
 import zap
 
 class Error(Exception): pass

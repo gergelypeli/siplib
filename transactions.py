@@ -1,7 +1,7 @@
 import uuid
 import datetime
 from weakref import proxy
-from util import Loggable
+from log import Loggable
 
 from format import Via, Status, make_simple_response, make_ack, make_virtual_response, make_timeout_nak, make_timeout_response, is_virtual_response
 import zap
@@ -48,9 +48,6 @@ import zap
 # sending the ACK should destroy the sent INVITE, even if keeping its branch
 
 
-BRANCH_MAGIC = "z9hG4bK"
-
-
 class Error(Exception): pass
 
 
@@ -66,7 +63,7 @@ def identify(params):
 
 
 def generate_branch():
-    return BRANCH_MAGIC + uuid.uuid4().hex[:8]
+    return Via.BRANCH_MAGIC + uuid.uuid4().hex[:8]
 
     
 class Transaction:

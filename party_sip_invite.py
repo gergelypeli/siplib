@@ -1,6 +1,6 @@
 from format import Status, Rack, make_virtual_response
 from sdp import add_sdp, get_sdp
-from util import Loggable
+from log import Loggable
 import zap
 
 

@@ -3,7 +3,7 @@ import wave
 import collections
 
 import g711
-from util import Loggable
+from log import Loggable
 import zap
 
 

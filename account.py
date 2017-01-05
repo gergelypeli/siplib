@@ -1,8 +1,9 @@
 from weakref import proxy
 import uuid
 import hashlib
+
 from format import Auth, WwwAuth
-from util import Loggable
+from log import Loggable
 
 # Note: ha1 = md5("authname:realm:password")
 

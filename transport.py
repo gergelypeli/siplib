@@ -2,7 +2,7 @@ import socket
 
 from async_net import TcpReconnector, TcpListener, HttpLikeStream
 from format import Hop, Addr, parse_structured_message, print_structured_message, SipMessage
-from util import Loggable
+from log import Loggable
 import zap
 import resolver
 

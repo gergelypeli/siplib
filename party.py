@@ -5,7 +5,6 @@ from format import Status
 import zap
 
 
-
 class Party(GroundDweller):
     def __init__(self):
         GroundDweller.__init__(self)

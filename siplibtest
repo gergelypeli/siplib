@@ -12,7 +12,7 @@ from party import PlannedEndpoint, PlannedRouting, Bridge, Routing
 from sdp import Session
 from registrar import RecordManager, Record
 from subscript import SubscriptionManager, MessageSummaryEventSource, DialogEventSource
-from util import setup_logging, my_exchandler, Oid
+from log import setup_logging, log_exception, Oid
 from mgw import MediaGateway
 from mgc import Controller  #, PlayerMediaLeg  #, EchoMediaLeg
 from switch import Switch
@@ -782,7 +782,7 @@ def main():
         zap.loop()
     except Exception:
         logging.critical("Crashed!")
-        my_exchandler(*sys.exc_info())
+        log_exception(*sys.exc_info())
     else:
         logging.critical("Shutting down.")
     finally:

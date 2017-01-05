@@ -2,7 +2,7 @@ import socket
 import multiprocessing
 
 import zap
-from util import Loggable, Oid
+from log import Loggable, Oid
 
 
 class Resolver(Loggable):
@@ -57,7 +57,11 @@ class Resolver(Loggable):
 
     def finish(self):
         hostname, address = self.parent_pipe.recv()
-        self.logger.debug("Hostname '%s' was resolved to '%s'." % (hostname, address))
+        
+        if address:
+            self.logger.debug("Hostname '%s' was resolved to '%s'." % (hostname, address))
+        else:
+            self.logger.warning("Hostname '%s' couldn't be resolved." % (hostname,))
         
         slot = self.slots_by_hostname.pop(hostname)
         slot.zap(address)

@@ -1,7 +1,7 @@
 from weakref import proxy, ref
 
-from msgp import MsgpPeer  # MsgpClient
-from util import vacuum, Loggable
+from msgp import MsgpPeer
+from log import Loggable
 import zap
 
 
@@ -115,14 +115,16 @@ class PlayerMediaLeg(MediaLeg):
         
 
     def play(self, filename=None, format=None, volume=1, fade=0):  # TODO: rename to refresh?
-        new = vacuum(dict(
+        params = dict(
             filename=filename,
             format=format,
             volume=volume,
             fade=fade
-        ))
+        )
         
-        self.modify(new)
+        params = { k: v for k, v in params.items() if v is not None }
+        
+        self.modify(params)
 
 
 class NetMediaLeg(MediaLeg):

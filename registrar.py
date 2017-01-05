@@ -5,7 +5,8 @@ from weakref import proxy, WeakValueDictionary
 
 from format import Nameaddr, Status, Uri
 from transactions import make_simple_response
-from util import Loggable
+from log import Loggable
+
 
 MAXFWD = 50
 

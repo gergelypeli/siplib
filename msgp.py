@@ -4,10 +4,9 @@ import collections
 import datetime
 import socket
 import errno
-#import types
 
 from async_net import TcpReconnector, TcpListener
-from util import Loggable
+from log import Loggable
 from format import Addr
 import zap
 

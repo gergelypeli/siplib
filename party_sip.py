@@ -4,7 +4,7 @@ from format import Status, TargetDialog, Parser
 from party import Endpoint
 from party_sip_helpers import InviteHelper, UpdateHelper, SessionHelper
 from sdp import Session
-from util import Loggable
+from log import Loggable
 
 import zap
 

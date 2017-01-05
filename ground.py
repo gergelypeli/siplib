@@ -1,7 +1,7 @@
 from weakref import proxy, WeakValueDictionary
 
 from sdp import Session
-from util import Loggable
+from log import Loggable
 
 
 # FIXME: currently we can't tell how many channels do we have to deal with

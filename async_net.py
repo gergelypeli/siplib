@@ -1,10 +1,9 @@
 import socket
 import errno
-#import logging
 import os
 
 import zap
-from util import Loggable
+from log import Loggable
 
 
 __all__ = [

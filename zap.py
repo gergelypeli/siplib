@@ -5,7 +5,7 @@ import datetime
 import collections
 import sys
 
-from util import Loggable, Oid
+from log import Loggable, Oid
 
 
 class Plug:
