@@ -8,7 +8,7 @@ from transactions import make_simple_response
 from log import Loggable
 
 
-MAXFWD = 50
+MAX_FORWARDS = 20
 
 class Error(Exception):
     pass
@@ -335,7 +335,7 @@ class Registration(object):
             "is_response": False,
             "call_id": self.call_id,
             "cseq": self.cseq,
-            "maxfwd": MAXFWD,
+            "max_forwards": MAX_FORWARDS,
             "hop": self.hop,
             "user_params": user_params.copy()
         }

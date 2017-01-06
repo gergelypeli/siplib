@@ -278,7 +278,7 @@ class SubscriptionManager(Loggable):
         if params["method"] != "SUBSCRIBE":
             raise Exception("SubscriptionManager has nothing to do with this request!")
         
-        key = self.identify_event_source(params) or (None, None)
+        key = self.identify_event_source(params)
         
         if not key:
             self.logger.warning("Rejecting subscription for unidentifiable event source!")
@@ -287,7 +287,7 @@ class SubscriptionManager(Loggable):
         
         es = self.event_sources_by_key.get(key)
         if not es:
-            self.logger.warning("Rejecting subscription for nonexistent event source!")
+            self.logger.warning("Rejecting subscription for nonexistent event source: %s" % (key,))
             self.reject_request(params, Status(404))
             return
             

@@ -31,6 +31,7 @@ NUMBER_A_LOCAL_CALLEE = "250"
 NUMBER_A_LOCAL_UNREACHABLE = "251"
 NUMBER_A_LOCAL_REJECTING = "252"
 NUMBER_A_LOCAL_RINGING = "253"
+NUMBER_A_SERVICE_VOICEMAIL = "260"
 
 NUMBER_B_PREFIX = "3"
 NUMBER_B_LOCAL_CALLEE = "350"
@@ -328,10 +329,7 @@ class BusylampEventSource(DialogEventSource):
         self.set_entity(params["entity"])
 
         self.calls_by_number = {}
-        #self.call_state = None
-        
         self.state = 0
-        #zap.time_slot(30, True).plug(self.fake)
 
         return self.entity
         
@@ -344,13 +342,6 @@ class BusylampEventSource(DialogEventSource):
             
         self.logger.info("%s: %s" % (self.entity, self.calls_by_number))
         
-        #if (False, False) in self.calls_by_number.values():
-        #    self.call_state = False
-        #elif self.calls_by_number:
-        #    self.call_state = True
-        #else:
-        #    self.call_state = None
-            
         self.notify_all()
             
         
@@ -361,22 +352,15 @@ class BusylampEventSource(DialogEventSource):
         
     def get_dialog_state(self):
         return self.calls_by_number
-        
-        #if self.state % 3 == 0:
-        #    return dict()
-        #elif self.state % 3 == 1:
-        #    return dict(one=dict(is_outgoing=False, is_confirmed=False))
-        #else:
-        #    return dict(one=dict(is_outgoing=False, is_confirmed=True))
             
 
 class TestSubscriptionManager(SubscriptionManager):
     def identify_event_source(self, params):
         event = params["event"]
-        from_uri = params["from"].uri._replace(params={})
-        to_uri = params["to"].uri._replace(params={})
+        from_uri = params["from"].uri
+        to_uri = params["to"].uri
         
-        if event == "message-summary" and to_uri.username == "phonebox":
+        if event == "message-summary" and to_uri.username == NUMBER_A_SERVICE_VOICEMAIL:
             return "voicemail", from_uri.username
             
         if event == "dialog":
@@ -395,12 +379,10 @@ class TestSubscriptionManager(SubscriptionManager):
 
 
 class TestController(Controller):
-    def __init__(self, ports):
-        Controller.__init__(self)
-        
+    def start(self, addr_set):
         # Must use IP4 addresses or FQDN in SDP, so let's go with IP4
         # Media host may be different from the signaling host
-        self.media_addresses = set(Addr(MEDIA_HOST, port).resolved() for port in ports)
+        self.media_addresses = addr_set  #set(Addr(MEDIA_HOST, port).resolved() for port in ports)
         
     
     def allocate_media_address(self, mgw_sid):
@@ -431,8 +413,6 @@ class TestLine(Bridge):
         
     def process_dial(self, action):
         ctx = action["ctx"]
-        #self.addr = ctx.pop("line_addr", None)
-        #self.username = ctx.pop("line_username", None)
         
         src_username = ctx["src_username"]
         src_addr = ctx["src_addr"]
@@ -499,13 +479,10 @@ class TestLine(Bridge):
     
 
 class TestSwitch(Switch):
-    def __init__(self, local_addr, mgw_addr, media_ports):
-        local_addr.assert_resolved()
-        mgw_addr.assert_resolved()
-        
+    def __init__(self):
         record_manager = TestRecordManager(proxy(self))
         subman = TestSubscriptionManager(proxy(self))
-        mgc = TestController(media_ports)
+        mgc = TestController()
 
         Switch.__init__(
             self,
@@ -513,18 +490,19 @@ class TestSwitch(Switch):
             subscription_manager=subman,
             dialog_manager=None, mgc=mgc, account_manager=None
         )
-        
-        self.local_addr = local_addr
-        self.mgw_addr = mgw_addr
 
 
-    def start(self):
-        self.mgc.add_mgw_addr(self.mgw_addr)
+    def start(self, local_addr, mgw_addr, media_addrs):
+        local_addr.assert_resolved()
+        mgw_addr.assert_resolved()
+
+        self.mgc.start(media_addrs)
+        self.mgc.add_mgw_addr(mgw_addr)
         
-        hop = Hop("UDP", "eth0", self.local_addr, None)
+        hop = Hop("UDP", "eth0", local_addr, None)
         self.transport_manager.add_hop(hop)
         
-        hop = Hop("TCP", "eth0", self.local_addr, None)
+        hop = Hop("TCP", "eth0", local_addr, None)
         self.transport_manager.add_hop(hop)
 
 
@@ -621,8 +599,8 @@ class SwitchA(TestSwitch):
             self.logger.error("Not found: %s" % number)
             
 
-    def start(self):
-        TestSwitch.start(self)
+    def start(self, local_addr, mgw_addr, media_addrs):
+        TestSwitch.start(self, local_addr, mgw_addr, media_addrs)
         
         # CALLEE lives on switch-b, but registers here to take calls from here
         remote_callee_aor = Uri(Addr(A_DOMAIN), NUMBER_A_REMOTE_CALLEE)
@@ -711,8 +689,8 @@ class SwitchB(TestSwitch):
             self.logger.error("Not found: %s" % dst_username)
             
             
-    def start(self):
-        TestSwitch.start(self)
+    def start(self, local_addr, mgw_addr, media_addrs):
+        TestSwitch.start(self, local_addr, mgw_addr, media_addrs)
         
         #phone_uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
         #self.add_record_account(phone_uri, A_AUTHNAME, A_HA1, Record.AUTH_IF_UNREGISTERED)
@@ -768,15 +746,17 @@ def main():
     mgw.set_oid(Oid("mgw"))
     mgw.set_name(Oid("the-mgw"))
 
-    switch_a = SwitchA(A_ADDR.resolved(), MGW_ADDR.resolved(), range(30000, 30020, 2))
+    switch_a = SwitchA()
     switch_a.set_oid(Oid().add("switch", "a"))
     switch_a.set_name("switch-a")
-    switch_a.start()
+    media_addrs = { Addr(MEDIA_HOST, port).resolved() for port in range(30000, 30020, 2) }
+    switch_a.start(A_ADDR.resolved(), MGW_ADDR.resolved(), media_addrs)
     
-    switch_b = SwitchB(B_ADDR.resolved(), MGW_ADDR.resolved(), range(40000, 40020, 2))
+    switch_b = SwitchB()
     switch_b.set_oid(Oid().add("switch", "b"))
     switch_b.set_name("switch-b")
-    switch_b.start()
+    media_addrs = { Addr(MEDIA_HOST, port).resolved() for port in range(40000, 40020, 2) }
+    switch_b.start(B_ADDR.resolved(), MGW_ADDR.resolved(), media_addrs)
 
     try:
         zap.loop()

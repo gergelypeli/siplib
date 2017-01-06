@@ -764,7 +764,7 @@ def print_structured_message(params):
             y = "%d %s" % (x, params["method"])
         elif field in ("www_authenticate", "authorization", "rack"):  # FIXME: separate
             y = x.print()
-        elif field in ("rseq", "expires"):
+        elif field in ("rseq", "expires", "max_forwards"):
             y = "%d" % x
         elif field in ("contact", "route"):
             y = [ f.print() for f in x ]
@@ -867,7 +867,7 @@ def parse_structured_message(message):
                     raise FormatError("Mismatching method in CSeq field: %r vs %r" % (p["method"], method))
             else:
                 p["method"] = method  # Necessary for CANCEL responses
-        elif field in ("rseq", "expires"):
+        elif field in ("rseq", "expires", "max_forwards"):
             y = int(x)  # TODO
         elif field == "rack":
             y = Rack.parse(Parser(x))

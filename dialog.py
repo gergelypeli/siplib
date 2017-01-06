@@ -6,7 +6,7 @@ from log import Loggable
 import zap
 
 
-MAXFWD = 50
+MAX_FORWARDS = 20
 
 class Error(Exception):
     pass
@@ -166,7 +166,7 @@ class Dialog(Loggable):
             "to": self.remote_nameaddr,
             "call_id": self.call_id,
             "cseq": cseq,
-            "maxfwd": MAXFWD,
+            "max_forwards": MAX_FORWARDS,
             "hop": self.hop,
             "user_params": user_params.copy()  # save original for auth retries
         }
