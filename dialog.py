@@ -279,7 +279,8 @@ class Dialog(Loggable):
                     self.peer_contact = peer_contact
         elif status.code == 401:
             # Let's try authentication! TODO: 407, too!
-            auth = self.dialog_manager.provide_auth(params, related_request)
+            account = self.registration_manager.get_remote_account(params["to"].uri)
+            auth = account.provide_auth(params, related_request) if account else None
                 
             if auth:
                 # Retrying this request is a bit tricky, because our owner must
@@ -339,8 +340,8 @@ class DialogManager(Loggable):
         self.dialogs_by_local_tag = WeakValueDictionary()
 
         
-    def provide_auth(self, params, related_request):
-        return self.switch.provide_auth(params, related_request)
+    def get_remote_account(self, uri):
+        return self.switch.get_remote_account(uri)
         
         
     def transmit(self, params, related_params=None):

@@ -162,7 +162,7 @@ class Record(Loggable):
 
 
     def make_response(self, user_params, related_request):
-        dialog_params = {
+        nondialog_params = {
             "is_response": True,
             "from": related_request["from"],
             "to": related_request["to"].tagged(generate_tag()),
@@ -172,7 +172,7 @@ class Record(Loggable):
             "hop": related_request["hop"]
         }
 
-        return safe_update(user_params, dialog_params)
+        return safe_update(user_params, nondialog_params)
 
 
     def send_response(self, user_params, related_request):
@@ -348,7 +348,8 @@ class Registration(object):
         
         if status.code == 401:
             # Let's try authentication! TODO: 407, too!
-            auth = self.registration_manager.provide_auth(params, related_request)
+            account = self.registration_manager.get_remote_account(params["to"].uri)
+            auth = account.provide_auth(params, related_request) if account else None
                 
             if auth:
                 user_params = related_request["user_params"]
@@ -385,8 +386,8 @@ class RegistrationManager(Loggable):
         self.registrations_by_id = {}
         
         
-    def provide_auth(self, params, related_request):
-        return self.switch.provide_auth(params, related_request)
+    def get_remote_account(self, uri):
+        return self.switch.get_remote_account(uri)
         
 
     def transmit(self, params, related_params=None):

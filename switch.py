@@ -79,8 +79,8 @@ class Switch(Loggable):
         return self.transport_manager.select_hop_slot(next_uri)
         
 
-    def provide_auth(self, response, request):
-        return self.account_manager.provide_auth(response, request)
+    def get_remote_account(self, uri):
+        return self.account_manager.get_remote_account(uri)
         
         
     # FIXME: is this still needed?
@@ -163,7 +163,7 @@ class Switch(Loggable):
         if sure:
             return False
             
-        account = self.account_manager.get_account(authname)
+        account = self.account_manager.get_local_account(authname)
         if not account:
             self.logger.error("Account %s referred, but not found!" % authname)
             self.reject_request(params, 500)
@@ -178,16 +178,15 @@ class Switch(Loggable):
             # FIXME: this is only for debugging
             self.logger.debug("Accepting request because we're lazy to authenticate a PRACK")
             return False
-            
-        challenge = account.challenge_request(params)
 
-        if challenge:
+        if not account.check_auth(params):
             self.logger.debug("Challenging request without proper authentication")
+            challenge = account.require_auth(params)
             self.challenge_request(params, challenge)
             return True
-        else:
-            self.logger.debug("Accepting request with proper authentication")
-            return False
+            
+        self.logger.debug("Accepting request with proper authentication")
+        return False
     
 
     def process_request(self, params, related_params):

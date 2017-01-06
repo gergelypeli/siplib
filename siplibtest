@@ -492,7 +492,9 @@ class TestSwitch(Switch):
         )
 
 
-    def start(self, local_addr, mgw_addr, media_addrs):
+    def start(self, realm, local_addr, mgw_addr, media_addrs):
+        self.realm = realm
+        
         local_addr.assert_resolved()
         mgw_addr.assert_resolved()
 
@@ -528,8 +530,8 @@ class TestSwitch(Switch):
 
 
     def add_record_account(self, uri, authname, ha1, policy, hops=[]):
-        if not self.account_manager.get_account(authname):
-            self.account_manager.add_account(authname, ha1)
+        if not self.account_manager.get_local_account(authname):
+            self.account_manager.add_local_account(authname, ha1, self.realm)
             
         record = self.record_manager.add_record(uri, authname, policy)
         
@@ -599,8 +601,8 @@ class SwitchA(TestSwitch):
             self.logger.error("Not found: %s" % number)
             
 
-    def start(self, local_addr, mgw_addr, media_addrs):
-        TestSwitch.start(self, local_addr, mgw_addr, media_addrs)
+    def start(self, realm, local_addr, mgw_addr, media_addrs):
+        TestSwitch.start(self, realm, local_addr, mgw_addr, media_addrs)
         
         # CALLEE lives on switch-b, but registers here to take calls from here
         remote_callee_aor = Uri(Addr(A_DOMAIN), NUMBER_A_REMOTE_CALLEE)
@@ -616,8 +618,8 @@ class SwitchA(TestSwitch):
         hop2 = Hop('TCP', 'eth0', A_ADDR.resolved(), B_ADDR._replace(port=None).resolved())
         self.add_record_account(b_aor, B_AUTHNAME, B_HA1, Record.AUTH_BY_HOP, [ hop1, hop2 ])
         
-        # Allow us to register at other places
-        self.account_manager.set_our_credentials(A_AUTHNAME, A_HA1)
+        # Allow us to authenticate requests sent to B
+        self.account_manager.add_remote_account(Uri(Addr(B_DOMAIN), None), A_AUTHNAME, A_HA1)
 
         # Add a voicemail box to monitor
         self.subscription_manager.add_event_source("voicemail", dict(mailbox="201"))
@@ -689,8 +691,8 @@ class SwitchB(TestSwitch):
             self.logger.error("Not found: %s" % dst_username)
             
             
-    def start(self, local_addr, mgw_addr, media_addrs):
-        TestSwitch.start(self, local_addr, mgw_addr, media_addrs)
+    def start(self, realm, local_addr, mgw_addr, media_addrs):
+        TestSwitch.start(self, realm, local_addr, mgw_addr, media_addrs)
         
         #phone_uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
         #self.add_record_account(phone_uri, A_AUTHNAME, A_HA1, Record.AUTH_IF_UNREGISTERED)
@@ -701,7 +703,8 @@ class SwitchB(TestSwitch):
         a_aor = Uri(Addr(A_DOMAIN), None)
         self.add_record_account(a_aor, A_AUTHNAME, A_HA1, Record.AUTH_ALWAYS)
         
-        self.account_manager.set_our_credentials(B_AUTHNAME, B_HA1)
+        # Allow us to authenticate ourselves at A
+        self.account_manager.add_remote_account(Uri(Addr(A_DOMAIN), None), B_AUTHNAME, B_HA1)
 
         zap.time_slot(1).plug(self.reregister_snom, addr=SNOM_WEB, line=1)
 
@@ -750,13 +753,13 @@ def main():
     switch_a.set_oid(Oid().add("switch", "a"))
     switch_a.set_name("switch-a")
     media_addrs = { Addr(MEDIA_HOST, port).resolved() for port in range(30000, 30020, 2) }
-    switch_a.start(A_ADDR.resolved(), MGW_ADDR.resolved(), media_addrs)
+    switch_a.start(A_DOMAIN, A_ADDR.resolved(), MGW_ADDR.resolved(), media_addrs)
     
     switch_b = SwitchB()
     switch_b.set_oid(Oid().add("switch", "b"))
     switch_b.set_name("switch-b")
     media_addrs = { Addr(MEDIA_HOST, port).resolved() for port in range(40000, 40020, 2) }
-    switch_b.start(B_ADDR.resolved(), MGW_ADDR.resolved(), media_addrs)
+    switch_b.start(B_DOMAIN, B_ADDR.resolved(), MGW_ADDR.resolved(), media_addrs)
 
     try:
         zap.loop()

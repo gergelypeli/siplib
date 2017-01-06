@@ -477,7 +477,6 @@ class Auth(namedtuple("Auth",
 )):
     def __new__(cls, realm, nonce, username, uri, response, opaque=None, algorithm=None, qop=None, cnonce=None, nc=None):
         self = super().__new__(cls, realm, nonce, username, uri, response, opaque, algorithm, qop, cnonce, nc)
-        self.stale = False  # internally used attribute
         return self
 
 

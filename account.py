@@ -5,47 +5,43 @@ import hashlib
 from format import Auth, WwwAuth
 from log import Loggable
 
-# Note: ha1 = md5("authname:realm:password")
-
-
-def generate_nonce():
-    return uuid.uuid4().hex[:8]
-
-
-def md5(x):
-    return hashlib.md5(x.encode()).hexdigest()
-    
-
-def digest(method, uri, ha1, nonce, qop=None, cnonce=None, nc=None):
-    if not qop:
-        ha2 = md5("%s:%s" % (method, uri))
-        response = md5("%s:%s:%s" % (ha1, nonce, ha2))
-        return response
-    elif qop == "auth":
-        ha2 = md5("%s:%s" % (method, uri))
-        response = md5("%s:%s:%08x:%s:%s:%s" % (ha1, nonce, nc, cnonce, qop, ha2))
-        return response
-    else:
-        raise Exception("Don't know QOP %s!" % qop)
-        
-
 
 class Authority(Loggable):
-    def __init__(self):
+    def __init__(self, authname, ha1):
         Loggable.__init__(self)
 
+        self.authname = authname
+        self.ha1 = ha1
         self.nonces = set()
 
 
-    def get_realm(self, params):
-        return params["to"].uri.addr.host
-            
+    def generate_nonce(self):
+        return uuid.uuid4().hex[:8]
 
-    def check_digest_ha1(self, params, ha1):
-        method = params["method"]
-        uri = params["uri"].print()
-        auth = params.get("authorization")
+
+    def md5(self, x):
+        return hashlib.md5(x.encode()).hexdigest()
+    
+
+    def compute_ha1(self, realm, authname, password):
+        # Just a reminder
+        return self.md5("%s:%s:%s" % (authname, realm, password))
         
+
+    def compute_digest(self, method, uri, ha1, nonce, qop=None, cnonce=None, nc=None):
+        if not qop:
+            ha2 = self.md5("%s:%s" % (method, uri))
+            response = self.md5("%s:%s:%s" % (ha1, nonce, ha2))
+            return response
+        elif qop == "auth":
+            ha2 = self.md5("%s:%s" % (method, uri))
+            response = self.md5("%s:%s:%08x:%s:%s:%s" % (ha1, nonce, nc, cnonce, qop, ha2))
+            return response
+        else:
+            raise Exception("Don't know this quality of protection: %s!" % qop)
+        
+
+    def check_digest(self, method, auth, realm, ha1):
         if not auth:
             self.logger.debug("No Authorization header!")
             return False
@@ -54,18 +50,15 @@ class Authority(Loggable):
             self.logger.debug("No ha1!")
             return False
 
-        if auth.realm != self.get_realm(params):
+        if auth.realm != realm:
             self.logger.debug("Wrong realm!")
             return False
         
-        if auth.nonce not in self.nonces:
-            self.logger.debug("Wrong nonce!")
-            auth.stale = True
-            return False
-        
-        if auth.uri != uri:  # TODO: this can be more complex than this
-            self.logger.debug("Wrong uri")
-            return False
+        # FIXME: what shall we require? The RURI can be anything due to forwarding.
+        # And can be different than the To header, too.
+        #if auth.uri != uri:  # TODO: this can be more complex than this
+        #    self.logger.debug("Wrong uri")
+        #    return False
 
         if auth.qop != "auth":
             self.logger.debug("QOP is not auth!")
@@ -83,7 +76,7 @@ class Authority(Loggable):
             self.logger.debug("Nc not set!")
             return False
 
-        response = digest(method, uri, ha1, auth.nonce, auth.qop, auth.cnonce, auth.nc)
+        response = self.compute_digest(method, auth.uri, ha1, auth.nonce, auth.qop, auth.cnonce, auth.nc)
         
         if auth.response != response:
             self.logger.debug("Wrong response!")
@@ -93,59 +86,68 @@ class Authority(Loggable):
         return True
 
 
-    def get_digest_authname(self, params):
+
+class Account(Authority):
+    def __init__(self, manager, authname, ha1):
+        Authority.__init__(self, authname, ha1)
+        
+        self.manager = manager
+
+
+class LocalAccount(Account):
+    def __init__(self, manager, authname, ha1, realm):
+        Authority.__init__(self, authname, ha1)
+        
+        self.realm = realm
+        
+
+    def check_auth(self, params):
+        method = params["method"]
         auth = params.get("authorization")
         
-        return auth.username if auth else None
-        
-
-    def check_auth(self, params, creds):
-        cred_authname, cred_ha1 = creds
-    
-        authname = self.get_digest_authname(params)
-        if not authname:
-            self.logger.debug("No credentials in request")
-            return False
-            
-        if authname != cred_authname:
-            self.logger.debug("Wrong authname in request '%s'" % (authname,))
-            return False
-        
-        if not self.check_digest_ha1(params, cred_ha1):
-            self.logger.debug("Incorrect digest in request")
+        if not auth:
+            self.logger.debug("No credentials in request.")
             return False
 
-        self.logger.debug("Request authorized for '%s'" % (authname,))
+        if auth.nonce not in self.nonces:
+            self.logger.debug("Stale nonce in credentials, client should retry.")
+            return False
+        
+        if auth.username != self.authname:
+            self.logger.debug("Wrong authname in request '%s'!" % (auth.username,))
+            return False
+        
+        if not self.check_digest(method, auth, self.realm, self.ha1):
+            self.logger.debug("Incorrect digest in request!")
+            return False
+
+        self.logger.debug("Request authorized for '%s'." % (self.authname,))
         return True
 
 
-    def require_auth(self, params, creds):
-        # At this point we already decided the this request must be authorized
-        if params["method"] in ("CANCEL", "ACK", "NAK"):
-            raise Exception("Method %s can't be authenticated!" % params["method"])
-
-        ok = self.check_auth(params, creds)
-        if ok:
-            return None
-            
+    def require_auth(self, params):
         auth = params.get("authorization")
-        realm = self.get_realm(params)
-        stale = auth.stale if auth else False
-        nonce = generate_nonce()
+        stale = auth.nonce not in self.nonce if auth else False  # client should retry
+        nonce = self.generate_nonce()
         self.nonces.add(nonce)  # TODO: must clean these up
-        www = WwwAuth(realm, nonce, stale=stale, qop=[ "auth" ])
         
-        return { 'www_authenticate': www }
+        www_auth = WwwAuth(self.realm, nonce, stale=stale, qop=[ "auth" ])
+        return { 'www_authenticate': www_auth }
 
 
-    def provide_auth(self, response, request, creds):
+class RemoteAccount(Account):
+    def provide_auth(self, response, request):
         www_auth = response.get("www_authenticate")
+        auth = request.get("authorization")
+        
         if not www_auth:
-            self.logger.debug("No known challenge found, sorry!")
+            self.logger.debug("No challenge found in response, giving up!")
             return None
             
-        if "authorization" in request and not www_auth.stale:
-            self.logger.debug("Already tried and not even stale, sorry!")
+        if www_auth.stale:
+            self.logger.debug("Our nonce was stale, retrying with a fresh one.")
+        elif auth:
+            self.logger.debug("Already tried this with a fresh nonce, giving up!")
             return None
 
         if "auth" not in www_auth.qop:
@@ -156,71 +158,64 @@ class Authority(Loggable):
             self.logger.debug("Digest algorithm not MD5!")
             return None
 
-        authname, ha1 = creds
-        
         method = request["method"]
-        uri = request["uri"].print()
+        # Since the other and will have no clue how the RURI changed during the routing,
+        # it should only use the URI we put in this header for computations.
+        uri = request["to"].uri.print()
         realm = www_auth.realm
         nonce = www_auth.nonce
         opaque = www_auth.opaque
         qop = "auth"
-        cnonce = generate_nonce()
+        cnonce = self.generate_nonce()
         nc = 1  # we don't reuse server nonce-s
 
-        response = digest(method, uri, ha1, nonce, qop, cnonce, nc)
-        auth = Auth(realm, nonce, authname, uri, response, opaque=opaque, qop=qop, cnonce=cnonce, nc=nc)
+        response = self.compute_digest(method, uri, self.ha1, nonce, qop, cnonce, nc)
+        auth = Auth(realm, nonce, self.authname, uri, response, opaque=opaque, qop=qop, cnonce=cnonce, nc=nc)
         return { 'authorization':  auth }
-
-
-class Account:
-    def __init__(self, manager, authname, ha1):
-        self.manager = manager
-        self.authname = authname
-        self.ha1 = ha1
-        
-        
-    def challenge_request(self, params):
-        if not self.ha1:
-            raise Exception("Can't challenge without ha1!")
-            
-        creds = self.authname, self.ha1
-        return self.manager.authority.require_auth(params, creds)
         
 
 class AccountManager(Loggable):
     def __init__(self):
         Loggable.__init__(self)
 
-        self.authority = Authority()
-        self.accounts_by_authname = {}
-        self.our_credentials = None  # TODO: improve!
+        self.local_accounts_by_authname = {}
+        self.remote_accounts_by_aor = {}
 
 
-    def set_oid(self, oid):
-        Loggable.set_oid(self, oid)
-        
-        self.authority.set_oid(oid.add("authority"))
-        
-        
-    def add_account(self, authname, ha1):
-        if authname in self.accounts_by_authname:
-            raise Exception("Account already exists: %s!" % (authname,))
+    def add_local_account(self, authname, ha1, realm):
+        if authname in self.local_accounts_by_authname:
+            raise Exception("Local account already exists: %s!" % (authname,))
             
-        self.logger.info("Adding account %s." % (authname,))
-        account = Account(proxy(self), authname, ha1)
-        self.accounts_by_authname[authname] = account
+        self.logger.info("Adding local account %s@%s." % (authname, realm))
+        account = LocalAccount(proxy(self), authname, ha1, realm)
+        account.set_oid(self.oid.add("local", authname))
+        self.local_accounts_by_authname[authname] = account
         
         return proxy(account)
 
 
-    def get_account(self, authname):
-        return self.accounts_by_authname.get(authname)
+    def get_local_account(self, authname):
+        return self.local_accounts_by_authname.get(authname)
         
 
-    def set_our_credentials(self, authname, ha1):
-        # TODO: eventually we'd need multiple accounts for different places
-        self.our_credentials = (authname, ha1)
+    def add_remote_account(self, aor, authname, ha1):
+        aor = aor.canonical_aor()
         
+        if aor in self.remote_accounts_by_aor:
+            raise Exception("Remote account for %s already exists: %s!" % (aor, authname))
+            
+        self.logger.info("Adding remote account for %s: %s" % (aor, authname,))
+        account = RemoteAccount(proxy(self), authname, ha1)
+        account.set_oid(self.oid.add("remote", str(aor)))
+        self.remote_accounts_by_aor[aor] = account
         
-    def provide_auth(self, response, request):
-        return self.authority.provide_auth(response, request, self.our_credentials)
+        return proxy(account)
+
+
+    def get_remote_account(self, uri):
+        for aor in self.remote_accounts_by_aor:
+            if aor.contains(uri):
+                return self.remote_accounts_by_aor[aor]
+
+        self.logger.warning("Couldn't find a remote account for %s!" % (uri,))
+        return None
