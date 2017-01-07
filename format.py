@@ -458,7 +458,7 @@ class WwwAuth(namedtuple("WwwAuth",
             'opaque="%s"' % self.opaque if self.opaque else None,
             'algorithm=%s' % self.algorithm if self.algorithm else None,
             'stale=true' if self.stale else None,
-            'qop="%s"' % ",".join(self.qop) if self.qop else None
+            'qop="%s"' % ", ".join(self.qop) if self.qop else None
         ]
         
         return 'Digest %s' % ",".join(c for c in components if c)
@@ -472,7 +472,7 @@ class WwwAuth(namedtuple("WwwAuth",
             params["stale"] = True if params["stale"].lower() == "true" else False
             
         if "qop" in params:
-            params["qop"] = params["qop"].split(",")
+            params["qop"] = [ x.strip() for x in params["qop"].split(",") ]
             
         return cls(**params)
         
