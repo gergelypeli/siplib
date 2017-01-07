@@ -1,7 +1,7 @@
 import uuid
 import datetime
 import collections
-from weakref import proxy, WeakValueDictionary
+from weakref import proxy
 
 from format import Nameaddr, Status, Uri
 from transactions import make_simple_response
@@ -31,14 +31,8 @@ def generate_tag():
     return uuid.uuid4().hex[:8]
 
 
-# Must be a class, because we need a weakref.proxy to it.
-class NondialogInfo:
-    def __init__(self, cseq):
-        self.cseq = cseq
-        
-
 UriHop = collections.namedtuple("UriHop", [ "uri", "hop" ])
-ContactInfo = collections.namedtuple("ContactInfo", [ "expiration", "nondialog_info" ])
+ContactInfo = collections.namedtuple("ContactInfo", [ "call_id", "cseq", "expiration" ])
 
 
 class LocalRecord(Loggable):
@@ -58,23 +52,71 @@ class LocalRecord(Loggable):
         self.auth_policy = auth_policy
 
         self.contact_infos_by_uri_hop = {}
-        self.nondialog_infos_by_call_id = WeakValueDictionary()
         
 
-    def add_contact(self, uri, hop, expiration, nondialog_info):
+    def add_contact(self, uri, hop, call_id, cseq, expiration):
         urihop = UriHop(uri, hop)
-        self.contact_infos_by_uri_hop[urihop] = ContactInfo(expiration, nondialog_info)
+        self.contact_infos_by_uri_hop[urihop] = ContactInfo(call_id, cseq, expiration)
         self.logger.info("Registered %s from %s via %s until %s." % (self.record_uri, uri, hop, expiration))
         
         
     def add_static_contact(self, uri, hop):
-        expiration = None
-        nondialog_info = None
         urihop = UriHop(uri, hop)
         
-        self.contact_infos_by_uri_hop[urihop] = ContactInfo(expiration, nondialog_info)
+        self.contact_infos_by_uri_hop[urihop] = ContactInfo(None, None, None)
         self.logger.info("Registered %s from %s via %s permanently." % (self.record_uri, uri, hop))
         
+
+    def recv_request(self, params):
+        now = datetime.datetime.now()
+        hop = params["hop"]
+        call_id = params["call_id"]
+        cseq = params["cseq"]
+        contact_nameaddrs = params["contact"]
+
+        # First check if all contacts can be updated
+        for contact_nameaddr in contact_nameaddrs:
+            uri = contact_nameaddr.uri
+            contact_info = self.contact_infos_by_uri_hop.get(UriHop(uri, hop))
+            
+            if contact_info and contact_info.call_id == call_id and contact_info.cseq >= cseq:
+                # The RFC suggests 500, but that's a bit weird
+                self.send_response(dict(status=Status(500, "Out of order request is not our fault")), params)
+                return
+
+        # Okay, update them all
+        # No contact is valid for just fetching the registrations
+        for contact_nameaddr in contact_nameaddrs:
+            uri = contact_nameaddr.uri
+            expires = contact_nameaddr.params.get("expires", params.get("expires"))
+            seconds_left = int(expires) if expires is not None else self.DEFAULT_EXPIRES
+            expiration = now + datetime.timedelta(seconds=seconds_left)
+            
+            self.add_contact(uri, hop, call_id, cseq, expiration)
+        
+        fetched = []
+        for urihop, contact_info in self.contact_infos_by_uri_hop.items():
+            seconds_left = int((contact_info.expiration - now).total_seconds())
+            fetched.append(Nameaddr(uri=urihop.uri, params=dict(expires=str(seconds_left))))
+
+        self.send_response(dict(status=Status(200, "OK"), contact=fetched), params)
+
+
+    def send_response(self, user_params, related_request):
+        nondialog_params = {
+            "is_response": True,
+            "from": related_request["from"],
+            "to": related_request["to"].tagged(generate_tag()),
+            "call_id": related_request["call_id"],
+            "cseq": related_request["cseq"],
+            "method": related_request["method"],
+            "hop": related_request["hop"]
+        }
+
+        params = safe_update(user_params, nondialog_params)
+        
+        self.registrar.transmit(params, related_request)
+
 
     def get_contacts(self):
         return list(self.contact_infos_by_uri_hop.keys())
@@ -110,82 +152,8 @@ class LocalRecord(Loggable):
                 return None, True
         else:
             raise Exception("WTF?")
-
-
-    def process_updates(self, params):
-        # TODO: check authname!
-        now = datetime.datetime.now()
-        hop = params["hop"]
-        call_id = params["call_id"]
-        cseq = params["cseq"]
-        contact_nameaddrs = params["contact"]
-        
-        nondialog_info = NondialogInfo(cseq)
-        self.nondialog_infos_by_call_id[call_id] = nondialog_info
-        
-        # No contact is valid for just fetching the registrations
-        for contact_nameaddr in contact_nameaddrs:
-            uri = contact_nameaddr.uri
-            expires = contact_nameaddr.params.get("expires", params.get("expires"))
-            seconds_left = int(expires) if expires is not None else self.DEFAULT_EXPIRES
-            expiration = now + datetime.timedelta(seconds=seconds_left)
-            
-            self.add_contact(uri, hop, expiration, nondialog_info)
-        
-        fetched = []
-        for urihop, contact_info in self.contact_infos_by_uri_hop.items():
-            seconds_left = int((contact_info.expiration - now).total_seconds())
-            fetched.append(Nameaddr(uri=urihop.uri, params=dict(expires=str(seconds_left))))
-
-        self.send_response(dict(status=Status(200, "OK"), contact=fetched), params)
-
-
-    # REGISTER requests don't create a dialog. Even if we have to generate a To tag
-    # for each response, clients may generate a new From tag for every new request.
-    # Only the call id is kept, and the cseq is incremented. So we have these methods
-    # here that kinda resemble their counterparts in Dialog, but they're much simpler.
-    def take_request(self, params):
-        if params["is_response"]:
-            raise Error("Not a request!")
-
-        call_id = params["call_id"]
-        cseq = params["cseq"]
-
-        nondialog_info = self.nondialog_infos_by_call_id.get(call_id)
-
-        if nondialog_info and cseq <= nondialog_info.cseq:
-            # The RFC suggests 500, but that's a bit weird
-            self.send_response(dict(status=Status(500, "Lower CSeq Is Not Our Fault")), params)
-            return None
-
-        return params
-
-
-    def make_response(self, user_params, related_request):
-        nondialog_params = {
-            "is_response": True,
-            "from": related_request["from"],
-            "to": related_request["to"].tagged(generate_tag()),
-            "call_id": related_request["call_id"],
-            "cseq": related_request["cseq"],
-            "method": related_request["method"],
-            "hop": related_request["hop"]
-        }
-
-        return safe_update(user_params, nondialog_params)
-
-
-    def send_response(self, user_params, related_request):
-        params = self.make_response(user_params, related_request)
-        self.registrar.transmit(params, related_request)
         
         
-    def recv_request(self, msg):
-        params = self.take_request(msg)
-        if params:
-            self.process_updates(params)
-
-
 class RemoteRecord(Loggable):
     EXPIRES = 300
 
@@ -207,36 +175,24 @@ class RemoteRecord(Loggable):
         
         
     def refresh(self):
+        expires = self.EXPIRES
+        
         user_params = {
             'method': "REGISTER",
-            'uri': self.registrar_uri,
-            'from': Nameaddr(self.record_uri).tagged(self.local_tag),
-            'to': Nameaddr(self.record_uri),
-            'contact': [ Nameaddr(self.contact_uri, params=dict(expires=str(self.EXPIRES))) ]
+            'contact': [ Nameaddr(self.contact_uri, params=dict(expires=str(expires))) ]
         }
         
         self.send_request(user_params)
         
         
-    def process_response(self, params):
-        for contact_nameaddr in params["contact"]:
-            if contact_nameaddr.uri == self.contact_uri:
-                expires = contact_nameaddr.params.get("expires", params.get("expires"))
-                seconds_left = int(expires)
-                expiration = datetime.datetime.now() + datetime.timedelta(seconds=seconds_left)
-                self.logger.info("Registered at %s until %s" % (self.registrar_uri, expiration))
-                break
-        else:
-            self.logger.warning("Couldn't confirm my registration!")
-            
-        # TODO: reschedule!
-        
-        
-    def make_request(self, user_params):
+    def send_request(self, user_params):
         self.cseq += 1
 
         nondialog_params = {
             "is_response": False,
+            'uri': self.registrar_uri,
+            'from': Nameaddr(self.record_uri).tagged(self.local_tag),
+            'to': Nameaddr(self.record_uri),
             "call_id": self.call_id,
             "cseq": self.cseq,
             "max_forwards": MAX_FORWARDS,
@@ -244,10 +200,12 @@ class RemoteRecord(Loggable):
             "user_params": user_params.copy()
         }
 
-        return safe_update(user_params, nondialog_params)
+        params = safe_update(user_params, nondialog_params)
+
+        self.registrar.transmit(params, None)
 
 
-    def take_response(self, params, related_request):
+    def recv_response(self, params, related_request):
         status = params["status"]
         
         if status.code == 401:
@@ -264,22 +222,21 @@ class RemoteRecord(Loggable):
                 self.logger.debug("Trying authorization...")
                 #print("... with: %s" % related_request)
                 self.send_request(related_request)
-                return None
+                return
             else:
                 self.logger.debug("Couldn't authorize, being rejected!")
 
-        return params
-
-
-    def send_request(self, user_params):
-        params = self.make_request(user_params)
-        self.registrar.transmit(params, None)
-
-
-    def recv_response(self, msg, related_request):
-        params = self.take_response(msg, related_request)
-        if params:  # may have been retried
-            self.process_response(params)
+        for contact_nameaddr in params["contact"]:
+            if contact_nameaddr.uri == self.contact_uri:
+                expires = contact_nameaddr.params.get("expires", params.get("expires"))
+                seconds_left = int(expires)
+                expiration = datetime.datetime.now() + datetime.timedelta(seconds=seconds_left)
+                self.logger.info("Registered at %s until %s" % (self.registrar_uri, expiration))
+                break
+        else:
+            self.logger.warning("Couldn't confirm my registration!")
+            
+        # TODO: reschedule!
 
 
 class Registrar(Loggable):
@@ -398,6 +355,7 @@ class Registrar(Loggable):
         record = RemoteRecord(proxy(self), record_uri, registrar_uri, registrar_hop)
         record.set_oid(self.oid.add("remote", str(record_uri)))
         self.remote_records_by_uri[record_uri] = record
+        
         record.refresh()
         
         

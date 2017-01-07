@@ -10,7 +10,7 @@ from weakref import proxy
 from format import Addr, Uri, Nameaddr, Status, Hop, AbsoluteUri, CallInfo
 from party import PlannedEndpoint, PlannedRouting, Bridge, Routing
 from sdp import Session
-from registrar import Registrar, LocalRecord
+from registrar import LocalRecord
 from subscript import SubscriptionManager, MessageSummaryEventSource, DialogEventSource
 from log import setup_logging, log_exception, Oid
 from mgw import MediaGateway
