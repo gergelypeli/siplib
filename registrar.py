@@ -41,7 +41,7 @@ UriHop = collections.namedtuple("UriHop", [ "uri", "hop" ])
 ContactInfo = collections.namedtuple("ContactInfo", [ "expiration", "nondialog_info" ])
 
 
-class Record(Loggable):
+class LocalRecord(Loggable):
     AUTH_NEVER = "AUTH_NEVER"
     AUTH_ALWAYS = "AUTH_ALWAYS"
     AUTH_IF_UNREGISTERED = "AUTH_IF_UNREGISTERED"
@@ -49,10 +49,10 @@ class Record(Loggable):
 
     DEFAULT_EXPIRES = 3600
 
-    def __init__(self, record_manager, record_uri, authname, auth_policy):
+    def __init__(self, registrar, record_uri, authname, auth_policy):
         Loggable.__init__(self)
     
-        self.record_manager = record_manager
+        self.registrar = registrar
         self.record_uri = record_uri
         self.authname = authname
         self.auth_policy = auth_policy
@@ -177,7 +177,7 @@ class Record(Loggable):
 
     def send_response(self, user_params, related_request):
         params = self.make_response(user_params, related_request)
-        self.record_manager.transmit(params, related_request)
+        self.registrar.transmit(params, related_request)
         
         
     def recv_request(self, msg):
@@ -186,110 +186,15 @@ class Record(Loggable):
             self.process_updates(params)
 
 
-class RecordManager(Loggable):
-    def __init__(self, switch):
-        Loggable.__init__(self)
-
-        self.switch = switch
-        self.records_by_uri = {}
-        
-        
-    def reject_request(self, request, status):
-        response = make_simple_response(request, status)
-        self.transmit(response, request)
-
-
-    def add_record(self, record_uri, authname, auth_policy):
-        record_uri = record_uri.canonical_aor()
-        
-        if record_uri in self.records_by_uri:
-            self.logger.error("Record already added: '%s'" % (record_uri,))
-            return None
-        else:
-            self.logger.debug("Creating record: %s" % (record_uri,))
-            record = Record(proxy(self), record_uri, authname, auth_policy)
-            record.set_oid(self.oid.add("record", str(record_uri)))
-            self.records_by_uri[record_uri] = record
-            
-        return proxy(record)
-
-
-    def may_register(self, registering_uri, record_uri):
-        # Third party registrations not supported yet
-        # We'd need to know which account is allowed to register which
-        
-        return registering_uri.canonical_aor() == record_uri
-        
-        
-    def process_request(self, params):
-        if params["method"] != "REGISTER":
-            raise Error("RecordManager has nothing to do with this request!")
-        
-        registering_uri = params["from"].uri
-        record_uri = params["to"].uri.canonical_aor()
-        
-        if not self.may_register(registering_uri, record_uri):
-            self.reject_request(params, Status(403, "Forbidden"))
-            return
-        
-        record = self.records_by_uri.get(record_uri)
-        if not record:
-            self.logger.warning("Record not found: %s" % record_uri)
-            self.reject_request(params, Status(404))
-            return
-        
-        record.recv_request(params)
-        
-        
-    def transmit(self, params, related_params=None):
-        self.switch.send_message(params, related_params)
-
-
-    def emulate_registration(self, record_uri, contact_uri, seconds, hop):
-        record_uri = record_uri.canonical_aor()
-        expiration = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
-        self.add_record(record_uri).add_contact(contact_uri, expiration, hop)
-        
-
-    def lookup_contacts(self, record_uri):
-        record_uri = record_uri.canonical_aor()
-        record = self.records_by_uri.get(record_uri)
-        
-        if record:
-            self.logger.debug("Found contacts for '%s'" % (record_uri,))
-            return record.get_contacts()
-        else:
-            self.logger.debug("Not found contacts for: %s" % (record_uri,))
-            return []
-
-
-    def authenticate_request(self, params):
-        # Returns:
-        #   authname, True -  accept
-        #   authname, False - challenge
-        #   None, True -      reject
-        #   None, False -     not found
-        
-        record_uri = params["from"].uri.canonical_aor()
-        hop = params["hop"]
-        
-        record = self.records_by_uri.get(record_uri) or self.records_by_uri.get(record_uri._replace(username=None))
-        
-        if not record:
-            self.logger.warning("Rejecting request because caller is unknown!")
-            return None, False
-        
-        return record.authenticate_request(hop)
-        
-
-class Registration(object):
+class RemoteRecord(Loggable):
     EXPIRES = 300
 
-    def __init__(self, registration_manager, registrar_uri, record_uri, hop):
-        self.registration_manager = registration_manager
+    def __init__(self, registrar, record_uri, registrar_uri, hop):
+        Loggable.__init__(self)
+        self.registrar = registrar
 
-        self.registrar_uri = registrar_uri
         self.record_uri = record_uri
+        self.registrar_uri = registrar_uri
         self.contact_uri = Uri(hop.local_addr)
         
         if not hop:
@@ -301,7 +206,7 @@ class Registration(object):
         self.cseq = 0
         
         
-    def update(self):
+    def refresh(self):
         user_params = {
             'method': "REGISTER",
             'uri': self.registrar_uri,
@@ -314,17 +219,16 @@ class Registration(object):
         
         
     def process_response(self, params):
-        total = []
-
         for contact_nameaddr in params["contact"]:
-            expires = contact_nameaddr.params.get("expires", params.get("expires"))
-                
-            uri = contact_nameaddr.uri
-            seconds_left = int(expires)
+            if contact_nameaddr.uri == self.contact_uri:
+                expires = contact_nameaddr.params.get("expires", params.get("expires"))
+                seconds_left = int(expires)
+                expiration = datetime.datetime.now() + datetime.timedelta(seconds=seconds_left)
+                self.logger.info("Registered at %s until %s" % (self.registrar_uri, expiration))
+                break
+        else:
+            self.logger.warning("Couldn't confirm my registration!")
             
-            total.append((uri, seconds_left))
-
-        self.registration_manager.logger.debug("Registration total: %s" % total)
         # TODO: reschedule!
         
         
@@ -348,7 +252,7 @@ class Registration(object):
         
         if status.code == 401:
             # Let's try authentication! TODO: 407, too!
-            account = self.registration_manager.get_remote_account(params["to"].uri)
+            account = self.registrar.get_remote_account(params["to"].uri)
             auth = account.provide_auth(params, related_request) if account else None
                 
             if auth:
@@ -357,19 +261,19 @@ class Registration(object):
                 related_request.update(user_params)
                 related_request.update(auth)
                 
-                self.registration_manager.logger.debug("Trying authorization...")
+                self.logger.debug("Trying authorization...")
                 #print("... with: %s" % related_request)
                 self.send_request(related_request)
                 return None
             else:
-                self.registration_manager.logger.debug("Couldn't authorize, being rejected!")
+                self.logger.debug("Couldn't authorize, being rejected!")
 
         return params
 
 
     def send_request(self, user_params):
         params = self.make_request(user_params)
-        self.registration_manager.transmit(params, None)
+        self.registrar.transmit(params, None)
 
 
     def recv_response(self, msg, related_request):
@@ -378,48 +282,138 @@ class Registration(object):
             self.process_response(params)
 
 
-class RegistrationManager(Loggable):
+class Registrar(Loggable):
     def __init__(self, switch):
         Loggable.__init__(self)
 
         self.switch = switch
-        self.registrations_by_id = {}
+        self.local_records_by_uri = {}
+        self.remote_records_by_uri = {}
         
+        
+    def reject_request(self, request, status):
+        response = make_simple_response(request, status)
+        self.transmit(response, request)
+
+
+    def add_local_record(self, record_uri, authname, auth_policy):
+        record_uri = record_uri.canonical_aor()
+        
+        if record_uri in self.local_records_by_uri:
+            self.logger.error("Local record already added: '%s'" % (record_uri,))
+            return None
+        else:
+            self.logger.info("Creating local record: %s" % (record_uri,))
+            record = LocalRecord(proxy(self), record_uri, authname, auth_policy)
+            record.set_oid(self.oid.add("local", str(record_uri)))
+            self.local_records_by_uri[record_uri] = record
+            
+        return proxy(record)
+
+
+    def may_register(self, registering_uri, record_uri):
+        # Third party registrations not supported yet
+        # We'd need to know which account is allowed to register which
+        
+        return registering_uri.canonical_aor() == record_uri
+        
+        
+    def process_request(self, params):
+        if params["method"] != "REGISTER":
+            raise Error("Registrar has nothing to do with this request!")
+        
+        registering_uri = params["from"].uri
+        record_uri = params["to"].uri.canonical_aor()
+        
+        if not self.may_register(registering_uri, record_uri):
+            self.reject_request(params, Status(403, "Forbidden"))
+            return
+        
+        record = self.local_records_by_uri.get(record_uri)
+        if not record:
+            self.logger.warning("Local record not found: %s" % record_uri)
+            self.reject_request(params, Status(404))
+            return
+        
+        record.recv_request(params)
+        
+        
+    def transmit(self, params, related_params=None):
+        self.switch.send_message(params, related_params)
+
+
+    def lookup_contacts(self, record_uri):
+        record_uri = record_uri.canonical_aor()
+        record = self.local_records_by_uri.get(record_uri)
+        
+        if record:
+            self.logger.debug("Found contacts for '%s'" % (record_uri,))
+            return record.get_contacts()
+        else:
+            self.logger.debug("Not found contacts for: %s" % (record_uri,))
+            return []
+
+
+    def authenticate_request(self, params):
+        # Checks any incoming request to see if the sender is a local account.
+        # Returns:
+        #   authname, True -  accept
+        #   authname, False - challenge
+        #   None, True -      reject
+        #   None, False -     not found
+        
+        record_uri = params["from"].uri.canonical_aor()
+        hop = params["hop"]
+        
+        record = self.local_records_by_uri.get(record_uri) or self.local_records_by_uri.get(record_uri._replace(username=None))
+        
+        if not record:
+            self.logger.warning("Rejecting request because caller is unknown!")
+            return None, False
+        
+        return record.authenticate_request(hop)
+
         
     def get_remote_account(self, uri):
         return self.switch.get_remote_account(uri)
         
 
-    def transmit(self, params, related_params=None):
-        self.switch.send_message(params, related_params)
-
-
-    def start_registration(self, registrar_uri, record_uri):
-        route = None  # TODO: do we want to register using a Route?
-        next_uri = route[0].uri if route else registrar_uri
+    def add_remote_record(self, record_uri, registrar_uri, registrar_hop=None):
+        # Predefined Route set is not supported now
+        # Don't canonicalize these, we'll send them out as request URIs!
+        record_uri = record_uri
         
-        self.switch.select_hop_slot(next_uri).plug(
-            self.start_registration_with_hop,
-            registrar_uri=registrar_uri,
-            record_uri=record_uri
-        )
+        if not registrar_hop:
+            route = None  # TODO: do we want to register using a Route?
+            next_uri = route[0].uri if route else registrar_uri
+        
+            self.switch.select_hop_slot(next_uri).plug(
+                self.hop_resolved,
+                record_uri=record_uri,
+                registrar_uri=registrar_uri
+            )
+            return
+            
+        self.logger.info("Creating remote record: %s" % (record_uri,))
+        record = RemoteRecord(proxy(self), record_uri, registrar_uri, registrar_hop)
+        record.set_oid(self.oid.add("remote", str(record_uri)))
+        self.remote_records_by_uri[record_uri] = record
+        record.refresh()
         
         
-    def start_registration_with_hop(self, hop, registrar_uri, record_uri):
-        self.logger.info("Registration hop resolved to %s" % (hop,))
-        id = (registrar_uri, record_uri)
-        registration = Registration(proxy(self), registrar_uri, record_uri, hop)
-        self.registrations_by_id[id] = registration
-        registration.update()
+    def hop_resolved(self, hop, record_uri, registrar_uri):
+        if hop:
+            self.logger.info("Remote record hop resolved to %s" % (hop,))
+            self.add_remote_record(record_uri, registrar_uri, hop)
+        else:
+            self.logger.error("Remote record hop was not resolved, ignoring!")
 
 
     def process_response(self, params, related_request):
-        registrar_uri = related_request['uri']
-        record_uri = related_request['to'].uri
-        id = (registrar_uri, record_uri)
-        registration = self.registrations_by_id.get(id)
+        record_uri = params['to'].uri
+        record = self.remote_records_by_uri.get(record_uri)
         
-        if registration:
-            registration.recv_response(params, related_request)
+        if record:
+            record.recv_response(params, related_request)
         else:
-            self.logger.warning("Ignoring response to unknown registration!")
+            self.logger.warning("Ignoring response to unknown remote record!")

@@ -7,7 +7,7 @@ from dialog import Dialog, DialogManager
 from party import Bridge, RecordingBridge, Routing
 from party_sip import SipManager
 from ground import Ground
-from registrar import RegistrationManager, RecordManager
+from registrar import Registrar
 from subscript import SubscriptionManager
 from account import AccountManager
 from log import Loggable
@@ -17,7 +17,7 @@ from mgc import Controller
 class Switch(Loggable):
     def __init__(self,
         transport_manager=None, transaction_manager=None,
-        record_manager=None, registration_manager=None, subscription_manager=None,
+        registrar=None, subscription_manager=None,
         dialog_manager=None, sip_manager=None, mgc=None, account_manager=None
     ):
         Loggable.__init__(self)
@@ -29,10 +29,7 @@ class Switch(Loggable):
         self.transaction_manager = transaction_manager or TransactionManager(
             proxy(self.transport_manager)
         )
-        self.record_manager = record_manager or RecordManager(
-            proxy(self)
-        )
-        self.registration_manager = registration_manager or RegistrationManager(
+        self.registrar = registrar or Registrar(
             proxy(self)
         )
         self.subscription_manager = subscription_manager or SubscriptionManager(
@@ -60,8 +57,7 @@ class Switch(Loggable):
         Loggable.set_oid(self, oid)
 
         self.account_manager.set_oid(oid.add("accman"))
-        self.record_manager.set_oid(oid.add("recman"))
-        self.registration_manager.set_oid(oid.add("regman"))
+        self.registrar.set_oid(oid.add("registrar"))
         self.subscription_manager.set_oid(oid.add("subman"))
         self.transport_manager.set_oid(oid.add("tportman"))
         self.transaction_manager.set_oid(oid.add("tactman"))
@@ -145,7 +141,7 @@ class Switch(Loggable):
         
         
     def auth_request(self, params):
-        authname, sure = self.record_manager.authenticate_request(params)
+        authname, sure = self.registrar.authenticate_request(params)
         # Returned:
         #   authname, True -  accept
         #   authname, False - challenge
@@ -198,7 +194,7 @@ class Switch(Loggable):
 
         # No dialogs for registrations
         if method == "REGISTER":
-            self.record_manager.process_request(params)
+            self.registrar.process_request(params)
             return
 
         # Out of dialog requests
@@ -232,7 +228,7 @@ class Switch(Loggable):
         method = params["method"]
         
         if method == "REGISTER":
-            self.registration_manager.process_response(params, related_request)
+            self.registrar.process_response(params, related_request)
             return
 
         processed = self.dialog_manager.process_response(params, related_request)
