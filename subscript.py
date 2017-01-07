@@ -41,6 +41,7 @@ class EventSource(Loggable):
     def process(self, params, id):
         is_response = params["is_response"]
         method = params["method"]
+        # NOTE: we can only handle one subscription per dialog, sharing is not supported.
         
         if not is_response:
             if method == "SUBSCRIBE":

@@ -9,8 +9,6 @@ class Party(GroundDweller):
     def __init__(self):
         GroundDweller.__init__(self)
         
-        #self.call_oid = None
-        #self.path = None
         self.finished_slot = zap.Slot()
 
 
@@ -26,11 +24,6 @@ class Party(GroundDweller):
         raise NotImplementedError()
         
             
-    #def set_path(self, call_oid, path):
-    #    self.call_oid = call_oid
-    #    self.path = path
-
-
     def make_leg(self, li):
         return self.ground.make_leg(proxy(self), li)
         

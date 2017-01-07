@@ -46,11 +46,13 @@ MGW_HOST = "localhost"
 MGW_ADDR = Addr(MGW_HOST, 20000)
 
 A_ADDR = Addr(HOST, 5060)
+A_URI = Uri(A_ADDR)
 A_DOMAIN = "a.switch"
 A_AUTHNAME = "A_AUTHNAME"
 A_HA1 = "A_HA1"
 
 B_ADDR = Addr(HOST, 5062)
+B_URI = Uri(B_ADDR)
 B_DOMAIN = "b.switch"
 B_AUTHNAME = "B_AUTHNAME"
 B_HA1 = "B_HA1"
@@ -80,7 +82,6 @@ TEST_ENDPOINT_SESSION = dict(
         } ]
     } ]
 )
-
 
 
 class TestEndpoint(PlannedEndpoint):
@@ -267,9 +268,11 @@ class CallerEndpoint(TestEndpoint):
                 self.logger.info("Yay, accepted!")
                 session = action.get("session")
                 
-                if session and session.is_offer():
+                if session:
                     answer = self.update_session(session)
-                    self.forward(dict(type="session", session=answer))
+                    
+                    if answer:
+                        self.forward(dict(type="session", session=answer))
                     
                 break
             elif action["type"] == "session":
@@ -290,11 +293,6 @@ class CallerEndpoint(TestEndpoint):
             else:
                 self.logger.error("Hm, we got: %s!" % action["type"])
             
-        #session = action.get("session")
-        #if session and session.is_offer():
-        #    answer = self.update_session(session)
-        #    self.forward(dict(type="session", session=answer))
-
         # Be more flexible here!
         yield from self.idle()
 
@@ -378,7 +376,7 @@ class TestController(Controller):
     def start(self, addr_set):
         # Must use IP4 addresses or FQDN in SDP, so let's go with IP4
         # Media host may be different from the signaling host
-        self.media_addresses = addr_set  #set(Addr(MEDIA_HOST, port).resolved() for port in ports)
+        self.media_addresses = addr_set
         
     
     def allocate_media_address(self, mgw_sid):
@@ -401,7 +399,7 @@ class TestLine(Bridge):
         
         
     def update_busylamp_state(self):
-        es = self.ground.switch.subscription_manager.get_event_source("busylamp", self.username)
+        es = self.ground.switch.get_busylamp(self.username)
         
         if es:
             es.update(self.call_info["number"], self.is_outgoing, self.is_confirmed)
@@ -533,6 +531,10 @@ class TestSwitch(Switch):
             record.add_static_contact(uri, hop)  # assume same contact uri as the aor
 
 
+    def get_busylamp(self, username):
+        return self.subscription_manager.get_event_source("busylamp", username)
+
+
 def mkctx(src):
     if src["type"] == "sip":
         return dict(
@@ -554,45 +556,52 @@ class SwitchA(TestSwitch):
             
             if not ctx:
                 ctx.update(mkctx(action["src"]))
+                src_addr = ctx["src_addr"]
+                src_username = ctx["src_username"]
                 
-                self.dial(action, "line", addr=ctx["src_addr"], username=ctx["src_username"])
+                self.dial(action, "line", addr=src_addr, username=src_username)
                 return
 
-            number = ctx["dst_username"]
+            src_addr = ctx["src_addr"]
+            src_username = ctx["src_username"]
             
-            if number >= "200" and number < "250":
+            src_name = ctx["src_name"]
+            dst_username = ctx["dst_username"]
+            dst_addr = ctx["dst_addr"]
+            
+            if dst_username >= "200" and dst_username < "250":
                 # Numbers for registering clients
-                self.dial(action, "line", addr=ctx["dst_addr"], username=ctx["dst_username"])
+                self.dial(action, "line", addr=dst_addr, username=dst_username)
                 return
-            elif number >= "250" and number < "260":
+            elif dst_username >= "250" and dst_username < "260":
                 # Numbers for local clients
-                if number == NUMBER_A_LOCAL_CALLEE:
+                if dst_username == NUMBER_A_LOCAL_CALLEE:
                     self.dial(action, "callee")
                     return
-                elif number == NUMBER_A_LOCAL_UNREACHABLE:
+                elif dst_username == NUMBER_A_LOCAL_UNREACHABLE:
                     self.dial(action, "unreachable")
                     return
-                elif number == NUMBER_A_LOCAL_REJECTING:
+                elif dst_username == NUMBER_A_LOCAL_REJECTING:
                     self.dial(action, "rejecting")
                     return
-                elif number == NUMBER_A_LOCAL_RINGING:
+                elif dst_username == NUMBER_A_LOCAL_RINGING:
                     self.dial(action, "ringing")
                     return
-            elif number >= "300" and number < "400":
+            elif dst_username >= "300" and dst_username < "400":
                 # Numbers for switch B
                 dst = {
                     'type': "sip",
-                    'uri': Uri(B_ADDR),
+                    'uri': B_URI,  # B_DOMAIN is not resolvable
                     #'hop': contact.hop,
-                    'from': Nameaddr(Uri(Addr(A_DOMAIN), ctx["src_username"]), ctx["src_name"]),
-                    'to': Nameaddr(Uri(Addr(B_DOMAIN), number))  # divert to B
+                    'from': Nameaddr(Uri(Addr(A_DOMAIN), src_username), src_name),
+                    'to': Nameaddr(Uri(Addr(B_DOMAIN), dst_username))  # divert to B
                     #'route': []
                 }
                 
                 self.dial(action, **dst)
                 return
                 
-            self.logger.error("Not found: %s" % number)
+            self.logger.error("Not found: %s" % dst_username)
             
 
     def start(self, realm, local_addr, mgw_addr, media_addrs):
@@ -613,7 +622,7 @@ class SwitchA(TestSwitch):
         self.add_record_account(b_aor, B_AUTHNAME, B_HA1, LocalRecord.AUTH_BY_HOP, [ hop1, hop2 ])
         
         # Allow us to authenticate requests sent to B
-        self.account_manager.add_remote_account(Uri(B_ADDR.resolved(), None), A_AUTHNAME, A_HA1)
+        self.account_manager.add_remote_account(B_URI.resolved(), A_AUTHNAME, A_HA1)
 
         # Add a voicemail box to monitor
         self.subscription_manager.add_event_source("voicemail", dict(mailbox="201"))
@@ -638,9 +647,10 @@ class SwitchB(TestSwitch):
             
             if not ctx:
                 ctx.update(mkctx(action["src"]))
+                src_username = ctx["src_username"]
+                src_addr = ctx["src_addr"]
 
-                self.dial(action, "line", addr=ctx["src_addr"], username=ctx["src_username"])
-                #self.dial(action, "record", id="prekord")
+                self.dial(action, "line", addr=src_addr, username=src_username)
                 return
 
             src_username = ctx["src_username"]
@@ -672,7 +682,7 @@ class SwitchB(TestSwitch):
                 elif dst_username >= "200" and dst_username < "300":
                     dst = {
                         'type': "sip",
-                        'uri': Uri(A_ADDR),
+                        'uri': A_URI,  # A_DOMAIN is not resolvable
                         #'hop': contact.hop,
                         'from': Nameaddr(Uri(src_addr, src_username), src_name),
                         'to': Nameaddr(Uri(Addr(A_DOMAIN), dst_username)),  # divert to A
@@ -698,7 +708,7 @@ class SwitchB(TestSwitch):
         self.add_record_account(a_aor, A_AUTHNAME, A_HA1, LocalRecord.AUTH_ALWAYS)
         
         # Allow us to authenticate ourselves at A
-        self.account_manager.add_remote_account(Uri(A_ADDR.resolved(), None), B_AUTHNAME, B_HA1)
+        self.account_manager.add_remote_account(A_URI.resolved(), B_AUTHNAME, B_HA1)
 
         zap.time_slot(1).plug(self.reregister_snom, addr=SNOM_WEB, line=1)
 
@@ -721,7 +731,7 @@ class SwitchB(TestSwitch):
 
         self.registrar.add_remote_record(
             Uri(Addr(A_DOMAIN), NUMBER_A_REMOTE_CALLEE),
-            registrar_uri=Uri(A_ADDR.resolved())
+            registrar_uri=A_URI.resolved()
         )
         
         
