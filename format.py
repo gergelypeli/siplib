@@ -320,6 +320,7 @@ class Status(namedtuple("Status", [ "code", "reason" ])):
         408: "Request Timeout",
         421: "Extension Required",
         423: "Interval Too Brief",
+        480: "Temporarily Unavailable",
         481: "Call/Transaction Does Not Exist",
         482: "Loop Detected",
         483: "Too Many Hops",

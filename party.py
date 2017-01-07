@@ -177,7 +177,7 @@ class Bridge(Party):
         self.queued_leg_actions[li].append(action)
 
 
-    def forward(self, li, action):
+    def forward_leg(self, li, action):
         self.legs[li].forward(action)
         
 
@@ -185,7 +185,7 @@ class Bridge(Party):
         dst = dict(type=type, **kwargs) if type else None
         action = dict(action, dst=dst)
         li = self.add_leg()
-        self.forward(li, action)
+        self.forward_leg(li, action)
         
         return li
 
@@ -204,7 +204,7 @@ class Bridge(Party):
             
         self.is_ringing = True
         self.logger.debug("Sending artificial ringback.")
-        self.forward(0, dict(type="ring"))
+        self.forward_leg(0, dict(type="ring"))
 
 
     def accept_incoming_leg(self):
@@ -213,7 +213,7 @@ class Bridge(Party):
             
         self.is_accepted = True
         self.logger.warning("Accepting.")
-        self.forward(0, dict(type="accept"))
+        self.forward_leg(0, dict(type="accept"))
             
 
     def reject_incoming_leg(self, status):
@@ -221,7 +221,7 @@ class Bridge(Party):
             raise Exception("Incoming leg already accepted!")
             
         self.logger.warning("Rejecting with status %s" % (status,))
-        self.forward(0, dict(type="reject", status=status))
+        self.forward_leg(0, dict(type="reject", status=status))
         self.remove_leg(0)
             
 
@@ -236,7 +236,7 @@ class Bridge(Party):
         self.is_anchored = True
 
         for action in self.queued_leg_actions[li]:
-            self.forward(0, action)
+            self.forward_leg(0, action)
 
 
     def unanchor_legs(self):
@@ -279,7 +279,7 @@ class Bridge(Party):
                 
                 if self.is_accepted:
                     # We once sent an accept, so now we can forward the hangup
-                    self.forward(0, dict(type="hangup"))
+                    self.forward_leg(0, dict(type="hangup"))
                     self.remove_leg(0)
                 else:
                     # Havent accepted yet, so send a reject instead
@@ -340,7 +340,7 @@ class Bridge(Party):
                 self.process_leg_transfer(0, action)
             elif self.is_anchored:
                 oli = max(self.legs.keys())
-                self.forward(oli, action)
+                self.forward_leg(oli, action)
             else:
                 # The user accepted the incoming leg, and didn't handle the consequences.
                 raise Exception("Unexpected action from unanchored incoming leg: %s" % type)
@@ -361,13 +361,13 @@ class Bridge(Party):
 
                     if len(self.legs) == 1:
                         # No more incoming legs, so time to give up
-                        self.forward(0, action)
+                        self.forward_leg(0, action)
                         self.remove_leg(0)
                         
                     # TODO: shall we auto-anchor the last remaining outgoing leg?
             elif type == "accept":
                 if self.is_anchored:
-                    self.forward(0, action)
+                    self.forward_leg(0, action)
                 else:
                     self.queue_leg_action(li, action)
                     self.anchor_outgoing_leg(li)
@@ -396,7 +396,7 @@ class Bridge(Party):
 
                 if type != "ring":
                     if self.is_anchored:
-                        self.forward(0, action)
+                        self.forward_leg(0, action)
                     else:
                         self.queue_leg_action(li, action)
             

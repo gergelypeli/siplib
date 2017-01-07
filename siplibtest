@@ -4,7 +4,7 @@ import os
 import logging
 import logging.config
 import sys
-from weakref import proxy
+from weakref import proxy, WeakSet
 #from pprint import pformat
 
 from format import Addr, Uri, Nameaddr, Status, Hop, AbsoluteUri, CallInfo
@@ -12,7 +12,7 @@ from party import PlannedEndpoint, PlannedRouting, Bridge, Routing
 from sdp import Session
 from registrar import LocalRecord
 from subscript import SubscriptionManager, MessageSummaryEventSource, DialogEventSource
-from log import setup_logging, log_exception, Oid
+from log import setup_logging, log_exception, Oid, Loggable
 from mgw import MediaGateway
 from mgc import Controller  #, PlayerMediaLeg  #, EchoMediaLeg
 from switch import Switch
@@ -21,7 +21,8 @@ import resolver
 
 TEST_DIALIN = 1
 TEST_DIALOUT = 2
-TEST = TEST_DIALIN
+TEST_PICKUP = 3
+TEST = TEST_PICKUP
 
 NUMBER_A_PREFIX = "2"
 NUMBER_A_SNOM_1 = "201"
@@ -31,6 +32,7 @@ NUMBER_A_LOCAL_CALLEE = "250"
 NUMBER_A_LOCAL_UNREACHABLE = "251"
 NUMBER_A_LOCAL_REJECTING = "252"
 NUMBER_A_LOCAL_RINGING = "253"
+NUMBER_A_LOCAL_RINGING_LINE = "254"
 NUMBER_A_SERVICE_VOICEMAIL = "260"
 
 NUMBER_B_PREFIX = "3"
@@ -234,6 +236,11 @@ class CalleeEndpoint(TestEndpoint):
 
 
 class CallerEndpoint(TestEndpoint):
+    def identify(self, dst):
+        self.dst = dst
+        return None
+
+
     def plan(self):
         self.logger.debug("Caller created")
         
@@ -244,8 +251,8 @@ class CallerEndpoint(TestEndpoint):
         
         src = {
             'type': "sip",  # FIXME: we lie here for mkctx
-            'from': Nameaddr(Uri(Addr(B_DOMAIN), NUMBER_DDI_CALLER), "Caller"),
-            'to': Nameaddr(Uri(Addr(B_DOMAIN), NUMBER_A_SNOM_1))
+            'from': self.dst["from"],
+            'to': self.dst["to"]
         }
         
         offer = None
@@ -388,12 +395,22 @@ class TestController(Controller):
         
         
 class TestLine(Bridge):
+    def __init__(self, manager):
+        Bridge.__init__(self)
+        
+        self.manager = manager
+        
+
     def identify(self, params):
         self.is_outgoing = None  # if the device dialed out
         self.is_confirmed = None
+        self.ctx = {}
         
         self.addr = params["addr"]
         self.username = params["username"]
+        self.force_incoming = params.get("force_incoming")
+        
+        self.manager.register(self.username, self)
         
         return "%s@%s" % (self.username, self.addr)
         
@@ -407,6 +424,7 @@ class TestLine(Bridge):
         
     def process_dial(self, action):
         ctx = action["ctx"]
+        self.ctx.update(ctx)
         
         src_username = ctx["src_username"]
         src_addr = ctx["src_addr"]
@@ -416,7 +434,7 @@ class TestLine(Bridge):
         dst_addr = ctx["dst_addr"]
         
         if self.username != dst_username or self.addr != dst_addr:
-            self.is_outgoing = True
+            self.is_outgoing = True if not self.force_incoming else False
             self.is_confirmed = False
             self.update_busylamp_state()
             self.dial(action)
@@ -451,9 +469,9 @@ class TestLine(Bridge):
             
     def process_leg_transfer(self, li, action):
         if not self.is_outgoing and li > 0:
-            self.forward(0, action)
+            self.forward_leg(0, action)
         elif self.is_outgoing and li == 0:
-            self.forward(max(self.legs.keys()), action)
+            self.forward_leg(max(self.legs.keys()), action)
         else:
             Bridge.process_leg_transfer(self, li, action)
             
@@ -470,7 +488,56 @@ class TestLine(Bridge):
             self.update_busylamp_state()
             
         return Bridge.do_slot(self, li, action)
-    
+        
+        
+    def call_pickup(self, dst_uri):
+        if self.is_outgoing or self.is_confirmed:
+            self.logger.warning("Call pickup is not possible right now!")
+            return False
+            
+        self.logger.info("Call pickup to %s." % (dst_uri,))
+        
+        tid = self.ground.make_transfer("blind")  # TODO: pickup?
+        src = {
+            'type': "sip",
+            'from': Nameaddr(Uri(self.ctx["src_addr"], self.ctx["src_username"]), self.ctx["src_name"]),
+            'to': Nameaddr(dst_uri)
+        }
+
+        # FIXME: A session query was necessary here because the caller was Caller,
+        # and sent a query itself. This can get messy, implement properly!
+        action = dict(type="transfer", transfer_id=tid, call_info=self.call_info, ctx={}, src=src, session=Session.make_query())
+        self.forward_leg(0, action)
+        return True
+        
+        
+class TestLineManager(Loggable):
+    def __init__(self):
+        Loggable.__init__(self)
+        
+        self.line_sets_by_username = {}
+        
+        
+    def make_line(self):
+        return TestLine(proxy(self))
+        
+        
+    def register(self, username, line):
+        self.line_sets_by_username.setdefault(username, WeakSet()).add(line)
+        
+        
+    def call_pickup(self, username, dst_uri):
+        s = self.line_sets_by_username.get(username)
+        
+        if s:
+            for line in s:
+                ok = line.call_pickup(dst_uri)
+                
+                if ok:
+                    return True
+        
+        return False
+        
 
 class TestSwitch(Switch):
     def __init__(self):
@@ -482,6 +549,8 @@ class TestSwitch(Switch):
             subscription_manager=subman,
             dialog_manager=None, mgc=mgc, account_manager=None
         )
+        
+        self.line_manager = TestLineManager()
 
 
     def start(self, realm, local_addr, mgw_addr, media_addrs):
@@ -510,7 +579,7 @@ class TestSwitch(Switch):
         elif type == "ringing":
             return RingingEndpoint()
         elif type == "line":
-            return TestLine()
+            return self.line_manager.make_line()
         else:
             return Switch.make_party(self, type)
 
@@ -558,14 +627,25 @@ class SwitchA(TestSwitch):
                 ctx.update(mkctx(action["src"]))
                 src_addr = ctx["src_addr"]
                 src_username = ctx["src_username"]
+                dst_username = ctx["dst_username"]
+                
+                if dst_username.startswith("*"):
+                    # Call pickup testing
+                    self.reject_incoming_leg(Status(603))
+                    
+                    target_number = dst_username[1:]
+                    dst_uri = Uri(Addr(A_DOMAIN), src_username)
+                    self.logger.info("Okay, pickup from %s to %s." % (target_number, dst_uri))
+                    self.ground.switch.line_manager.call_pickup(target_number, dst_uri)
+                    return
                 
                 self.dial(action, "line", addr=src_addr, username=src_username)
                 return
 
             src_addr = ctx["src_addr"]
             src_username = ctx["src_username"]
-            
             src_name = ctx["src_name"]
+            
             dst_username = ctx["dst_username"]
             dst_addr = ctx["dst_addr"]
             
@@ -586,6 +666,10 @@ class SwitchA(TestSwitch):
                     return
                 elif dst_username == NUMBER_A_LOCAL_RINGING:
                     self.dial(action, "ringing")
+                    return
+                elif dst_username == NUMBER_A_LOCAL_RINGING_LINE:
+                    dial = dict(action, ctx=dict(ctx, dst_username=NUMBER_A_LOCAL_RINGING))
+                    self.dial(dial, "line", addr=dst_addr, username=dst_username, force_incoming=True)
                     return
             elif dst_username >= "300" and dst_username < "400":
                 # Numbers for switch B
@@ -629,6 +713,10 @@ class SwitchA(TestSwitch):
         
         # Add a line state
         self.subscription_manager.add_event_source("busylamp", dict(entity="201"))
+        self.subscription_manager.add_event_source("busylamp", dict(entity="254"))
+        
+        if TEST == TEST_PICKUP:
+            zap.time_slot(3).plug(self.test_pickuping)
 
 
     def make_party(self, type):
@@ -636,6 +724,18 @@ class SwitchA(TestSwitch):
             return self.ARouting()
         else:
             return TestSwitch.make_party(self, type)
+
+
+    def test_pickuping(self):
+        self.logger.info("Pickup begins.")
+
+        dst = {
+            'from': Nameaddr(Uri(Addr(A_DOMAIN), NUMBER_DDI_CALLER), "Caller"),
+            'to': Nameaddr(Uri(Addr(A_DOMAIN), NUMBER_A_LOCAL_RINGING_LINE))
+        }
+        
+        self.start_call("caller", dst)
+
         
 
 class SwitchB(TestSwitch):
@@ -727,7 +827,7 @@ class SwitchB(TestSwitch):
 
 
     def test_registering(self):
-        self.logger.debug("Registering to Switch A.")
+        self.logger.info("Registering to Switch A.")
 
         self.registrar.add_remote_record(
             Uri(Addr(A_DOMAIN), NUMBER_A_REMOTE_CALLEE),
@@ -736,9 +836,14 @@ class SwitchB(TestSwitch):
         
         
     def test_dialing(self):
-        self.logger.debug("Dialing begins.")
+        self.logger.info("Dialing begins.")
 
-        self.start_call("caller")
+        dst = {
+            'from': Nameaddr(Uri(Addr(B_DOMAIN), NUMBER_DDI_CALLER), "Caller"),
+            'to': Nameaddr(Uri(Addr(B_DOMAIN), NUMBER_A_SNOM_1))
+        }
+        
+        self.start_call("caller", dst)
 
 
 def main():

@@ -111,19 +111,14 @@ class Switch(Loggable):
             raise Exception("Unknown party type '%s'!" % type)
 
 
-    def start_call(self, incoming_type, incoming_params=None):
+    def start_call(self, incoming_type, dst=None):
         call_oid = self.oid.add("call", self.call_count)
         call_info = dict(number=self.call_count, oid=call_oid, party_count=0, routing_count=0)
         self.call_count += 1
 
-        incoming_party = self.ground.make_party(incoming_type, incoming_params, call_info)
+        incoming_party = self.ground.make_party(incoming_type, dst, call_info)
         incoming_party.start()
         incoming_party.set_call_info(call_info)
-        
-        #routing = self.ground.make_party("routing", call_oid, [])
-        #routing_leg = routing.start()
-
-        #self.ground.link_legs(incoming_leg.oid, routing_leg.oid)
         
         return incoming_party
 
