@@ -3,7 +3,7 @@ import datetime
 from weakref import proxy
 from log import Loggable
 
-from format import Via, Status, make_simple_response, make_ack, make_virtual_response, make_timeout_nak, make_timeout_response, is_virtual_response
+from format import Via, Status, make_simple_response, make_non_2xx_ack, make_cease_response, make_timeout_nak, make_timeout_response, is_cease_response
 import zap
 
 # tr id: (branch, method)
@@ -283,7 +283,7 @@ class InviteClientTransaction(PlainClientTransaction):
                 # final non-2xx responses are ACK-ed here in the same transaction (17.1.1.3)
                 # send this ACK before an upper layer changes the outgoing message,
                 # it can happen with authorization!
-                ack_params = make_ack(self.outgoing_msg, remote_tag)
+                ack_params = make_non_2xx_ack(self.outgoing_msg, remote_tag)
                 self.create_and_send_ack(self.branch, ack_params)
         
             # LOL, 17.1.1.2 originally required the INVITE client transaction to
@@ -325,8 +325,8 @@ class InviteServerTransaction(PlainServerTransaction):
 
 
     def send(self, response):
-        if is_virtual_response(response):
-            # A virtual response means we got (PR)ACKed, stop retransmissions
+        if is_cease_response(response):
+            # A cease response means we got (PR)ACKed, stop retransmissions.
             # A PRACKed response shouldn't be retransmitted again as it is,
             # but we can dumb it down to an unreliable response before retransmitting it.
             was_final = self.outgoing_msg["status"].code >= 200
@@ -357,19 +357,28 @@ class AckServerTransaction(PlainServerTransaction):
     # For the sake of consistentcy, we expect a virtual response to go lingering.
     
     def send(self, response):
-        if not is_virtual_response(response):
-            raise Error("Nonvirtual response to AckServerTransaction!")
+        if not is_cease_response(response):
+            raise Error("Noncease response to AckServerTransaction!")
 
         self.change_state(self.LINGERING)
         # Don't send anything
 
 
-    def process(self, msg):
-        if self.state == self.LINGERING:
+    def process(self, request):
+        if self.state == self.STARTING:
+            self.incoming_msg = request
+            
+            if not self.related_msg:
+                self.report(request)  # Only report 2xx-ACK-s
+                
+            self.change_state(self.WAITING)
+        elif self.state == self.WAITING:
+            pass
+        elif self.state == self.LINGERING:
             pass  # Duplicates shouldn't trigger retransmissions, because there isn't any
         else:
-            PlainServerTransaction.process(self, msg)
-        
+            raise Error("Hm?")
+
 
 class TransactionManager(Loggable):
     def __init__(self, transport):
@@ -457,16 +466,17 @@ class TransactionManager(Loggable):
             
             if invite_str:
                 # We must have sent a non-200 response to this, so no dialog was created.
-                # Send a virtual ACK response to notify the transaction.
-                # But don't create an AckServerTransaction here, we have no one to notify.
-                invite_str.send(make_virtual_response())
-                return
+                # Send a cease response to stop the response retransmissions.
+                invite_str.send(make_cease_response())
+
+                # Related message will only be set for non-2xx ACK-s
+                related_msg = invite_str.incoming_msg
+            else:
+                related_msg = None
 
             # Must create a server transaction to swallow duplicates,
             # we don't want to bother the dialogs unnecessarily.
-            # Too bad we can't find the related INVITE for this ACK, that would need
-            # a lookup by dialog and cseq.
-            tr = AckServerTransaction(proxy(self), branch, method)
+            tr = AckServerTransaction(proxy(self), branch, method, related_msg)
         elif method == "INVITE":
             tr = InviteServerTransaction(proxy(self), branch, method)
         else:

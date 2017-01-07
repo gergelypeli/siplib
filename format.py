@@ -303,7 +303,12 @@ Addr.__new__.__defaults__ = (None,)
 
 
 class Status(namedtuple("Status", [ "code", "reason" ])):
+    INTERNAL_TIMEOUT = 8
+    INTERNAL_CEASE = 87
+    
     REASONS_BY_CODE = {
+          8: "Internal Request Timeout",
+         87: "Internal Response Ceased",
         100: "Trying",
         180: "Ringing",
         183: "Session Progress",
@@ -918,7 +923,7 @@ def make_simple_response(request, status, others=None):
     return params
 
 
-def make_ack(request, tag):
+def make_non_2xx_ack(request, tag):
     return {
         'is_response': False,
         'method': "ACK",
@@ -933,7 +938,7 @@ def make_ack(request, tag):
 
 
 def make_timeout_response(request):
-    return make_simple_response(request, Status(408, "Request Timeout"))
+    return make_simple_response(request, Status(Status.INTERNAL_TIMEOUT))
 
 
 def make_timeout_nak(response):
@@ -948,9 +953,9 @@ def make_timeout_nak(response):
     }
 
 
-def make_virtual_response():
-    return dict(status=Status(0, "Virtual"))
+def make_cease_response():
+    return dict(status=Status(Status.INTERNAL_CEASE))
     
     
-def is_virtual_response(msg):
-    return msg["status"].code == 0
+def is_cease_response(msg):
+    return msg["status"].code == Status.INTERNAL_CEASE

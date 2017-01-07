@@ -199,7 +199,7 @@ class AccountManager(Loggable):
         
 
     def add_remote_account(self, uri, authname, ha1):
-        uri = uri.assert_resolved()
+        uri.assert_resolved()
         
         if uri in self.remote_accounts_by_uri:
             raise Exception("Remote account for %s already exists: %s!" % (uri, authname))

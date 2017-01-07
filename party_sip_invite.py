@@ -1,4 +1,4 @@
-from format import Status, Rack, make_virtual_response
+from format import Status, Rack, make_cease_response
 from sdp import add_sdp, get_sdp
 from log import Loggable
 import zap
@@ -543,7 +543,7 @@ class InviteServerState(InviteState):
                 return self.recv("PRACK for wrong rpr", KEEP)
             
             # Stop the retransmission of the rpr
-            self.send_message(make_virtual_response(), req)
+            self.send_message(make_cease_response(), req)
                 
             if s in (RELIABLE_OFFER,):
                 if sdp:
@@ -580,10 +580,10 @@ class InviteServerState(InviteState):
                     
         elif method == "ACK":
             # Stop the retransmission of the final answer
-            self.send_message(make_virtual_response(), req)
+            self.send_message(make_cease_response(), req)
             
             # Let the ACK server transaction expire
-            self.send_message(make_virtual_response(), msg)
+            self.send_message(make_cease_response(), msg)
 
             if s in (FINAL_ANSWER, FINAL_EMPTY):
                 if sdp:
