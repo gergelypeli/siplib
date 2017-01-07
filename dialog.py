@@ -79,7 +79,10 @@ class Dialog(Loggable):
         
         
     def setup_incoming(self, params):
-        self.local_nameaddr = params["to"].tagged(self.local_tag)
+        # Forge To tag to make it possible for CANCEL-s to find this dialog
+        params["to"].params["tag"] = self.local_tag
+
+        self.local_nameaddr = params["to"]
         self.remote_nameaddr = params["from"]
         self.my_contact = self.make_my_contact(params["hop"])
         self.call_id = params["call_id"]
@@ -89,9 +92,6 @@ class Dialog(Loggable):
         self.hop = params["hop"]
 
         self.dialog_manager.register_by_local_tag(self.local_tag, self)
-        
-        # Forge To tag to make it possible for CANCEL-s to find this dialog
-        params["to"] = self.local_nameaddr
         
         
     def setup_outgoing(self, request_uri, from_nameaddr, to_nameaddr, route, hop):
@@ -284,7 +284,7 @@ class Dialog(Loggable):
                     self.peer_contact = peer_contact
         elif status.code == 401:
             # Let's try authentication! TODO: 407, too!
-            account = self.registration_manager.get_remote_account(params["to"].uri)
+            account = self.dialog_manager.get_remote_account(related_request["uri"])
             auth = account.provide_auth(params, related_request) if account else None
                 
             if auth:
@@ -358,32 +358,26 @@ class DialogManager(Loggable):
         self.logger.debug("Registered dialog with local tag %s" % (local_tag,))
         
         
-    def find_dialog(self, params):
-        local_aor = params["from"] if params["is_response"] else params["to"]
-        local_tag = local_aor.params.get("tag")
-        
-        return self.dialogs_by_local_tag.get(local_tag)
-        
-
     def process_request(self, params, related_params=None):
         method = params["method"]
-        dialog = self.find_dialog(params)
+        local_tag = params["to"].params.get("tag")
+        dialog = self.dialogs_by_local_tag.get(local_tag)
         
         if dialog:
             self.logger.debug("Found dialog for %s request: %s" % (method, dialog.get_local_tag()))
             dialog.recv_request(params)
             return True
 
-        if method == "CANCEL" and not params["to"].params.get("tag") and related_params:
+        if method == "CANCEL" and not local_tag and related_params:
             # TODO: use hop, too, for safety!
-            forged_to_tag = related_params["to"].params.get("tag")
+            forged_local_tag = related_params["to"].params.get("tag")
             
-            if forged_to_tag:
-                params["to"].params["tag"] = forged_to_tag
-                dialog = self.dialogs_by_local_tag.get(forged_to_tag)
+            if forged_local_tag:
+                params["to"].params["tag"] = forged_local_tag
+                dialog = self.dialogs_by_local_tag.get(forged_local_tag)
                 
                 if dialog:
-                    self.logger.debug("Found dialog for INVITE CANCEL: %s" % forged_to_tag)
+                    self.logger.debug("Found dialog for INVITE CANCEL: %s" % forged_local_tag)
                     dialog.recv_request(params)
                     return True
             
@@ -392,7 +386,8 @@ class DialogManager(Loggable):
 
     def process_response(self, params, related_request):
         method = params["method"]
-        dialog = self.find_dialog(params)
+        local_tag = params["from"].params.get("tag")
+        dialog = self.dialogs_by_local_tag.get(local_tag)
         
         if dialog:
             self.logger.debug("Found dialog for %s response: %s" % (method, dialog.get_local_tag()))

@@ -210,7 +210,7 @@ class RemoteRecord(Loggable):
         
         if status.code == 401:
             # Let's try authentication! TODO: 407, too!
-            account = self.registrar.get_remote_account(params["to"].uri)
+            account = self.registrar.get_remote_account(related_request["uri"])
             auth = account.provide_auth(params, related_request) if account else None
                 
             if auth:

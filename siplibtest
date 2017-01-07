@@ -430,7 +430,7 @@ class TestLine(Bridge):
         
         record_uri = Uri(dst_addr, dst_username)
         self.logger.debug("Checking registered SIP contact: %s" % (record_uri,))
-        contacts = self.ground.switch.record_manager.lookup_contacts(record_uri)
+        contacts = self.ground.switch.registrar.lookup_contacts(record_uri)
         
         if len(contacts) == 1:
             contact = contacts[0]
@@ -613,7 +613,7 @@ class SwitchA(TestSwitch):
         self.add_record_account(b_aor, B_AUTHNAME, B_HA1, LocalRecord.AUTH_BY_HOP, [ hop1, hop2 ])
         
         # Allow us to authenticate requests sent to B
-        self.account_manager.add_remote_account(Uri(Addr(B_DOMAIN), None), A_AUTHNAME, A_HA1)
+        self.account_manager.add_remote_account(Uri(B_ADDR.resolved(), None), A_AUTHNAME, A_HA1)
 
         # Add a voicemail box to monitor
         self.subscription_manager.add_event_source("voicemail", dict(mailbox="201"))
@@ -698,7 +698,7 @@ class SwitchB(TestSwitch):
         self.add_record_account(a_aor, A_AUTHNAME, A_HA1, LocalRecord.AUTH_ALWAYS)
         
         # Allow us to authenticate ourselves at A
-        self.account_manager.add_remote_account(Uri(Addr(A_DOMAIN), None), B_AUTHNAME, B_HA1)
+        self.account_manager.add_remote_account(Uri(A_ADDR.resolved(), None), B_AUTHNAME, B_HA1)
 
         zap.time_slot(1).plug(self.reregister_snom, addr=SNOM_WEB, line=1)
 
@@ -721,7 +721,7 @@ class SwitchB(TestSwitch):
 
         self.registrar.add_remote_record(
             Uri(Addr(A_DOMAIN), NUMBER_A_REMOTE_CALLEE),
-            registrar_uri=Uri(A_ADDR)
+            registrar_uri=Uri(A_ADDR.resolved())
         )
         
         

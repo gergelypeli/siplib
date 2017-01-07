@@ -179,7 +179,7 @@ class AccountManager(Loggable):
         Loggable.__init__(self)
 
         self.local_accounts_by_authname = {}
-        self.remote_accounts_by_aor = {}
+        self.remote_accounts_by_uri = {}
 
 
     def add_local_account(self, authname, ha1, realm):
@@ -198,24 +198,26 @@ class AccountManager(Loggable):
         return self.local_accounts_by_authname.get(authname)
         
 
-    def add_remote_account(self, aor, authname, ha1):
-        aor = aor.canonical_aor()
+    def add_remote_account(self, uri, authname, ha1):
+        uri = uri.assert_resolved()
         
-        if aor in self.remote_accounts_by_aor:
-            raise Exception("Remote account for %s already exists: %s!" % (aor, authname))
+        if uri in self.remote_accounts_by_uri:
+            raise Exception("Remote account for %s already exists: %s!" % (uri, authname))
             
-        self.logger.info("Adding remote account for %s: %s" % (aor, authname,))
+        self.logger.info("Adding remote account for %s: %s" % (uri, authname,))
         account = RemoteAccount(proxy(self), authname, ha1)
-        account.set_oid(self.oid.add("remote", str(aor)))
-        self.remote_accounts_by_aor[aor] = account
+        account.set_oid(self.oid.add("remote", str(uri)))
+        self.remote_accounts_by_uri[uri] = account
         
         return proxy(account)
 
 
-    def get_remote_account(self, uri):
-        for aor in self.remote_accounts_by_aor:
-            if aor.contains(uri):
-                return self.remote_accounts_by_aor[aor]
+    def get_remote_account(self, request_uri):
+        request_uri.assert_resolved()
+        
+        for uri in self.remote_accounts_by_uri:
+            if uri.contains(request_uri):
+                return self.remote_accounts_by_uri[uri]
 
-        self.logger.warning("Couldn't find a remote account for %s!" % (uri,))
+        self.logger.warning("Couldn't find a remote account for %s!" % (request_uri,))
         return None
