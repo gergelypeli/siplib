@@ -122,14 +122,18 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
     def try_update(self, action, sdp, is_answer):
         # Decide if an UPDATE would be appropriate to send a session
         
+        # Session queries can't be sent with UPDATE.
+        if not sdp and not is_answer:
+            return False
+        
         if self.update_is_active() or (self.invite_is_active() and self.invite_is_session_established()):
             if not is_answer:
                 self.update_new(is_outgoing=True)
                 msg = self.make_message(action, method="UPDATE")
-                self.update_outgoing(msg, sdp, is_answer)
             else:
                 msg = self.make_message(action, status=Status(200 if sdp else 488))
-                self.update_outgoing(msg, sdp, is_answer)
+
+            self.update_outgoing(msg, sdp, is_answer)
                 
             return True
         else:
@@ -303,6 +307,10 @@ class SipEndpoint(Endpoint, InviteHelper, UpdateHelper, SessionHelper):
                     if not self.invite_is_active():
                         self.invite_new(is_outgoing=True)
                         msg = self.make_message(action, method="INVITE")
+                    elif not sdp and not is_answer:
+                        # FIXME: A session query with and established, but unfinished INVITE
+                        # cannot be sent. We're fucked here.
+                        pass
                     elif not self.invite_is_outgoing():
                         code = 488 if is_answer and not sdp else 200
                         msg = self.make_message(action, status=Status(code))

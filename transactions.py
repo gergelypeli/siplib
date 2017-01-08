@@ -327,17 +327,13 @@ class InviteServerTransaction(PlainServerTransaction):
     def send(self, response):
         if is_cease_response(response):
             # A cease response means we got (PR)ACKed, stop retransmissions.
-            # A PRACKed response shouldn't be retransmitted again as it is,
-            # but we can dumb it down to an unreliable response before retransmitting it.
+            # But we'll retransmit it from time to time to keep proxies happy,
+            # and the caller must discard them as duplicates.
             was_final = self.outgoing_msg["status"].code >= 200
             
             if was_final:
                 self.change_state(self.LINGERING)
             else:
-                unreliable_msg = dict(self.outgoing_msg)
-                unreliable_msg.pop("rseq")
-                unreliable_msg["require"].remove("100rel")
-                self.outgoing_msg = unreliable_msg
                 self.change_state(self.PROVISIONING)
         else:
             is_rpr = "100rel" in response.get("require", set())
