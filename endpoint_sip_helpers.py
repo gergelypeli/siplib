@@ -1,8 +1,8 @@
 from collections import namedtuple
 
 from format import Status
-from party_sip_invite import InviteClientState, InviteServerState
-from party_sip_update import UpdateClientState, UpdateServerState
+from endpoint_sip_invite import InviteClientState, InviteServerState
+from endpoint_sip_update import UpdateClientState, UpdateServerState
 from sdp import SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES, Session
 from ground import SessionState
 

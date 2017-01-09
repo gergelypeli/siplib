@@ -5,7 +5,7 @@ from transport import TransportManager
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
 from party import Bridge, RecordingBridge, Routing
-from party_sip import SipManager
+from endpoint_sip import SipManager
 from ground import Ground
 from registrar import Registrar
 from subscript import SubscriptionManager

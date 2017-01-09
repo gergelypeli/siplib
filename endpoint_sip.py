@@ -2,7 +2,7 @@ from weakref import WeakValueDictionary, proxy
 
 from format import Status, TargetDialog, Parser
 from party import Endpoint
-from party_sip_helpers import InviteUpdateHelper, SessionHelper
+from endpoint_sip_helpers import InviteUpdateHelper, SessionHelper
 from log import Loggable
 
 
