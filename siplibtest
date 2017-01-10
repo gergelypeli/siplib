@@ -402,13 +402,11 @@ class TestLine(Bridge):
         
 
     def identify(self, params):
-        self.is_outgoing = None  # if the device dialed out
-        self.is_confirmed = None
-        self.ctx = {}
-        
         self.addr = params["addr"]
         self.username = params["username"]
-        self.force_incoming = params.get("force_incoming")
+        self.is_outgoing = params.get("is_outgoing", False)  # From the device's perspective
+        self.is_confirmed = False
+        self.ctx = {}
         
         self.manager.register(self.username, self)
         
@@ -432,18 +430,13 @@ class TestLine(Bridge):
         
         dst_username = ctx["dst_username"]
         dst_addr = ctx["dst_addr"]
+
+        self.update_busylamp_state()
         
-        if self.username != dst_username or self.addr != dst_addr:
-            self.is_outgoing = True if not self.force_incoming else False
-            self.is_confirmed = False
-            self.update_busylamp_state()
+        if self.is_outgoing:
             self.dial(action)
             return
             
-        self.is_outgoing = False
-        self.is_confirmed = False
-        self.update_busylamp_state()
-        
         record_uri = Uri(dst_addr, dst_username)
         self.logger.debug("Checking registered SIP contact: %s" % (record_uri,))
         contacts = self.ground.switch.registrar.lookup_contacts(record_uri)
@@ -639,7 +632,7 @@ class SwitchA(TestSwitch):
                     self.ground.switch.line_manager.call_pickup(target_number, dst_uri)
                     return
                 
-                self.dial(action, "line", addr=src_addr, username=src_username)
+                self.dial(action, "line", is_outgoing=True, addr=src_addr, username=src_username)
                 return
 
             src_addr = ctx["src_addr"]
@@ -750,7 +743,7 @@ class SwitchB(TestSwitch):
                 src_username = ctx["src_username"]
                 src_addr = ctx["src_addr"]
 
-                self.dial(action, "line", addr=src_addr, username=src_username)
+                self.dial(action, "line", is_outgoing=True, addr=src_addr, username=src_username)
                 return
 
             src_username = ctx["src_username"]
