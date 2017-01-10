@@ -38,7 +38,8 @@ class Dialog(Loggable):
         Loggable.__init__(self)
 
         self.dialog_manager = dialog_manager
-        self.report_slot = zap.EventSlot()
+        self.request_slot = zap.EventSlot()
+        self.response_slot = zap.EventSlot()
 
         self.local_tag = generate_tag()
     
@@ -78,18 +79,18 @@ class Dialog(Loggable):
         return Nameaddr(Uri(hop.local_addr))
         
         
-    def setup_incoming(self, params):
+    def setup_incoming(self, request):
         # Forge To tag to make it possible for CANCEL-s to find this dialog
-        params["to"].params["tag"] = self.local_tag
+        request["to"].params["tag"] = self.local_tag
 
-        self.local_nameaddr = params["to"]
-        self.remote_nameaddr = params["from"]
-        self.my_contact = self.make_my_contact(params["hop"])
-        self.call_id = params["call_id"]
+        self.local_nameaddr = request["to"]
+        self.remote_nameaddr = request["from"]
+        self.my_contact = self.make_my_contact(request["hop"])
+        self.call_id = request["call_id"]
         
-        self.peer_contact = first(params["contact"])
-        self.route = params["record_route"]
-        self.hop = params["hop"]
+        self.peer_contact = first(request["contact"])
+        self.route = request["record_route"]
+        self.hop = request["hop"]
 
         self.dialog_manager.register_by_local_tag(self.local_tag, self)
         
@@ -107,25 +108,25 @@ class Dialog(Loggable):
         self.dialog_manager.register_by_local_tag(self.local_tag, self)
 
 
-    def setup_outgoing_responded(self, params):
-        self.remote_nameaddr = params["to"]
+    def setup_outgoing_responded(self, response):
+        self.remote_nameaddr = response["to"]
         
-        self.peer_contact = first(params["contact"])
-        self.route = list(reversed(params["record_route"]))
+        self.peer_contact = first(response["contact"])
+        self.route = list(reversed(response["record_route"]))
 
 
-    def setup_outgoing_bastard(self, invite_params):
-        self.local_nameaddr = invite_params["from"]
-        self.remote_nameaddr = invite_params["to"]
-        self.peer_contact = Nameaddr(invite_params["uri"])
-        self.call_id = invite_params["call_id"]
-        self.last_sent_cseq = invite_params["cseq"]
-        self.hop = invite_params["hop"]
+    def setup_outgoing_bastard(self, request):
+        self.local_nameaddr = request["from"]
+        self.remote_nameaddr = request["to"]
+        self.peer_contact = Nameaddr(request["uri"])
+        self.call_id = request["call_id"]
+        self.last_sent_cseq = request["cseq"]
+        self.hop = request["hop"]
         
         # Don't register, we already have a dialog with the same local tag!
 
 
-    def bastard_reaction(self, invite_params, response_params):
+    def bastard_reaction(self, request, response):
         # Multiple dialogs from a single INVITE request CAN'T be supported.
         # Doing so would make every outgoing call implicitly forkable into an
         # indefinite number of calls. That would allow a 2xx response to
@@ -133,23 +134,23 @@ class Dialog(Loggable):
         # responses couldn't be reported until the transaction expires, that is
         # some 30 seconds. HOW. FUCKED. UP. IS. THAT.
         
-        status = response_params["status"]
+        status = response["status"]
         
         if status.code >= 200 and status.code < 300:
             self.logger.warning("Initiating bastard reaction for status %s!" % status.code)
             
             bastard = Dialog(self.dialog_manager)
-            bastard.setup_outgoing_bastard(invite_params)
-            bastard.setup_outgoing_responded(response_params)
+            bastard.setup_outgoing_bastard(request)
+            bastard.setup_outgoing_responded(response)
             
-            bastard.send_request(dict(method="ACK"), response_params)
+            bastard.send_request(dict(method="ACK"), response)
             bastard.send_request(dict(method="BYE"))
         else:
             self.logger.warning("Skipping bastard reaction for status %s!" % status.code)
 
 
-    def make_request(self, user_params, related_params=None):
-        method = user_params["method"]
+    def make_request(self, user_request, related_params=None):
+        method = user_request["method"]
         
         if method == "CANCEL":
             raise Error("CANCEL should be out of dialog!")
@@ -159,7 +160,7 @@ class Dialog(Loggable):
             self.last_sent_cseq += 1
             cseq = self.last_sent_cseq
 
-        dialog_params = {
+        dialog_request = {
             "is_response": False,
             "uri": self.peer_contact.uri,
             "from": self.local_nameaddr,
@@ -168,28 +169,28 @@ class Dialog(Loggable):
             "cseq": cseq,
             "max_forwards": MAX_FORWARDS,
             "hop": self.hop,
-            "user_params": user_params.copy()  # save original for auth retries
+            "user_request": user_request.copy()  # save original for auth retries
         }
 
         if method == "INVITE":
-            dialog_params["contact"] = [ self.my_contact ]
+            dialog_request["contact"] = [ self.my_contact ]
 
-        safe_update(user_params, dialog_params)
+        safe_update(user_request, dialog_request)
 
-        return user_params
+        return user_request
 
 
-    def take_request(self, params):
-        if params["is_response"]:
+    def take_request(self, request):
+        if request["is_response"]:
             raise Error("Not a request!")
 
-        method = params["method"]
-        from_nameaddr = params["from"]
+        method = request["method"]
+        from_nameaddr = request["from"]
         from_tag = from_nameaddr.params["tag"]
-        to_nameaddr = params["to"]
+        to_nameaddr = request["to"]
         to_tag = to_nameaddr.params.get("tag")
-        call_id = params["call_id"]
-        cseq = params["cseq"]
+        call_id = request["call_id"]
+        cseq = request["cseq"]
 
         # The Cseq for CANCEL and ACK may be lower than the last received one
         if  method in ("CANCEL", "ACK"):
@@ -214,48 +215,48 @@ class Dialog(Loggable):
                 raise Error("Mismatching local tag!")
                 
             # TODO: 12.2 only re-INVITE-s modify the peer_contact, and nothing the route set
-            peer_contact = first(params.get("contact"))
+            peer_contact = first(request.get("contact"))
             if peer_contact:
                 self.peer_contact = peer_contact
         else:
             if to_tag:
                 raise Error("Unexpected to tag!")
 
-            self.setup_incoming(params)
+            self.setup_incoming(request)
 
-        return params
+        return request
 
 
-    def make_response(self, user_params, request_params):
-        status = user_params["status"]
+    def make_response(self, user_response, related_request):
+        status = user_response["status"]
         if status.code == 100:
             raise Error("Eyy, 100 should be generated by the transaction layer!")
         
-        dialog_params = {
+        dialog_response = {
             "is_response": True,
             "from": self.remote_nameaddr,
             "to": self.local_nameaddr,
             "call_id": self.call_id,
-            "cseq": request_params["cseq"],
-            "method": request_params["method"],  # only for internal use
-            "hop": request_params["hop"]  # always use the request's hop, just in case
+            "cseq": related_request["cseq"],
+            "method": related_request["method"],  # only for internal use
+            "hop": related_request["hop"]  # always use the request's hop, just in case
         }
 
-        if dialog_params["method"] == "INVITE":
-            dialog_params["contact"] = [ self.my_contact ]
+        if dialog_response["method"] == "INVITE":
+            dialog_response["contact"] = [ self.my_contact ]
 
-        safe_update(user_params, dialog_params)
+        safe_update(user_response, dialog_response)
 
-        return user_params
+        return user_response
 
 
-    def take_response(self, params, related_request):
-        status = params["status"]
-        from_nameaddr = params["from"]
+    def take_response(self, response, related_request):
+        status = response["status"]
+        from_nameaddr = response["from"]
         from_tag = from_nameaddr.params["tag"]
-        to_nameaddr = params["to"]
+        to_nameaddr = response["to"]
         to_tag = to_nameaddr.params.get("tag")
-        call_id = params["call_id"]
+        call_id = response["call_id"]
 
         if call_id != self.call_id:
             raise Error("Mismatching call id!")
@@ -269,31 +270,31 @@ class Dialog(Loggable):
             if related_request.method != "INVITE":
                 raise Error("Mismatching remote tag!")
             else:
-                return self.bastard_reaction(related_request, params)
+                return self.bastard_reaction(related_request, response)
 
         if status.code < 300:
             # Only successful or early responses create a dialog.
             # We don't get 100 responses, and any other response must contain a To tag.
 
             if not remote_tag:
-                self.setup_outgoing_responded(params)
+                self.setup_outgoing_responded(response)
             else:
                 # TODO: 12.2 only re-INVITE-s modify the peer_contact, and nothing the route set
-                peer_contact = first(params.get("contact"))
+                peer_contact = first(response.get("contact"))
                 if peer_contact:
                     self.peer_contact = peer_contact
         elif status.code == 401:
             # Let's try authentication! TODO: 407, too!
             account = self.dialog_manager.get_remote_account(related_request["uri"])
-            auth = account.provide_auth(params, related_request) if account else None
+            auth = account.provide_auth(response, related_request) if account else None
                 
             if auth:
                 # Retrying this request is a bit tricky, because our owner must
                 # see the changes in case it wants to CANCEL it later. So we must modify
                 # the same dict instead of creating a new one.
-                user_params = related_request["user_params"]
+                user_request = related_request["user_request"]
                 related_request.clear()
-                related_request.update(user_params)
+                related_request.update(user_request)
                 related_request.update(auth)
                 
                 self.logger.debug("Trying authorization...")
@@ -302,39 +303,39 @@ class Dialog(Loggable):
             else:
                 self.logger.debug("Couldn't authorize, being rejected!")
 
-        return params
+        return response
 
 
-    def send_request(self, user_params, related_params=None):
-        method = user_params["method"]
+    def send_request(self, user_request, related_params=None):
+        method = user_request["method"]
         
         if method == "CANCEL":
             # CANCELs are cloned from the INVITE in the transaction layer
-            params = user_params
-            params["is_response"] = False
+            request = user_request
+            request["is_response"] = False
         else:
             # Even 2xx ACKs are in-dialog
-            params = self.make_request(user_params, related_params)
+            request = self.make_request(user_request, related_params)
             
-        self.dialog_manager.transmit(params, related_params)
+        self.dialog_manager.transmit(request, related_params)
 
 
-    def send_response(self, user_params, related_params=None):
+    def send_response(self, user_response, related_request):
         #print("Will send response: %s" % str(user_params))
-        params = self.make_response(user_params, related_params)
-        self.dialog_manager.transmit(params, related_params)
+        response = self.make_response(user_response, related_request)
+        self.dialog_manager.transmit(response, related_request)
         
         
     def recv_request(self, msg):
         request = self.take_request(msg)
         if request:  # may have been denied
-            self.report_slot.zap(request)
+            self.request_slot.zap(request)
     
     
     def recv_response(self, msg, related_request):
         response = self.take_response(msg, related_request)
         if response:  # may have been retried
-            self.report_slot.zap(response)
+            self.response_slot.zap(response)
 
 
 class DialogManager(Loggable):
@@ -358,14 +359,14 @@ class DialogManager(Loggable):
         self.logger.debug("Registered dialog with local tag %s" % (local_tag,))
         
         
-    def process_request(self, params, related_params=None):
-        method = params["method"]
-        local_tag = params["to"].params.get("tag")
+    def process_request(self, request, related_params=None):
+        method = request["method"]
+        local_tag = request["to"].params.get("tag")
         dialog = self.dialogs_by_local_tag.get(local_tag)
         
         if dialog:
             self.logger.debug("Found dialog for %s request: %s" % (method, dialog.get_local_tag()))
-            dialog.recv_request(params)
+            dialog.recv_request(request)
             return True
 
         if method == "CANCEL" and not local_tag and related_params:
@@ -373,25 +374,25 @@ class DialogManager(Loggable):
             forged_local_tag = related_params["to"].params.get("tag")
             
             if forged_local_tag:
-                params["to"].params["tag"] = forged_local_tag
+                request["to"].params["tag"] = forged_local_tag
                 dialog = self.dialogs_by_local_tag.get(forged_local_tag)
                 
                 if dialog:
                     self.logger.debug("Found dialog for INVITE CANCEL: %s" % forged_local_tag)
-                    dialog.recv_request(params)
+                    dialog.recv_request(request)
                     return True
             
         return False
         
 
-    def process_response(self, params, related_request):
-        method = params["method"]
-        local_tag = params["from"].params.get("tag")
+    def process_response(self, response, related_request):
+        method = response["method"]
+        local_tag = response["from"].params.get("tag")
         dialog = self.dialogs_by_local_tag.get(local_tag)
         
         if dialog:
             self.logger.debug("Found dialog for %s response: %s" % (method, dialog.get_local_tag()))
-            dialog.recv_response(params, related_request)
+            dialog.recv_response(response, related_request)
             return True
 
         return False

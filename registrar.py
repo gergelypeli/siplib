@@ -67,12 +67,12 @@ class LocalRecord(Loggable):
         self.logger.info("Registered %s from %s via %s permanently." % (self.record_uri, uri, hop))
         
 
-    def recv_request(self, params):
+    def recv_request(self, request):
         now = datetime.datetime.now()
-        hop = params["hop"]
-        call_id = params["call_id"]
-        cseq = params["cseq"]
-        contact_nameaddrs = params["contact"]
+        hop = request["hop"]
+        call_id = request["call_id"]
+        cseq = request["cseq"]
+        contact_nameaddrs = request["contact"]
 
         # First check if all contacts can be updated
         for contact_nameaddr in contact_nameaddrs:
@@ -81,14 +81,14 @@ class LocalRecord(Loggable):
             
             if contact_info and contact_info.call_id == call_id and contact_info.cseq >= cseq:
                 # The RFC suggests 500, but that's a bit weird
-                self.send_response(dict(status=Status(500, "Out of order request is not our fault")), params)
+                self.send_response(dict(status=Status(500, "Out of order request is not our fault")), request)
                 return
 
         # Okay, update them all
         # No contact is valid for just fetching the registrations
         for contact_nameaddr in contact_nameaddrs:
             uri = contact_nameaddr.uri
-            expires = contact_nameaddr.params.get("expires", params.get("expires"))
+            expires = contact_nameaddr.params.get("expires", request.get("expires"))
             seconds_left = int(expires) if expires is not None else self.DEFAULT_EXPIRES
             expiration = now + datetime.timedelta(seconds=seconds_left)
             
@@ -99,11 +99,11 @@ class LocalRecord(Loggable):
             seconds_left = int((contact_info.expiration - now).total_seconds())
             fetched.append(Nameaddr(uri=urihop.uri, params=dict(expires=str(seconds_left))))
 
-        self.send_response(dict(status=Status(200, "OK"), contact=fetched), params)
+        self.send_response(dict(status=Status(200, "OK"), contact=fetched), request)
 
 
-    def send_response(self, user_params, related_request):
-        nondialog_params = {
+    def send_response(self, user_response, related_request):
+        nondialog_response = {
             "is_response": True,
             "from": related_request["from"],
             "to": related_request["to"].tagged(generate_tag()),
@@ -113,9 +113,9 @@ class LocalRecord(Loggable):
             "hop": related_request["hop"]
         }
 
-        params = safe_update(user_params, nondialog_params)
+        response = safe_update(user_response, nondialog_response)
         
-        self.registrar.transmit(params, related_request)
+        self.registrar.transmit(response, related_request)
 
 
     def get_contacts(self):
@@ -185,10 +185,10 @@ class RemoteRecord(Loggable):
         self.send_request(user_params)
         
         
-    def send_request(self, user_params):
+    def send_request(self, user_request):
         self.cseq += 1
 
-        nondialog_params = {
+        nondialog_request = {
             "is_response": False,
             'uri': self.registrar_uri,
             'from': Nameaddr(self.record_uri).tagged(self.local_tag),
@@ -197,26 +197,26 @@ class RemoteRecord(Loggable):
             "cseq": self.cseq,
             "max_forwards": MAX_FORWARDS,
             "hop": self.hop,
-            "user_params": user_params.copy()
+            "user_request": user_request.copy()
         }
 
-        params = safe_update(user_params, nondialog_params)
+        request = safe_update(user_request, nondialog_request)
 
-        self.registrar.transmit(params, None)
+        self.registrar.transmit(request, None)
 
 
-    def recv_response(self, params, related_request):
-        status = params["status"]
+    def recv_response(self, response, related_request):
+        status = response["status"]
         
         if status.code == 401:
             # Let's try authentication! TODO: 407, too!
             account = self.registrar.get_remote_account(related_request["uri"])
-            auth = account.provide_auth(params, related_request) if account else None
+            auth = account.provide_auth(response, related_request) if account else None
                 
             if auth:
-                user_params = related_request["user_params"]
+                user_request = related_request["user_request"]
                 related_request.clear()
-                related_request.update(user_params)
+                related_request.update(user_request)
                 related_request.update(auth)
                 
                 self.logger.debug("Trying authorization...")
@@ -226,9 +226,9 @@ class RemoteRecord(Loggable):
             else:
                 self.logger.debug("Couldn't authorize, being rejected!")
 
-        for contact_nameaddr in params["contact"]:
+        for contact_nameaddr in response["contact"]:
             if contact_nameaddr.uri == self.contact_uri:
-                expires = contact_nameaddr.params.get("expires", params.get("expires"))
+                expires = contact_nameaddr.params.get("expires", response.get("expires"))
                 seconds_left = int(expires)
                 expiration = datetime.datetime.now() + datetime.timedelta(seconds=seconds_left)
                 self.logger.info("Registered at %s until %s" % (self.registrar_uri, expiration))
@@ -275,24 +275,24 @@ class Registrar(Loggable):
         return registering_uri.canonical_aor() == record_uri
         
         
-    def process_request(self, params):
-        if params["method"] != "REGISTER":
+    def process_request(self, request):
+        if request["method"] != "REGISTER":
             raise Error("Registrar has nothing to do with this request!")
         
-        registering_uri = params["from"].uri
-        record_uri = params["to"].uri.canonical_aor()
+        registering_uri = request["from"].uri
+        record_uri = request["to"].uri.canonical_aor()
         
         if not self.may_register(registering_uri, record_uri):
-            self.reject_request(params, Status(403, "Forbidden"))
+            self.reject_request(request, Status(403, "Forbidden"))
             return
         
         record = self.local_records_by_uri.get(record_uri)
         if not record:
             self.logger.warning("Local record not found: %s" % record_uri)
-            self.reject_request(params, Status(404))
+            self.reject_request(request, Status(404))
             return
         
-        record.recv_request(params)
+        record.recv_request(request)
         
         
     def transmit(self, params, related_params=None):
@@ -311,7 +311,7 @@ class Registrar(Loggable):
             return []
 
 
-    def authenticate_request(self, params):
+    def authenticate_request(self, request):
         # Checks any incoming request to see if the sender is a local account.
         # Returns:
         #   authname, True -  accept
@@ -319,8 +319,8 @@ class Registrar(Loggable):
         #   None, True -      reject
         #   None, False -     not found
         
-        record_uri = params["from"].uri.canonical_aor()
-        hop = params["hop"]
+        record_uri = request["from"].uri.canonical_aor()
+        hop = request["hop"]
         
         record = self.local_records_by_uri.get(record_uri) or self.local_records_by_uri.get(record_uri._replace(username=None))
         
@@ -367,11 +367,11 @@ class Registrar(Loggable):
             self.logger.error("Remote record hop was not resolved, ignoring!")
 
 
-    def process_response(self, params, related_request):
-        record_uri = params['to'].uri
+    def process_response(self, response, related_request):
+        record_uri = response['to'].uri
         record = self.remote_records_by_uri.get(record_uri)
         
         if record:
-            record.recv_response(params, related_request)
+            record.recv_response(response, related_request)
         else:
             self.logger.warning("Ignoring response to unknown remote record!")

@@ -101,9 +101,9 @@ class LocalAccount(Account):
         self.realm = realm
         
 
-    def check_auth(self, params):
-        method = params["method"]
-        auth = params.get("authorization")
+    def check_auth(self, request):
+        method = request["method"]
+        auth = request.get("authorization")
         
         if not auth:
             self.logger.debug("No credentials in request.")
@@ -125,8 +125,8 @@ class LocalAccount(Account):
         return True
 
 
-    def require_auth(self, params):
-        auth = params.get("authorization")
+    def require_auth(self, request):
+        auth = request.get("authorization")
         stale = auth.nonce not in self.nonce if auth else False  # client should retry
         nonce = self.generate_nonce()
         self.nonces.add(nonce)  # TODO: must clean these up

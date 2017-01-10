@@ -22,7 +22,7 @@ import resolver
 TEST_DIALIN = 1
 TEST_DIALOUT = 2
 TEST_PICKUP = 3
-TEST = TEST_DIALIN
+TEST = TEST_PICKUP
 
 NUMBER_A_PREFIX = "2"
 NUMBER_A_SNOM_1 = "201"
@@ -356,10 +356,10 @@ class BusylampEventSource(DialogEventSource):
             
 
 class TestSubscriptionManager(SubscriptionManager):
-    def identify_event_source(self, params):
-        event = params["event"]
-        from_uri = params["from"].uri
-        to_uri = params["to"].uri
+    def identify_event_source(self, request):
+        event = request["event"]
+        from_uri = request["from"].uri
+        to_uri = request["to"].uri
         
         if event == "message-summary" and to_uri.username == NUMBER_A_SERVICE_VOICEMAIL:
             return "voicemail", from_uri.username
@@ -401,10 +401,10 @@ class TestLine(Bridge):
         self.manager = manager
         
 
-    def identify(self, params):
-        self.addr = params["addr"]
-        self.username = params["username"]
-        self.is_outgoing = params.get("is_outgoing", False)  # From the device's perspective
+    def identify(self, dst):
+        self.addr = dst["addr"]
+        self.username = dst["username"]
+        self.is_outgoing = dst.get("is_outgoing", False)  # From the device's perspective
         self.is_confirmed = False
         self.ctx = {}
         
@@ -433,7 +433,7 @@ class TestLine(Bridge):
 
         self.update_busylamp_state()
         
-        if self.is_outgoing:
+        if dst_addr != self.addr or dst_username != self.username:
             self.dial(action)
             return
             
@@ -516,6 +516,7 @@ class TestLineManager(Loggable):
         
         
     def register(self, username, line):
+        self.logger.info("Registering line %s" % username)
         self.line_sets_by_username.setdefault(username, WeakSet()).add(line)
         
         
@@ -529,6 +530,7 @@ class TestLineManager(Loggable):
                 if ok:
                     return True
         
+        self.logger.error("Didn't find any call for pickup on line %s!" % username)
         return False
         
 
@@ -545,6 +547,12 @@ class TestSwitch(Switch):
         
         self.line_manager = TestLineManager()
 
+
+    def set_oid(self, oid):
+        Switch.set_oid(self, oid)
+        
+        self.line_manager.set_oid(oid.add("lineman"))
+        
 
     def start(self, realm, local_addr, mgw_addr, media_addrs):
         self.realm = realm
@@ -624,11 +632,11 @@ class SwitchA(TestSwitch):
                 
                 if dst_username.startswith("*"):
                     # Call pickup testing
-                    self.reject_incoming_leg(Status(603))
-                    
                     target_number = dst_username[1:]
                     dst_uri = Uri(Addr(A_DOMAIN), src_username)
                     self.logger.info("Okay, pickup from %s to %s." % (target_number, dst_uri))
+
+                    self.reject_incoming_leg(Status(603, "Picking Up"))
                     self.ground.switch.line_manager.call_pickup(target_number, dst_uri)
                     return
                 
@@ -662,7 +670,7 @@ class SwitchA(TestSwitch):
                     return
                 elif dst_username == NUMBER_A_LOCAL_RINGING_LINE:
                     dial = dict(action, ctx=dict(ctx, dst_username=NUMBER_A_LOCAL_RINGING))
-                    self.dial(dial, "line", addr=dst_addr, username=dst_username, force_incoming=True)
+                    self.dial(dial, "line", addr=dst_addr, username=dst_username)
                     return
             elif dst_username >= "300" and dst_username < "400":
                 # Numbers for switch B

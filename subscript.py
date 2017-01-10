@@ -27,7 +27,7 @@ class EventSource(Loggable):
 
     def get_expiry_range(self):
         return 30, 60
-        
+
 
     def add_subscription(self, dialog):
         self.last_subscription_id += 1
@@ -35,74 +35,77 @@ class EventSource(Loggable):
         self.logger.info("Adding subscription %s." % id)
         
         self.subscriptions_by_id[id] = Subscription(dialog)
-        dialog.report_slot.plug(self.process, id=id)
+        dialog.request_slot.plug(self.process_request, id=id)
+        dialog.response_slot.plug(self.process_response, id=id)
 
 
-    def process(self, params, id):
-        is_response = params["is_response"]
-        method = params["method"]
+    def process_request(self, request, id):
+        method = request["method"]
         # NOTE: we can only handle one subscription per dialog, sharing is not supported.
         
-        if not is_response:
-            if method == "SUBSCRIBE":
-                self.logger.debug("Got SUBSCRIBE request.")
-                subscription = self.subscriptions_by_id[id]
+        if method == "SUBSCRIBE":
+            self.logger.debug("Got SUBSCRIBE request.")
+            subscription = self.subscriptions_by_id[id]
 
-                expires = params.get("expires", 0)
-                min_expires, max_expires = self.get_expiry_range()
+            expires = request.get("expires", 0)
+            min_expires, max_expires = self.get_expiry_range()
+            
+            if expires > 0:
+                if expires < min_expires:
+                    res = dict(status=Status(423), expires=min_expires)
+                    subscription.dialog.send_response(res, request)
                 
-                if expires > 0:
-                    if expires < min_expires:
-                        res = dict(status=Status(423), expires=min_expires)
-                        subscription.dialog.send_response(res, params)
+                    if not subscription.expiration_plug:
+                        self.subscriptions_by_id.pop(id)
                     
-                        if not subscription.expiration_plug:
-                            self.subscriptions_by_id.pop(id)
-                        
-                        return
-                    
-                    if expires > max_expires:
-                        expires = max_expires
-                    
-                    if subscription.expiration_plug:
-                        subscription.expiration_plug.unplug()
-                    
-                    subscription.expiration_deadline = datetime.datetime.now() + datetime.timedelta(seconds=expires)
-                    subscription.expiration_plug = zap.time_slot(expires).plug(self.expired, id=id)
-                    
-                    res = dict(status=Status(200, "OK"), expires=expires)
-                    subscription.dialog.send_response(res, params)
+                    return
+                
+                if expires > max_expires:
+                    expires = max_expires
+                
+                if subscription.expiration_plug:
+                    subscription.expiration_plug.unplug()
+                
+                subscription.expiration_deadline = datetime.datetime.now() + datetime.timedelta(seconds=expires)
+                subscription.expiration_plug = zap.time_slot(expires).plug(self.expired, id=id)
+                
+                res = dict(status=Status(200, "OK"), expires=expires)
+                subscription.dialog.send_response(res, request)
 
-                    contact = subscription.dialog.peer_contact.uri
-                    self.logger.info("Subscription %s from %s extended for %d seconds." % (id, contact, expires))
-                    self.notify_one(id)
-                else:
-                    if subscription.expiration_plug:
-                        self.logger.info("Subscription %s cancelled." % (id,))
-                        subscription.expiration_plug.unplug()
-                    else:
-                        self.logger.info("Subscription %s polled." % (id,))
-
-                    res = dict(status=Status(200, "OK"), expires=expires)
-                    subscription.dialog.send_response(res, params)
-
-                    self.notify_one(id, "timeout")
-                    self.subscriptions_by_id.pop(id, None)
+                contact = subscription.dialog.peer_contact.uri
+                self.logger.info("Subscription %s from %s extended for %d seconds." % (id, contact, expires))
+                self.notify_one(id)
             else:
-                self.logger.warning("Ignoring %s request!" % method)
+                if subscription.expiration_plug:
+                    self.logger.info("Subscription %s cancelled." % (id,))
+                    subscription.expiration_plug.unplug()
+                else:
+                    self.logger.info("Subscription %s polled." % (id,))
+
+                res = dict(status=Status(200, "OK"), expires=expires)
+                subscription.dialog.send_response(res, request)
+
+                self.notify_one(id, "timeout")
+                self.subscriptions_by_id.pop(id, None)
         else:
-            if method == "NOTIFY":
-                status = params["status"]
-                
-                if status.code == 200:
-                    self.logger.debug("Got NOTIFY response.")
-                else:
-                    self.logger.warning("Got NOTIFY response %d!" % status.code)
-                    self.subscriptions_by_id.pop(id, None)
+            self.logger.warning("Ignoring %s request!" % method)
+
+
+    def process_response(self, response, id):
+        method = response["method"]
+        
+        if method == "NOTIFY":
+            status = response["status"]
+            
+            if status.code == 200:
+                self.logger.debug("Got NOTIFY response.")
             else:
-                self.logger.warning("Ignoring %s response!" % method)
-                
-                
+                self.logger.warning("Got NOTIFY response %d!" % status.code)
+                self.subscriptions_by_id.pop(id, None)
+        else:
+            self.logger.warning("Ignoring %s response!" % method)
+
+
     def get_state(self):
         raise NotImplementedError()
 
@@ -257,7 +260,7 @@ class SubscriptionManager(Loggable):
         self.transmit(response, request)
 
 
-    def identify_event_source(self, params):
+    def identify_event_source(self, request):
         raise NotImplementedError()
 
 
@@ -275,26 +278,26 @@ class SubscriptionManager(Loggable):
         self.event_sources_by_key[key] = es
         
 
-    def process_request(self, params):
-        if params["method"] != "SUBSCRIBE":
+    def process_request(self, request):
+        if request["method"] != "SUBSCRIBE":
             raise Exception("SubscriptionManager has nothing to do with this request!")
         
-        key = self.identify_event_source(params)
+        key = self.identify_event_source(request)
         
         if not key:
             self.logger.warning("Rejecting subscription for unidentifiable event source!")
-            self.reject_request(params, Status(404))
+            self.reject_request(request, Status(404))
             return
         
         es = self.event_sources_by_key.get(key)
         if not es:
             self.logger.warning("Rejecting subscription for nonexistent event source: %s" % (key,))
-            self.reject_request(params, Status(404))
+            self.reject_request(request, Status(404))
             return
             
         dialog = self.switch.make_dialog()
         es.add_subscription(dialog)
-        dialog.recv_request(params)
+        dialog.recv_request(request)
 
 
     def get_event_source(self, type, id):

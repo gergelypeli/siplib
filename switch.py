@@ -135,8 +135,8 @@ class Switch(Loggable):
         self.calls_by_oid.pop(call.oid)
         
         
-    def auth_request(self, params):
-        authname, sure = self.registrar.authenticate_request(params)
+    def auth_request(self, request):
+        authname, sure = self.registrar.authenticate_request(request)
         # Returned:
         #   authname, True -  accept
         #   authname, False - challenge
@@ -145,10 +145,10 @@ class Switch(Loggable):
 
         if not authname:
             if sure:
-                self.reject_request(params, 403, "Hop not allowed")
+                self.reject_request(request, 403, "Hop not allowed")
                 return True
             else:
-                self.reject_request(params, 403, "Sender not allowed")
+                self.reject_request(request, 403, "Sender not allowed")
                 return True
 
         if sure:
@@ -157,10 +157,10 @@ class Switch(Loggable):
         account = self.account_manager.get_local_account(authname)
         if not account:
             self.logger.error("Account %s referred, but not found!" % authname)
-            self.reject_request(params, 500)
+            self.reject_request(request, 500)
             return True
             
-        method = params["method"]
+        method = request["method"]
         
         if method in ("CANCEL", "ACK", "NAK"):
             self.logger.debug("Accepting request because it can't be authenticated anyway")
@@ -170,63 +170,63 @@ class Switch(Loggable):
             self.logger.debug("Accepting request because we're lazy to authenticate a PRACK")
             return False
 
-        if not account.check_auth(params):
+        if not account.check_auth(request):
             self.logger.debug("Challenging request without proper authentication")
-            challenge = account.require_auth(params)
-            self.challenge_request(params, challenge)
+            challenge = account.require_auth(request)
+            self.challenge_request(request, challenge)
             return True
             
         self.logger.debug("Accepting request with proper authentication")
         return False
     
 
-    def process_request(self, params, related_params):
-        method = params["method"]
+    def process_request(self, request, related_params):
+        method = request["method"]
 
-        processed = self.auth_request(params)
+        processed = self.auth_request(request)
         if processed:
             return
 
         # No dialogs for registrations
         if method == "REGISTER":
-            self.registrar.process_request(params)
+            self.registrar.process_request(request)
             return
 
         # Out of dialog requests
-        if "tag" not in params["to"].params:
+        if "tag" not in request["to"].params:
             if method == "INVITE":
-                self.start_sip_call(params)
+                self.start_sip_call(request)
                 return
             elif method == "SUBSCRIBE":
-                self.subscription_manager.process_request(params)
+                self.subscription_manager.process_request(request)
                 return
             elif method == "CANCEL":
                 # The related_params may be None if the transaction manager didn't find it
                 if related_params and related_params["method"] == "INVITE":
-                    self.dialog_manager.process_request(params, related_params)
+                    self.dialog_manager.process_request(request, related_params)
                     return
                 else:
-                    self.reject_request(params, 481, "Transaction Does Not Exist")
+                    self.reject_request(request, 481, "Transaction Does Not Exist")
                     return
     
-            self.reject_request(params, 501, "Method Not Implemented")
+            self.reject_request(request, 501, "Method Not Implemented")
         else:
             # In dialog requests
-            processed = self.dialog_manager.process_request(params)
+            processed = self.dialog_manager.process_request(request)
             if processed:
                 return
     
-            self.reject_request(params, 481, "Dialog Does Not Exist")
+            self.reject_request(request, 481, "Dialog Does Not Exist")
 
 
-    def process_response(self, params, related_request):
-        method = params["method"]
+    def process_response(self, response, related_request):
+        method = response["method"]
         
         if method == "REGISTER":
-            self.registrar.process_response(params, related_request)
+            self.registrar.process_response(response, related_request)
             return
 
-        processed = self.dialog_manager.process_response(params, related_request)
+        processed = self.dialog_manager.process_response(response, related_request)
         if processed:
             return
 
