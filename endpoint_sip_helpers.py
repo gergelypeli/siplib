@@ -27,7 +27,7 @@ class InviteUpdateHelper:
                 raise Exception("INVITE request while another INVITE is in progress!")
                 
             self.invite_state = InviteClientState(self.invite_use_rpr)
-            self.invite_state.message_slot.instaplug(self.send_request)
+            self.invite_state.message_slot.instaplug(self.send)
             self.invite_state.set_oid(self.oid.add("invite-client"))
         else:
             if not self.invite_state:
@@ -50,17 +50,17 @@ class InviteUpdateHelper:
         if not is_response and msg.method == "INVITE":
             if self.invite_state:
                 self.logger.warning("INVITE request while INVITE is in progress!")
-                self.send_response(Sip.response(status=Status(400)), msg)
+                self.send(Sip.response(status=Status(400)), msg)
                 return None, None, None
                 
             self.invite_state = InviteServerState(self.invite_use_rpr)
-            self.invite_state.message_slot.instaplug(self.send_response)
+            self.invite_state.message_slot.instaplug(self.send)
             self.invite_state.set_oid(self.oid.add("invite-server"))
         else:
             if not self.invite_state:
                 if not is_response:
                     self.logger.warning("INVITE-like request while INVITE not in progress!")
-                    self.send_response(Sip.response(status=Status(400)), msg)
+                    self.send(Sip.response(status=Status(400)), msg)
                     return None, None, None
                 else:
                     self.logger.warning("INVITE-like response while INVITE not in progress!")
@@ -97,8 +97,7 @@ class InviteUpdateHelper:
             
             self.update_state = UpdateClientState()
             self.update_state.set_oid(self.oid.add("update-client"))
-            self.update_state.request_slot.instaplug(self.send_request)
-            self.update_state.response_slot.instaplug(self.send_response)
+            self.update_state.message_slot.instaplug(self.send)
         else:
             if not self.update_state:
                 raise Exception("UPDATE response while no UPDATE is in progress!")
@@ -115,7 +114,7 @@ class InviteUpdateHelper:
         if self.invite_state and not self.invite_state.is_session_established():
             if not is_response:
                 self.logger.warning("UPDATE request while INVITE session not established!")
-                self.send_response(Sip.response(status=Status(400)), msg)
+                self.send(Sip.response(status=Status(400)), msg)
                 return None, None, None
             else:
                 self.logger.warning("UPDATE response while INVITE session not established, WTF?")
@@ -124,14 +123,13 @@ class InviteUpdateHelper:
         if not is_response:
             if self.update_state:
                 self.logger.warning("UPDATE request while another UPDATE is in progress!")
-                self.send_response(Sip.response(status=Status(400)), msg)
+                self.send(Sip.response(status=Status(400)), msg)
                 return None, None, None
 
             # Create update server state
             self.update_state = UpdateServerState()
             self.update_state.set_oid(self.oid.add("update-server"))
-            self.update_state.request_slot.instaplug(self.send_request)
-            self.update_state.response_slot.instaplug(self.send_response)
+            self.update_state.message_slot.instaplug(self.send)
         else:
             if not self.update_state:
                 self.logger.warning("UPDATE response while no UPDATE is in progress!")

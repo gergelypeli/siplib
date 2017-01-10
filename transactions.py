@@ -384,8 +384,7 @@ class TransactionManager(Loggable):
         self.client_transactions = {}  # by (branch, method)
         self.server_transactions = {}  # by (branch, method)
         
-        self.request_slot = zap.EventSlot()
-        self.response_slot = zap.EventSlot()
+        self.message_slot = zap.EventSlot()
         
         self.transport_plug = self.transport.process_slot.plug(self.process_message)
 
@@ -542,9 +541,9 @@ class TransactionManager(Loggable):
         tr.send(msg)
 
 
-    def report_response(self, params, related_request):
-        self.response_slot.zap(params, related_request)
+    def report_response(self, msg, related_msg):
+        self.message_slot.zap(msg, related_msg)
 
 
-    def report_request(self, params, related_request=None):
-        self.request_slot.zap(params, related_request)
+    def report_request(self, msg, related_msg=None):
+        self.message_slot.zap(msg, related_msg)

@@ -49,8 +49,7 @@ class Switch(Loggable):
             proxy(self.mgc)
         )
         
-        self.transaction_manager.request_slot.plug(self.process_request)
-        self.transaction_manager.response_slot.plug(self.process_response)
+        self.transaction_manager.message_slot.plug(self.process)
 
 
     def set_oid(self, oid):
@@ -79,19 +78,18 @@ class Switch(Loggable):
         return self.account_manager.get_remote_account(uri)
         
         
-    # FIXME: is this still needed?
     def send_message(self, msg, related_msg=None):
         return self.transaction_manager.send_message(msg, related_msg)
         
     
     def reject_request(self, request, code, reason=None):
         response = make_simple_response(request, Status(code, reason))
-        self.transaction_manager.send_message(response, request)
+        self.send_message(response, request)
 
 
     def challenge_request(self, msg, challenge):
         response = make_simple_response(msg, Status(401, "Come Again"), challenge)
-        self.transaction_manager.send_message(response, msg)
+        self.send_message(response, msg)
 
 
     def make_dialog(self):
@@ -123,11 +121,11 @@ class Switch(Loggable):
         return incoming_party
 
 
-    def start_sip_call(self, params):
+    def start_sip_call(self, request):
         incoming_party = self.start_call("sip")
         
         # The dialog must be fed directly, since the request contains no local tag yet.
-        incoming_party.get_dialog().recv_request(params)
+        incoming_party.get_dialog().recv(request)
         
 
     def call_finished(self, call):
@@ -180,61 +178,62 @@ class Switch(Loggable):
         return False
     
 
-    def process_request(self, request, related_params):
-        method = request.method
+    def process(self, msg, related_msg):
+        if not msg.is_response:
+            request = msg
+            method = request.method
 
-        processed = self.auth_request(request)
-        if processed:
-            return
-
-        # No dialogs for registrations
-        if method == "REGISTER":
-            self.registrar.process_request(request)
-            return
-
-        # Out of dialog requests
-        if "tag" not in request["to"].params:
-            if method == "INVITE":
-                self.start_sip_call(request)
-                return
-            elif method == "SUBSCRIBE":
-                self.subscription_manager.process_request(request)
-                return
-            elif method == "CANCEL":
-                # The related_params may be None if the transaction manager didn't find it
-                if related_params and related_params.method == "INVITE":
-                    self.dialog_manager.process_request(request, related_params)
-                    return
-                else:
-                    self.reject_request(request, 481, "Transaction Does Not Exist")
-                    return
-    
-            self.reject_request(request, 501, "Method Not Implemented")
-        else:
-            # In dialog requests
-            processed = self.dialog_manager.process_request(request)
+            processed = self.auth_request(request)
             if processed:
                 return
+
+            # No dialogs for registrations
+            if method == "REGISTER":
+                self.registrar.process_request(request)
+                return
+
+            # Out of dialog requests
+            if "tag" not in request["to"].params:
+                if method == "INVITE":
+                    self.start_sip_call(request)
+                    return
+                elif method == "SUBSCRIBE":
+                    self.subscription_manager.process(request)
+                    return
+                elif method == "CANCEL":
+                    # The related_msg may be None if the transaction manager didn't find it
+                    if related_msg and related_msg.method == "INVITE":
+                        self.dialog_manager.process(request, related_msg)
+                        return
+                    else:
+                        self.reject_request(request, 481, "Transaction Does Not Exist")
+                        return
     
-            self.reject_request(request, 481, "Dialog Does Not Exist")
-
-
-    def process_response(self, response, related_request):
-        method = response.method
-        
-        if method == "REGISTER":
-            self.registrar.process_response(response, related_request)
-            return
-
-        processed = self.dialog_manager.process_response(response, related_request)
-        if processed:
-            return
-
-        if method == "BYE":
-            # This will happen for bastard dialogs
-            self.logger.debug("No dialog for BYE response, oh well.")
-        elif method == "NOTIFY":
-            # This will happen for final notifications after expiration
-            self.logger.debug("No dialog for NOTIFY response, oh well.")
+                self.reject_request(request, 501, "Method Not Implemented")
+            else:
+                # In dialog requests
+                processed = self.dialog_manager.process(request)
+                if processed:
+                    return
+    
+                self.reject_request(request, 481, "Dialog Does Not Exist")
         else:
-            self.logger.warning("No dialog for incoming %s response!" % (method,))
+            response = msg
+            method = response.method
+        
+            if method == "REGISTER":
+                self.registrar.process_response(response, related_msg)
+                return
+
+            processed = self.dialog_manager.process(response, related_msg)
+            if processed:
+                return
+
+            if method == "BYE":
+                # This will happen for bastard dialogs
+                self.logger.debug("No dialog for BYE response, oh well.")
+            elif method == "NOTIFY":
+                # This will happen for final notifications after expiration
+                self.logger.debug("No dialog for NOTIFY response, oh well.")
+            else:
+                self.logger.warning("No dialog for incoming %s response!" % (method,))

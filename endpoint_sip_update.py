@@ -9,8 +9,7 @@ class UpdateState(Loggable):
         Loggable.__init__(self)
         
         self.request = None
-        self.request_slot = zap.EventSlot()
-        self.response_slot = zap.EventSlot()
+        self.message_slot = zap.EventSlot()
         
         
     def is_finished(self):
@@ -26,7 +25,7 @@ class UpdateClientState(UpdateState):
         add_sdp(msg, sdp)
 
         self.logger.info("Sending message: UPDATE with offer")
-        self.request_slot.zap(msg, None)
+        self.message_slot.zap(msg, None)
         self.request = msg
 
 
@@ -37,7 +36,7 @@ class UpdateClientState(UpdateState):
         if not msg.is_response:
             self.logger.warning("Rejecting incoming UPDATE because one was already sent!")
             res = Sip.response(status=Status(419))
-            self.response_slot.zap(res, msg)
+            self.message_slot.zap(res, msg)
             return None, None, None
     
         self.request = None
@@ -63,7 +62,7 @@ class UpdateServerState(UpdateState):
         else:
             self.logger.info("Sending message: UPDATE response with reject")
             
-        self.response_slot.zap(msg, self.request)
+        self.message_slot.zap(msg, self.request)
         self.request = None
             
             
@@ -71,7 +70,7 @@ class UpdateServerState(UpdateState):
         if self.request:
             self.logger.warning("Update request was already received!")
             res = Sip.response(status=Status(419))
-            self.response_slot.zap(res, msg)
+            self.message_slot.zap(res, msg)
             return None, None, None
             
         if msg.is_response:

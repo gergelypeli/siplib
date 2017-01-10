@@ -38,8 +38,7 @@ class Dialog(Loggable):
         Loggable.__init__(self)
 
         self.dialog_manager = dialog_manager
-        self.request_slot = zap.EventSlot()
-        self.response_slot = zap.EventSlot()
+        self.message_slot = zap.EventSlot()
 
         self.local_tag = generate_tag()
     
@@ -143,8 +142,8 @@ class Dialog(Loggable):
             bastard.setup_outgoing_bastard(request)
             bastard.setup_outgoing_responded(response)
             
-            bastard.send_request(Sip.request(method="ACK"), response)
-            bastard.send_request(Sip.request(method="BYE"))
+            bastard.send(Sip.request(method="ACK"), response)
+            bastard.send(Sip.request(method="BYE"))
         else:
             self.logger.warning("Skipping bastard reaction for status %s!" % status.code)
 
@@ -311,36 +310,26 @@ class Dialog(Loggable):
         return response
 
 
-    def send_request(self, user_request, related_params=None):
-        method = user_request.method
-        
-        if method == "CANCEL":
+    def send(self, msg, related_msg=None):
+        if not msg.is_response:
             # CANCELs are cloned from the INVITE in the transaction layer
-            request = user_request
-            request.is_response = False
+            if msg.method != "CANCEL":
+                # Even 2xx ACKs are in-dialog
+                msg = self.make_request(msg, related_msg)
         else:
-            # Even 2xx ACKs are in-dialog
-            request = self.make_request(user_request, related_params)
+            msg = self.make_response(msg, related_msg)
             
-        self.dialog_manager.transmit(request, related_params)
-
-
-    def send_response(self, user_response, related_request):
-        #print("Will send response: %s" % str(user_params))
-        response = self.make_response(user_response, related_request)
-        self.dialog_manager.transmit(response, related_request)
+        self.dialog_manager.transmit(msg, related_msg)
+            
         
-        
-    def recv_request(self, msg):
-        request = self.take_request(msg)
-        if request:  # may have been denied
-            self.request_slot.zap(request)
-    
-    
-    def recv_response(self, msg, related_request):
-        response = self.take_response(msg, related_request)
-        if response:  # may have been retried
-            self.response_slot.zap(response)
+    def recv(self, msg, related_msg=None):
+        if not msg.is_response:
+            msg = self.take_request(msg)  # TODO: related_msg is not used here
+        else:
+            msg = self.take_response(msg, related_msg)
+            
+        if msg:  # may have been denied
+            self.message_slot.zap(msg)
 
 
 class DialogManager(Loggable):
@@ -364,40 +353,41 @@ class DialogManager(Loggable):
         self.logger.debug("Registered dialog with local tag %s" % (local_tag,))
         
         
-    def process_request(self, request, related_params=None):
-        method = request.method
-        local_tag = request["to"].params.get("tag")
-        dialog = self.dialogs_by_local_tag.get(local_tag)
+    def process(self, msg, related_msg=None):
+        if not msg.is_response:
+            request = msg
+            method = request.method
+            local_tag = request["to"].params.get("tag")
+            dialog = self.dialogs_by_local_tag.get(local_tag)
         
-        if dialog:
-            self.logger.debug("Found dialog for %s request: %s" % (method, dialog.get_local_tag()))
-            dialog.recv_request(request)
-            return True
+            if dialog:
+                self.logger.debug("Found dialog for %s request: %s" % (method, dialog.get_local_tag()))
+                dialog.recv(request)
+                return True
 
-        if method == "CANCEL" and not local_tag and related_params:
-            # TODO: use hop, too, for safety!
-            forged_local_tag = related_params["to"].params.get("tag")
+            if method == "CANCEL" and not local_tag and related_msg:
+                # TODO: use hop, too, for safety!
+                forged_local_tag = related_msg["to"].params.get("tag")
             
-            if forged_local_tag:
-                request["to"].params["tag"] = forged_local_tag
-                dialog = self.dialogs_by_local_tag.get(forged_local_tag)
+                if forged_local_tag:
+                    request["to"].params["tag"] = forged_local_tag
+                    dialog = self.dialogs_by_local_tag.get(forged_local_tag)
                 
-                if dialog:
-                    self.logger.debug("Found dialog for INVITE CANCEL: %s" % forged_local_tag)
-                    dialog.recv_request(request)
-                    return True
+                    if dialog:
+                        self.logger.debug("Found dialog for INVITE CANCEL: %s" % forged_local_tag)
+                        dialog.recv(request)
+                        return True
             
-        return False
+            return False
+        else:
+            response = msg
+            method = response.method
+            local_tag = response["from"].params.get("tag")
+            dialog = self.dialogs_by_local_tag.get(local_tag)
         
+            if dialog:
+                self.logger.debug("Found dialog for %s response: %s" % (method, dialog.get_local_tag()))
+                dialog.recv(response, related_msg)
+                return True
 
-    def process_response(self, response, related_request):
-        method = response.method
-        local_tag = response["from"].params.get("tag")
-        dialog = self.dialogs_by_local_tag.get(local_tag)
-        
-        if dialog:
-            self.logger.debug("Found dialog for %s response: %s" % (method, dialog.get_local_tag()))
-            dialog.recv_response(response, related_request)
-            return True
-
-        return False
+            return False

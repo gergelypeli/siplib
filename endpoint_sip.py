@@ -29,8 +29,7 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
         self.state = self.DOWN
 
         self.dialog = dialog
-        self.dialog.request_slot.plug(self.process_request)
-        self.dialog.response_slot.plug(self.process_response)
+        self.dialog.message_slot.plug(self.process)
         
 
     def set_oid(self, oid):
@@ -59,12 +58,8 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
         return msg
         
 
-    def send_request(self, request, related=None):
-        self.dialog.send_request(self.add_abilities(request), related)
-
-
-    def send_response(self, response, related):
-        self.dialog.send_response(self.add_abilities(response), related)
+    def send(self, msg, related_msg=None):
+        self.dialog.send(self.add_abilities(msg), related_msg)
 
 
     def may_finish(self):
@@ -247,7 +242,7 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
             elif type == "hangup":
                 reason = action.get("reason")
                 msg = self.make_message(action, method="BYE", reason=[reason] if reason else None)
-                self.send_request(msg)
+                self.send(msg)
                 self.change_state(self.DISCONNECTING_OUT)
                 return
                 
@@ -266,15 +261,88 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
             self.forward(action)
 
 
-    def process_request(self, request):
-        method = request.method
-        self.logger.debug("Processing request %s" % method)
+    def process_refer_request(self, request):
+        refer_to = request.get("refer_to")
+        if not refer_to:
+            self.logger.warning("No Refer-To header!")
+            self.send(Sip.response(status=Status(400)), request)
+            return
+            
+        replaces = refer_to.uri.headers.get("replaces")
+        if not replaces:
+            self.logger.info("Blind transfer to %s." % (refer_to,))
+            other = None
+            tid = self.ground.make_transfer("blind")
+            src = {
+                'type': "sip",
+                'from': request["from"],
+                'to': refer_to
+            }
+        else:
+            td = TargetDialog.parse(Parser(replaces))
+            
+            # Moronic RFC 3891:
+            # In other words, the to-tag parameter is compared to the local tag,
+            # and the from-tag parameter is compared to the remote tag.
+            local_tag = td.params["to-tag"]
+            remote_tag = td.params["from-tag"]
+            call_id = td.call_id
+        
+            other = self.manager.get_endpoint(local_tag, remote_tag, call_id)
+        
+            if not other:
+                self.logger.warning("No target dialog found, l=%s, r=%s, c=%s" % (local_tag, remote_tag, call_id))
+                self.send(Sip.response(status=Status(404)), request)
+                return
+                
+            self.logger.info("Attended transfer to SIP endpoint %s." % local_tag)
+            tid = self.ground.make_transfer("attended")
+            src = None
+            
+        refer_sub = "false" if request.get("refer_sub") == "false" else "true"
+        self.send(Sip.response(status=Status(200), refer_sub=refer_sub), request)
+            
+        if refer_sub != "false":
+            notify = Sip.request(
+                method="NOTIFY",
+                event="refer",
+                subscription_state="terminated;reason=noresource",
+                content_type="message/sipfrag",
+                body="SIP/2.0 200 OK".encode("utf8")
+            )
+        
+            self.send(notify)
+
+        if not other:
+            # blind
+            action = self.make_action(request, type="transfer", transfer_id=tid, call_info=self.call_info, ctx={}, src=src)
+            self.forward(action)
+        else:
+            # attended
+            action = other.make_action(request, type="transfer", transfer_id=tid)
+            other.forward(action)
+
+            action = self.make_action(request, type="transfer", transfer_id=tid)
+            self.forward(action)
+
+
+    def process(self, msg):
+        method = msg.method
+        
+        if msg.is_response:
+            self.logger.debug("Processing response %d %s" % (msg.status.code, method))
+        else:
+            self.logger.debug("Processing request %s" % method)
 
         # Note: must change state before forward, because that can generate
         # a reverse action which should only be processed with the new state!
         
         if self.state == self.DOWN:
             if method == "INVITE":
+                if msg.is_response:
+                    return
+
+                request = msg
                 src = dict(request, type="sip")
                 ctx = {}
                 
@@ -301,18 +369,25 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
                 
                 self.forward(action)
                 return
-                
+
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
             if method in ("CANCEL", "ACK", "NAK", "PRACK"):
+                if msg.is_response:
+                    self.logger.warning("A %s response, WTF?" % method)
+                    return
+                    
+                request = msg
                 request, sdp, is_answer = self.invite_incoming(request)
                 
                 if not request:
                     return
+                    
                 elif method == "CANCEL":
                     self.change_state(self.DOWN)
                     action = self.make_action(request, type="hangup")
                     self.forward(action)
                     self.may_finish()
+                    
                 elif method == "ACK":
                     session = self.process_incoming_sdp(sdp, is_answer)
                     self.change_state(self.UP)
@@ -320,9 +395,11 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
                     if session:
                         action = self.make_action(request, type="session", session=session)
                         self.forward(action)
+                        
                 elif method == "NAK":
-                    self.send_request(Sip.request(method="BYE"))  # required behavior
+                    self.send(Sip.request(method="BYE"))  # required behavior
                     self.change_state(self.DISCONNECTING_OUT)
+                    
                 elif method == "PRACK":
                     session = self.process_incoming_sdp(sdp, is_answer)
 
@@ -331,137 +408,23 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
                         self.forward(action)
                     
                 return
-            elif method == "UPDATE":
-                request, sdp, is_answer = self.update_incoming(request)
-                self.process_session(request, sdp, is_answer)
-                return
                 
-        elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
-            if method in ("INVITE", "ACK", "NAK", "PRACK"):
-                self.logger.warning("A %s request, WTF?" % method)
-                return
             elif method == "UPDATE":
-                request, sdp, is_answer = self.update_incoming(request)
-                self.process_session(request, sdp, is_answer)
-                return
-
-        elif self.state == self.UP:
-            if method in ("INVITE", "ACK", "NAK", "PRACK"):
-                request, sdp, is_answer = self.invite_incoming(request)
-                self.process_session(request, sdp, is_answer)
-                return
-            elif method == "UPDATE":
-                request, sdp, is_answer = self.update_incoming(request)
-                self.process_session(request, sdp, is_answer)
-                return
-            elif method == "REFER":
-                refer_to = request.get("refer_to")
-                if not refer_to:
-                    self.logger.warning("No Refer-To header!")
-                    self.send_response(Sip.response(status=Status(400)), request)
-                    return
-                    
-                replaces = refer_to.uri.headers.get("replaces")
-                if not replaces:
-                    self.logger.info("Blind transfer to %s." % (refer_to,))
-                    other = None
-                    tid = self.ground.make_transfer("blind")
-                    src = {
-                        'type': "sip",
-                        'from': request["from"],
-                        'to': refer_to
-                    }
-                else:
-                    td = TargetDialog.parse(Parser(replaces))
-                    
-                    # Moronic RFC 3891:
-                    # In other words, the to-tag parameter is compared to the local tag,
-                    # and the from-tag parameter is compared to the remote tag.
-                    local_tag = td.params["to-tag"]
-                    remote_tag = td.params["from-tag"]
-                    call_id = td.call_id
-                
-                    other = self.manager.get_endpoint(local_tag, remote_tag, call_id)
-                
-                    if not other:
-                        self.logger.warning("No target dialog found, l=%s, r=%s, c=%s" % (local_tag, remote_tag, call_id))
-                        self.send_response(Sip.response(status=Status(404)), request)
-                        return
-                        
-                    self.logger.info("Attended transfer to SIP endpoint %s." % local_tag)
-                    tid = self.ground.make_transfer("attended")
-                    src = None
-                    
-                refer_sub = "false" if request.get("refer_sub") == "false" else "true"
-                self.send_response(Sip.response(status=Status(200), refer_sub=refer_sub), request)
-                    
-                if refer_sub != "false":
-                    notify = Sip.request(
-                        method="NOTIFY",
-                        event="refer",
-                        subscription_state="terminated;reason=noresource",
-                        content_type="message/sipfrag",
-                        body="SIP/2.0 200 OK".encode("utf8")
-                    )
-                
-                    self.send_request(notify)
-
-                if not other:
-                    # blind
-                    action = self.make_action(request, type="transfer", transfer_id=tid, call_info=self.call_info, ctx={}, src=src)
-                    self.forward(action)
-                else:
-                    # attended
-                    action = other.make_action(request, type="transfer", transfer_id=tid)
-                    other.forward(action)
-
-                    action = self.make_action(request, type="transfer", transfer_id=tid)
-                    self.forward(action)
-
-                return
-            elif method == "BYE":
-                self.send_response(Sip.response(status=Status(200, "OK")), request)
-                self.change_state(self.DOWN)
-                action = self.make_action(request, type="hangup")
-                self.forward(action)
-                self.may_finish()
-                return
-        elif self.state == self.DISCONNECTING_OUT:
-            if method == "BYE":
-                self.logger.debug("Mutual BYE, finishing immediately.")
-                self.send_response(Sip.response(status=Status(200)), request)
-                self.change_state(self.DOWN)
-                self.may_finish()
-                return
-
-        if request or sdp:
-            raise Exception("Weird %s request in state %s!" % (method, self.state))
-
-
-    def process_response(self, response):
-        method = response.method
-        status = response.status
-        self.logger.debug("Processing response %d %s" % (status.code, method))
-
-        # Note: must change state before forward, because that can generate
-        # a reverse action which should only be processed with the new state!
-        
-        if self.state == self.DOWN:
-            pass
-
-        elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
-            if method in ("CANCEL", "ACK", "NAK", "PRACK"):
-                self.logger.warning("A %s response, WTF?" % method)
-                return
-            elif method == "UPDATE":
-                response, sdp, is_answer = self.update_incoming(response)
-                self.process_session(response, sdp, is_answer)
+                msg, sdp, is_answer = self.update_incoming(msg)
+                self.process_session(msg, sdp, is_answer)
                 return
                 
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
             if method in ("INVITE", "ACK", "NAK", "PRACK"):
                 # Of course, there will be no ACK or NAK responses, just for completeness
-                    
+                
+                if not msg.is_response:
+                    self.logger.warning("A %s request, WTF?" % method)
+                    return
+
+                response = msg
+                status = response.status
+                
                 response, sdp, is_answer = self.invite_incoming(response)
                 if not response:
                     return
@@ -479,14 +442,14 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
                             self.change_state(self.DIALING_OUT_RINGING)
                             action = self.make_action(response, type="ring", session=session)
                             self.forward(action)
-                        
+
                         return
 
                     elif status.code == 183:
                         if session:
                             action = self.make_action(response, type="session", session=session)
                             self.forward(action)
-                        
+
                         return
                     
                     elif status.code >= 300:
@@ -506,51 +469,88 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
                         action = self.make_action(response, type="accept", session=session)
                         self.forward(action)
                         return
+                        
                 elif method == "PRACK":
                     return # Nothing meaningful should arrive in PRACK responses
+                    
             elif method == "UPDATE":
-                response, sdp, is_answer = self.update_incoming(response)
-                self.process_session(response, sdp, is_answer)
+                msg, sdp, is_answer = self.update_incoming(msg)
+                self.process_session(msg, sdp, is_answer)
                 return
 
         elif self.state == self.UP:
             if method in ("INVITE", "ACK", "NAK", "PRACK"):
-                response, sdp, is_answer = self.invite_incoming(response)
-                self.process_session(response, sdp, is_answer)
+                msg, sdp, is_answer = self.invite_incoming(msg)
+                self.process_session(msg, sdp, is_answer)
                 return
+                
             elif method == "UPDATE":
-                response, sdp, is_answer = self.update_incoming(response)
-                self.process_session(response, sdp, is_answer)
+                msg, sdp, is_answer = self.update_incoming(msg)
+                self.process_session(msg, sdp, is_answer)
                 return
+                
             elif method == "REFER":
-                self.logger.warning("Ignoring REFER response!")
+                if msg.is_response:
+                    self.logger.warning("Ignoring REFER response!")
+                    return
+                    
+                self.process_refer_request(msg)
                 return
+                
             elif method == "NOTIFY":
-                self.logger.warning("Ignoring NOTIFY response!")
+                if msg.is_response:
+                    self.logger.warning("Ignoring NOTIFY response!")
+                    return
+
+            elif method == "BYE":
+                if msg.is_response:
+                    self.logger.warning("Ignoring BYE response!")
+                    return
+                
+                request = msg
+                self.send(Sip.response(status=Status(200, "OK")), request)
+                self.change_state(self.DOWN)
+                action = self.make_action(request, type="hangup")
+                self.forward(action)
+                self.may_finish()
                 return
+                    
         elif self.state == self.DISCONNECTING_OUT:
             if method == "BYE":
+                if msg.is_response:
+                    self.change_state(self.DOWN)
+                    self.may_finish()
+                    return
+
+                request = msg
+                self.logger.debug("Mutual BYE, finishing immediately.")
+                self.send(Sip.response(status=Status(200)), request)
                 self.change_state(self.DOWN)
                 self.may_finish()
                 return
                 
             elif method == "INVITE":
-                self.logger.debug("Got late INVITE response: %s" % (status,))
-                # This was ACKed by the transaction layer
-                self.change_state(self.DOWN)
-                self.may_finish()
-                return
+                if msg.is_response:
+                    self.logger.debug("Got late INVITE response: %s" % (msg.status,))
+                    # This was ACKed by the transaction layer
+                    self.change_state(self.DOWN)
+                    self.may_finish()
+                    return
                 
             elif method == "CANCEL":
-                self.logger.debug("Got late CANCEL response: %s" % (status,))
-                return
+                if msg.is_response:
+                    self.logger.debug("Got late CANCEL response: %s" % (msg.status,))
+                    return
 
             elif method == "NOTIFY":
-                self.logger.debug("Got late NOTIFY response: %s" % (status,))
-                return
+                if msg.is_response:
+                    self.logger.debug("Got late NOTIFY response: %s" % (msg.status,))
+                    return
                 
-        if response or sdp:
-            raise Exception("Weird %s response in state %s!" % (method, self.state))
+        if msg.is_response:
+            self.logger.warning("Weird %s response in state %s!" % (method, self.state))
+        else:
+            self.logger.warning("Weird %s request in state %s!" % (method, self.state))
 
 
 class SipManager(Loggable):
