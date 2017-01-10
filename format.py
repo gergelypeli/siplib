@@ -5,7 +5,7 @@ import socket
 from async_net import HttpLikeMessage
 
 # TODO: use attributes instead for these
-META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "body", "hop", "user_params", "authname" ]
+META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "body", "hop", "user_request", "authname" ]
 
 
 class FormatError(Exception):
@@ -761,7 +761,7 @@ class Reason(namedtuple("Reason", [ "protocol", "params" ])):
         return cls(protocol, params)
 
 
-class SipMessage(HttpLikeMessage):
+class SipLikeMessage(HttpLikeMessage):
     LIST_HEADER_FIELDS = [ "via", "route", "record_route", "contact" ]
     
 
@@ -815,7 +815,7 @@ def print_structured_message(params):
 
     body = params.get("body", b"")
 
-    return SipMessage(initial_line, headers, body)
+    return SipLikeMessage(initial_line, headers, body)
 
 
 def parse_comma_separated(Item, header):

@@ -1,7 +1,7 @@
 import socket
 
 from async_net import TcpReconnector, TcpListener, HttpLikeStream
-from format import Hop, Addr, parse_structured_message, print_structured_message, SipMessage
+from format import Hop, Addr, parse_structured_message, print_structured_message, SipLikeMessage
 from log import Loggable
 import zap
 import resolver
@@ -54,7 +54,7 @@ class UdpTransport(Transport):
         packet, raddr = self.socket.recvfrom(65535)
         
         header, separator, rest = packet.partition(b"\r\n\r\n")
-        message = SipMessage.parse(header)
+        message = SipLikeMessage.parse(header)
         message.body = rest[:message.body]
 
         self.recved_slot.zap(message, Addr(*raddr))
@@ -65,7 +65,7 @@ class TcpTransport(Transport):
         Transport.__init__(self)
         
         socket.setblocking(False)
-        self.http_like_stream = HttpLikeStream(socket, message_class=SipMessage)
+        self.http_like_stream = HttpLikeStream(socket, message_class=SipLikeMessage)
         self.http_like_stream.process_slot.plug(self.process)
 
 
