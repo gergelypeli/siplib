@@ -1,6 +1,6 @@
 from weakref import WeakValueDictionary, proxy
 
-from format import Status, TargetDialog, Parser
+from format import Status, TargetDialog, Parser, Sip
 from party import Endpoint
 from endpoint_sip_helpers import InviteUpdateHelper, SessionHelper
 from log import Loggable
@@ -78,7 +78,12 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
         
         
     def make_message(self, action, **kwargs):
-        return kwargs
+        if "method" in kwargs:
+            return Sip.request(**kwargs)
+        elif "status" in kwargs:
+            return Sip.response(**kwargs)
+        else:
+            raise Exception("Bogus message!")
         
         
     def make_action(self, msg, **kwargs):
@@ -262,7 +267,7 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
 
 
     def process_request(self, request):
-        method = request["method"]
+        method = request.method
         self.logger.debug("Processing request %s" % method)
 
         # Note: must change state before forward, because that can generate
@@ -316,7 +321,7 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
                         action = self.make_action(request, type="session", session=session)
                         self.forward(action)
                 elif method == "NAK":
-                    self.send_request(dict(method="BYE"))  # required behavior
+                    self.send_request(Sip.request(method="BYE"))  # required behavior
                     self.change_state(self.DISCONNECTING_OUT)
                 elif method == "PRACK":
                     session = self.process_incoming_sdp(sdp, is_answer)
@@ -353,7 +358,7 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
                 refer_to = request.get("refer_to")
                 if not refer_to:
                     self.logger.warning("No Refer-To header!")
-                    self.send_response(dict(status=Status(400)), request)
+                    self.send_response(Sip.response(status=Status(400)), request)
                     return
                     
                 replaces = refer_to.uri.headers.get("replaces")
@@ -380,7 +385,7 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
                 
                     if not other:
                         self.logger.warning("No target dialog found, l=%s, r=%s, c=%s" % (local_tag, remote_tag, call_id))
-                        self.send_response(dict(status=Status(404)), request)
+                        self.send_response(Sip.response(status=Status(404)), request)
                         return
                         
                     self.logger.info("Attended transfer to SIP endpoint %s." % local_tag)
@@ -388,10 +393,10 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
                     src = None
                     
                 refer_sub = "false" if request.get("refer_sub") == "false" else "true"
-                self.send_response(dict(status=Status(200), refer_sub=refer_sub), request)
+                self.send_response(Sip.response(status=Status(200), refer_sub=refer_sub), request)
                     
                 if refer_sub != "false":
-                    notify = dict(
+                    notify = Sip.request(
                         method="NOTIFY",
                         event="refer",
                         subscription_state="terminated;reason=noresource",
@@ -415,7 +420,7 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
 
                 return
             elif method == "BYE":
-                self.send_response(dict(status=Status(200, "OK")), request)
+                self.send_response(Sip.response(status=Status(200, "OK")), request)
                 self.change_state(self.DOWN)
                 action = self.make_action(request, type="hangup")
                 self.forward(action)
@@ -424,7 +429,7 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
         elif self.state == self.DISCONNECTING_OUT:
             if method == "BYE":
                 self.logger.debug("Mutual BYE, finishing immediately.")
-                self.send_response(dict(status=Status(200)), request)
+                self.send_response(Sip.response(status=Status(200)), request)
                 self.change_state(self.DOWN)
                 self.may_finish()
                 return
@@ -434,8 +439,8 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
 
 
     def process_response(self, response):
-        method = response["method"]
-        status = response.get("status")
+        method = response.method
+        status = response.status
         self.logger.debug("Processing response %d %s" % (status.code, method))
 
         # Note: must change state before forward, because that can generate

@@ -16,13 +16,13 @@ class Error(Exception): pass
 
 def add_sdp(params, sdp):
     params["content_type"] = "application/sdp"
-    params["body"] = sdp.print()
+    params.body = sdp.print()
     return params
     
     
 def get_sdp(params):
     if params.get("content_type") == "application/sdp":
-        return Sdp.parse(params["body"])
+        return Sdp.parse(params.body)
     else:
         return None
         

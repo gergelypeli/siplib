@@ -160,7 +160,7 @@ class Switch(Loggable):
             self.reject_request(request, 500)
             return True
             
-        method = request["method"]
+        method = request.method
         
         if method in ("CANCEL", "ACK", "NAK"):
             self.logger.debug("Accepting request because it can't be authenticated anyway")
@@ -181,7 +181,7 @@ class Switch(Loggable):
     
 
     def process_request(self, request, related_params):
-        method = request["method"]
+        method = request.method
 
         processed = self.auth_request(request)
         if processed:
@@ -202,7 +202,7 @@ class Switch(Loggable):
                 return
             elif method == "CANCEL":
                 # The related_params may be None if the transaction manager didn't find it
-                if related_params and related_params["method"] == "INVITE":
+                if related_params and related_params.method == "INVITE":
                     self.dialog_manager.process_request(request, related_params)
                     return
                 else:
@@ -220,7 +220,7 @@ class Switch(Loggable):
 
 
     def process_response(self, response, related_request):
-        method = response["method"]
+        method = response.method
         
         if method == "REGISTER":
             self.registrar.process_response(response, related_request)

@@ -3,7 +3,7 @@ import datetime
 from weakref import proxy
 from log import Loggable
 
-from format import Via, Status, make_simple_response, make_non_2xx_ack, make_cease_response, make_timeout_nak, make_timeout_response, is_cease_response
+from format import Via, Status, make_simple_response, make_non_2xx_ack, make_cease_response, make_timeout_nak, make_timeout_response, is_cease_response, Sip
 import zap
 
 # tr id: (branch, method)
@@ -169,7 +169,7 @@ class PlainClientTransaction(Transaction):
         if request.get("via"):
             raise Error("Don't mess with the request Via headers!")
 
-        hop = request["hop"]
+        hop = request.hop
         request["via"] = [ Via(hop.transport, hop.local_addr, dict(branch=self.branch)) ]
         
         Transaction.send(self, request)
@@ -274,7 +274,7 @@ class InviteClientTransaction(PlainClientTransaction):
             ack.retransmit()
             return
             
-        code = response["status"].code
+        code = response.status.code
         
         # Don't remember and report 100 responses, as thay may have no remote tag.
         # And they are h2h anyway, so the dialog shouldn't care.
@@ -329,7 +329,7 @@ class InviteServerTransaction(PlainServerTransaction):
             # A cease response means we got (PR)ACKed, stop retransmissions.
             # But we'll retransmit it from time to time to keep proxies happy,
             # and the caller must discard them as duplicates.
-            was_final = self.outgoing_msg["status"].code >= 200
+            was_final = self.outgoing_msg.status.code >= 200
             
             if was_final:
                 self.change_state(self.LINGERING)
@@ -337,7 +337,7 @@ class InviteServerTransaction(PlainServerTransaction):
                 self.change_state(self.PROVISIONING)
         else:
             is_rpr = "100rel" in response.get("require", set())
-            is_final = response["status"].code >= 200
+            is_final = response.status.code >= 200
 
             if is_rpr or is_final:
                 self.change_state(self.TRANSMITTING)
@@ -404,7 +404,7 @@ class TransactionManager(Loggable):
         except Exception:
             raise Error("No Via header in incoming message!")
 
-        method = params["method"]
+        method = params.method
         
         return branch, method
 
@@ -434,13 +434,15 @@ class TransactionManager(Loggable):
     def process_message(self, msg):
         branch, method = self.identify(msg)
         
-        if msg["is_response"]:
+        if msg.is_response:
             tr = self.client_transactions.get((branch, method))
             
-            if tr:
-                tr.process(msg)
+            if not tr:
+                self.logger.warning("Incoming response to unknown request, ignoring!")
+            elif msg.method != tr.outgoing_msg.method:
+                self.logger.warning("Incoming response with bogus method, ignoring!")
             else:
-                self.logger.debug("Incoming response to unknown request, ignoring!")
+                tr.process(msg)
                 
             return
 
@@ -483,7 +485,7 @@ class TransactionManager(Loggable):
         
 
     def send_message(self, msg, related_msg=None):
-        if msg["is_response"]:
+        if msg.is_response:
             if not related_msg:
                 raise Error("Related request is not given for response!")
                 
@@ -496,7 +498,7 @@ class TransactionManager(Loggable):
                 
             return
 
-        method = msg["method"]
+        method = msg.method
 
         if method == "ACK":
             # 2xx-ACK from Dialog
@@ -521,12 +523,16 @@ class TransactionManager(Loggable):
 
             # TODO: more sophisticated CANCEL generation
             # TODO: shouldn't send CANCEL before provisional response
-            msg = request_params.copy()
-            msg["method"] = "CANCEL"
+            msg = Sip.request(method="CANCEL")
+            msg.uri = request_params.uri
+            msg["from"] = request_params["from"]
+            msg["to"] = request_params["to"]
             msg["via"] = None  # ClientTransaction is a bit sensitive for this
-            msg["authorization"] = None
+            msg["call_id"] = request_params["call_id"]
+            msg["cseq"] = request_params["cseq"]
+            msg["max_forwards"] = request_params["max_forwards"]
             msg["content_type"] = None
-            msg["body"] = None
+            msg.body = None
         elif method == "INVITE":
             tr = InviteClientTransaction(proxy(self), self.generate_branch(), method)
         else:

@@ -197,7 +197,7 @@ class TransportManager(Loggable):
         
         
     def send_message(self, params):
-        hop = params["hop"]
+        hop = params.hop
         message = print_structured_message(params)
         #packet = sip.encode()
         self.logger.debug("Sending via %s\n%s" % (hop, indented(message.print())))
@@ -235,6 +235,6 @@ class TransportManager(Loggable):
         
         #sip = packet.decode()
         params = parse_structured_message(message)
-        params["hop"] = hop
+        params.hop = hop
         
         self.process_slot.zap(params)

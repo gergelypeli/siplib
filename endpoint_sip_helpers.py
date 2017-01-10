@@ -1,6 +1,6 @@
 from collections import namedtuple
 
-from format import Status
+from format import Status, Sip
 from endpoint_sip_invite import InviteClientState, InviteServerState
 from endpoint_sip_update import UpdateClientState, UpdateServerState
 from sdp import SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES, Session
@@ -20,7 +20,7 @@ class InviteUpdateHelper:
 
 
     def invite_outgoing(self, msg, sdp, is_answer):
-        method = msg.get("method")  # Should only be set for requests
+        method = msg.method  # Should only be set for requests
         
         if method == "INVITE":
             if self.invite_state:
@@ -45,12 +45,12 @@ class InviteUpdateHelper:
 
 
     def invite_incoming(self, msg):
-        is_response = msg["is_response"]
+        is_response = msg.is_response
         
-        if not is_response and msg["method"] == "INVITE":
+        if not is_response and msg.method == "INVITE":
             if self.invite_state:
                 self.logger.warning("INVITE request while INVITE is in progress!")
-                self.send_response(dict(status=Status(400)), msg)
+                self.send_response(Sip.response(status=Status(400)), msg)
                 return None, None, None
                 
             self.invite_state = InviteServerState(self.invite_use_rpr)
@@ -60,7 +60,7 @@ class InviteUpdateHelper:
             if not self.invite_state:
                 if not is_response:
                     self.logger.warning("INVITE-like request while INVITE not in progress!")
-                    self.send_response(dict(status=Status(400)), msg)
+                    self.send_response(Sip.response(status=Status(400)), msg)
                     return None, None, None
                 else:
                     self.logger.warning("INVITE-like response while INVITE not in progress!")
@@ -86,7 +86,7 @@ class InviteUpdateHelper:
         
         
     def update_outgoing(self, msg, sdp, is_answer):
-        method = msg.get("method")  # Should only be set for requests
+        method = msg.method  # Should only be set for requests
 
         if self.invite_state and not self.invite_state.is_session_established():
             raise Exception("UPDATE while INVITE session not established!")
@@ -110,12 +110,12 @@ class InviteUpdateHelper:
             
             
     def update_incoming(self, msg):
-        is_response = msg["is_response"]
+        is_response = msg.is_response
         
         if self.invite_state and not self.invite_state.is_session_established():
             if not is_response:
                 self.logger.warning("UPDATE request while INVITE session not established!")
-                self.send_response(dict(status=Status(400)), msg)
+                self.send_response(Sip.response(status=Status(400)), msg)
                 return None, None, None
             else:
                 self.logger.warning("UPDATE response while INVITE session not established, WTF?")
@@ -124,7 +124,7 @@ class InviteUpdateHelper:
         if not is_response:
             if self.update_state:
                 self.logger.warning("UPDATE request while another UPDATE is in progress!")
-                self.send_response(dict(status=Status(400)), msg)
+                self.send_response(Sip.response(status=Status(400)), msg)
                 return None, None, None
 
             # Create update server state

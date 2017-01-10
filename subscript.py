@@ -1,6 +1,6 @@
 import datetime
 
-from format import Status
+from format import Status, Sip
 from transactions import make_simple_response
 from log import Loggable
 import zap
@@ -40,7 +40,7 @@ class EventSource(Loggable):
 
 
     def process_request(self, request, id):
-        method = request["method"]
+        method = request.method
         # NOTE: we can only handle one subscription per dialog, sharing is not supported.
         
         if method == "SUBSCRIBE":
@@ -52,7 +52,7 @@ class EventSource(Loggable):
             
             if expires > 0:
                 if expires < min_expires:
-                    res = dict(status=Status(423), expires=min_expires)
+                    res = Sip.response(status=Status(423), expires=min_expires)
                     subscription.dialog.send_response(res, request)
                 
                     if not subscription.expiration_plug:
@@ -69,7 +69,7 @@ class EventSource(Loggable):
                 subscription.expiration_deadline = datetime.datetime.now() + datetime.timedelta(seconds=expires)
                 subscription.expiration_plug = zap.time_slot(expires).plug(self.expired, id=id)
                 
-                res = dict(status=Status(200, "OK"), expires=expires)
+                res = Sip.response(status=Status(200, "OK"), expires=expires)
                 subscription.dialog.send_response(res, request)
 
                 contact = subscription.dialog.peer_contact.uri
@@ -82,7 +82,7 @@ class EventSource(Loggable):
                 else:
                     self.logger.info("Subscription %s polled." % (id,))
 
-                res = dict(status=Status(200, "OK"), expires=expires)
+                res = Sip.response(status=Status(200, "OK"), expires=expires)
                 subscription.dialog.send_response(res, request)
 
                 self.notify_one(id, "timeout")
@@ -92,10 +92,10 @@ class EventSource(Loggable):
 
 
     def process_response(self, response, id):
-        method = response["method"]
+        method = response.method
         
         if method == "NOTIFY":
-            status = response["status"]
+            status = response.status
             
             if status.code == 200:
                 self.logger.debug("Got NOTIFY response.")
@@ -125,10 +125,10 @@ class EventSource(Loggable):
             ss = "terminated;reason=%s" % reason
             
         # Must make copies in case of multiple subscriptions
-        req = dict(
-            state,
+        req = Sip.request(
             method="NOTIFY",
-            subscription_state=ss
+            subscription_state=ss,
+            **state
         )
         
         subscription.dialog.send_request(req)
@@ -279,7 +279,7 @@ class SubscriptionManager(Loggable):
         
 
     def process_request(self, request):
-        if request["method"] != "SUBSCRIBE":
+        if request.method != "SUBSCRIBE":
             raise Exception("SubscriptionManager has nothing to do with this request!")
         
         key = self.identify_event_source(request)

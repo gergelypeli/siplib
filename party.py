@@ -484,48 +484,6 @@ class PlannedRouting(zap.Planned, Routing):
         self.send_event(li, action)
 
 
-#class SimpleBridge(Bridge):
-#    def process_dial(self, action):
-#        self.dial("routing", action)
-        
-        
-#    def __init__(self):
-#        Bridge.__init__(self)
-
-        
-#    def may_finish(self):
-#        if 1 in self.legs:
-#            self.logger.debug("Releasing outgoing leg.")
-#            self.remove_leg(1)
-#
-#        if 0 in self.legs:
-#            self.logger.debug("Releasing incoming leg.")
-#            self.remove_leg(0)
-#            
-#        Bridge.may_finish(self)
-            
-
-#    def do_slot(self, li, action):
-#        type = action["type"]
-#
-#        if li == 0 and type == "dial":
-#            self.dial("routing", action)  # TODO: this used to make thing with (... self.path, "routing")
-#            return
-#        
-#        if li == 0:
-#            leg = self.legs[1]
-#            direction = "forward"
-#        else:
-#            leg = self.legs[0]
-#            direction = "backward"
-#        
-#        self.logger.debug("Bridging %s %s" % (type, direction))
-#        leg.forward(action)
-#
-#        if type in ("hangup", "reject"):
-#            self.may_finish()
-
-    
 class RecordingBridge(Bridge):
     def identify(self, params):
         return params["id"]

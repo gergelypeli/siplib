@@ -5,7 +5,7 @@ import socket
 from async_net import HttpLikeMessage
 
 # TODO: use attributes instead for these
-META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "body", "hop", "user_request", "authname" ]
+#META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "body", "hop", "user_request", "authname" ]
 
 
 class FormatError(Exception):
@@ -764,30 +764,57 @@ class Reason(namedtuple("Reason", [ "protocol", "params" ])):
 class SipLikeMessage(HttpLikeMessage):
     LIST_HEADER_FIELDS = [ "via", "route", "record_route", "contact" ]
     
+    
+class Sip(dict):
+    def __init__(self, is_response=None, method=None, uri=None, status=None, body=None, hop=None, **kwargs):
+        dict.__init__(self, **kwargs)
+        
+        self.is_response = is_response
+        self.method = method
+        self.uri = uri
+        self.status = status
+        self.body = body
+        self.hop = hop
+        #self.user_request = user_request
+        
+        
+    def __bool__(self):
+        return True
+        
+        
+    @classmethod
+    def request(cls, **kwargs):
+        return cls(is_response=False, **kwargs)
+        
+        
+    @classmethod
+    def response(cls, **kwargs):
+        return cls(is_response=True, **kwargs)
+            
 
-def print_structured_message(params):
-    if params["is_response"] is True:
-        code, reason = params["status"]
+def print_structured_message(msg):
+    if msg.is_response is True:
+        code, reason = msg.status
         initial_line = "SIP/2.0 %d %s" % (code, escape(reason, allow=' '))
-    elif params["is_response"] is False:
-        initial_line = "%s %s SIP/2.0" % (params["method"], params["uri"].print())
+    elif msg.is_response is False:
+        initial_line = "%s %s SIP/2.0" % (msg.method, msg.uri.print())
     else:
         raise FormatError("Invalid structured message!")
 
     headers = OrderedDict()
     mandatory_fields = [ "from", "to", "via", "call_id", "cseq" ]  # order these nicely
-    last_fields = [ f for f in [ "content_type" ] if f in params ]
-    other_fields = [ f for f in params if f not in mandatory_fields + last_fields ]
+    last_fields = [ f for f in [ "content_type" ] if f in msg ]
+    other_fields = [ f for f in msg if f not in mandatory_fields + last_fields ]
 
     for field in mandatory_fields + other_fields + last_fields:
-        x = params[field]
+        x = msg[field]
         
         if x is None:
             continue
         elif field in ("from", "to", "refer_to", "referred_by"):
             y = x.print()
         elif field == "cseq":
-            y = "%d %s" % (x, params["method"])
+            y = "%d %s" % (x, msg.method)
         elif field in ("www_authenticate", "authorization", "rack"):  # FIXME: separate
             y = x.print()
         elif field in ("rseq", "expires", "max_forwards"):
@@ -806,14 +833,14 @@ def print_structured_message(params):
             y = ", ".join(f.print() for f in x)
         elif field in ("reason",):
             y = ", ".join(f.print() for f in x)
-        elif field not in META_HEADER_FIELDS:
+        else:  #elif field not in META_HEADER_FIELDS:
             y = x
-        else:
-            continue
+        #else:
+        #    continue
             
         headers[field] = y
 
-    body = params.get("body", b"")
+    body = msg.body or b""
 
     return SipLikeMessage(initial_line, headers, body)
 
@@ -828,9 +855,9 @@ def parse_comma_separated(Item, header):
     return items
 
 
-def parse_structured_message(message):
-    p = {}
-    parser = Parser(message.initial_line)
+def parse_structured_message(slm):
+    #msg = Sip()
+    parser = Parser(slm.initial_line)
 
     token = parser.grab_token()
     
@@ -848,8 +875,8 @@ def parse_structured_message(message):
         
         reason = unescape(parser.grab_token(REASON_ESCAPED))
         
-        p["is_response"] = True
-        p["status"] = Status(code=code, reason=reason)
+        status = Status(code=code, reason=reason)
+        msg = Sip.response(status=status)
     else:
         # Request
         method = token.upper()
@@ -865,11 +892,9 @@ def parse_structured_message(message):
         if version != "2.0":
             raise Exception("Expected SIP version 2.0!")
         
-        p["is_response"] = False
-        p["method"] = method
-        p["uri"] = uri
+        msg = Sip.request(method=method, uri=uri)
 
-    for field, x in message.headers.items():
+    for field, x in slm.headers.items():
         # TODO: refactor a bit!
         if field in ("from", "to", "refer_to", "referred_by"):
             y = Nameaddr.parse(Parser(x))
@@ -890,11 +915,11 @@ def parse_structured_message(message):
             
             y = number
             
-            if "method" in p:
-                if p["method"] != method:
-                    raise FormatError("Mismatching method in CSeq field: %r vs %r" % (p["method"], method))
+            if msg.method:
+                if msg.method != method:
+                    raise FormatError("Mismatching method in CSeq field: %r vs %r" % (msg.method, method))
             else:
-                p["method"] = method  # Necessary for CANCEL responses
+                msg.method = method  # Necessary for CANCEL responses
         elif field in ("rseq", "expires", "max_forwards"):
             y = int(x)  # TODO
         elif field == "rack":
@@ -909,50 +934,50 @@ def parse_structured_message(message):
             y = parse_comma_separated(CallInfo, x)
         elif field in ("reason",):
             y = parse_comma_separated(Reason, x)
-        elif field not in META_HEADER_FIELDS:
+        else:  #if field not in META_HEADER_FIELDS:
             y = x
-        else:
-            continue
+        #else:
+        #    continue
             
-        p[field] = y
+        msg[field] = y
 
-    p["body"] = message.body
+    msg.body = slm.body
 
-    return p
+    return msg
 
 
 def make_simple_response(request, status, others=None):
     tag = "goodbye" if status.code > 100 else None
     
-    params = {
-        "is_response": True,
-        "method": request["method"],
+    response = {
+#        "is_response": True,
+        "method": request.method,
         "status": status,
         "from": request["from"],
         "to": request["to"].tagged(tag),
         "call_id": request["call_id"],
         "cseq": request["cseq"],
-        "hop": request["hop"]
+        "hop": request.hop
     }
     
     if others:
-        params.update(others)
+        response.update(others)
         
-    return params
+    return Sip.response(**response)
 
 
 def make_non_2xx_ack(request, tag):
-    return {
-        'is_response': False,
+    return Sip.request(**{
+#        'is_response': False,
         'method': "ACK",
-        'uri': request["uri"],
+        'uri': request.uri,
         'from': request["from"],
         'to': request["to"].tagged(tag),
         'call_id': request["call_id"],
         'cseq': request["cseq"],
         'route': request.get("route"),
-        'hop': request["hop"]
-    }
+        'hop': request.hop
+    })
 
 
 def make_timeout_response(request):
@@ -960,20 +985,20 @@ def make_timeout_response(request):
 
 
 def make_timeout_nak(response):
-    return {
-        "is_response": False,
+    return Sip.request(**{
+#        "is_response": False,
         "method": "NAK",
         "from": response["from"],
         "to": response["to"],
         "call_id": response["call_id"],
         "cseq": response["cseq"],
         "hop": None
-    }
+    })
 
 
 def make_cease_response():
-    return dict(status=Status(Status.INTERNAL_CEASE))
+    return Sip.response(status=Status(Status.INTERNAL_CEASE))
     
     
 def is_cease_response(msg):
-    return msg["status"].code == Status.INTERNAL_CEASE
+    return msg.status.code == Status.INTERNAL_CEASE

@@ -3,7 +3,7 @@ import datetime
 import collections
 from weakref import proxy
 
-from format import Nameaddr, Status, Uri
+from format import Nameaddr, Status, Uri, Sip
 from transactions import make_simple_response
 from log import Loggable
 
@@ -69,7 +69,7 @@ class LocalRecord(Loggable):
 
     def recv_request(self, request):
         now = datetime.datetime.now()
-        hop = request["hop"]
+        hop = request.hop
         call_id = request["call_id"]
         cseq = request["cseq"]
         contact_nameaddrs = request["contact"]
@@ -81,7 +81,7 @@ class LocalRecord(Loggable):
             
             if contact_info and contact_info.call_id == call_id and contact_info.cseq >= cseq:
                 # The RFC suggests 500, but that's a bit weird
-                self.send_response(dict(status=Status(500, "Out of order request is not our fault")), request)
+                self.send_response(Sip.response(status=Status(500, "Out of order request is not our fault")), request)
                 return
 
         # Okay, update them all
@@ -99,21 +99,19 @@ class LocalRecord(Loggable):
             seconds_left = int((contact_info.expiration - now).total_seconds())
             fetched.append(Nameaddr(uri=urihop.uri, params=dict(expires=str(seconds_left))))
 
-        self.send_response(dict(status=Status(200, "OK"), contact=fetched), request)
+        self.send_response(Sip.response(status=Status(200, "OK"), contact=fetched), request)
 
 
-    def send_response(self, user_response, related_request):
-        nondialog_response = {
-            "is_response": True,
-            "from": related_request["from"],
-            "to": related_request["to"].tagged(generate_tag()),
-            "call_id": related_request["call_id"],
-            "cseq": related_request["cseq"],
-            "method": related_request["method"],
-            "hop": related_request["hop"]
-        }
+    def send_response(self, response, related_request):
+        response.is_response = True
+        response.method = related_request.method
+        response.hop = related_request.hop
+        response["from"] = related_request["from"]
+        response["to"] = related_request["to"].tagged(generate_tag())
+        response["call_id"] = related_request["call_id"]
+        response["cseq"] = related_request["cseq"]
 
-        response = safe_update(user_response, nondialog_response)
+        #response = safe_update(user_response, nondialog_response)
         
         self.registrar.transmit(response, related_request)
 
@@ -176,52 +174,52 @@ class RemoteRecord(Loggable):
         
     def refresh(self):
         expires = self.EXPIRES
+        contact = [ Nameaddr(self.contact_uri, params=dict(expires=str(expires))) ]
         
-        user_params = {
-            'method': "REGISTER",
-            'contact': [ Nameaddr(self.contact_uri, params=dict(expires=str(expires))) ]
-        }
+        request = Sip.request(method="REGISTER", contact=contact)
         
-        self.send_request(user_params)
+        self.send_request(request)
         
         
-    def send_request(self, user_request):
+    def send_request(self, request):
         self.cseq += 1
 
-        nondialog_request = {
-            "is_response": False,
-            'uri': self.registrar_uri,
-            'from': Nameaddr(self.record_uri).tagged(self.local_tag),
-            'to': Nameaddr(self.record_uri),
-            "call_id": self.call_id,
-            "cseq": self.cseq,
-            "max_forwards": MAX_FORWARDS,
-            "hop": self.hop,
-            "user_request": user_request.copy()
-        }
+        request.is_response = False
+        request.uri = self.registrar_uri
+        request.hop = self.hop
+        request['from'] = Nameaddr(self.record_uri).tagged(self.local_tag)
+        request['to'] = Nameaddr(self.record_uri)
+        request["call_id"] = self.call_id
+        request["cseq"] = self.cseq
+        request["max_forwards"] = MAX_FORWARDS
+        #request["user_request": user_request.copy()
 
-        request = safe_update(user_request, nondialog_request)
+        #request = safe_update(user_request, nondialog_request)
 
         self.registrar.transmit(request, None)
 
 
     def recv_response(self, response, related_request):
-        status = response["status"]
+        status = response.status
         
         if status.code == 401:
             # Let's try authentication! TODO: 407, too!
-            account = self.registrar.get_remote_account(related_request["uri"])
+            account = self.registrar.get_remote_account(related_request.uri)
             auth = account.provide_auth(response, related_request) if account else None
                 
             if auth:
-                user_request = related_request["user_request"]
-                related_request.clear()
-                related_request.update(user_request)
+                #user_request = related_request.user_request
+                #related_request.clear()
+                #related_request.update(user_request)
                 related_request.update(auth)
+                self.cseq += 1
+                related_request["cseq"] = self.cseq
+                related_request["via"] = None
                 
                 self.logger.debug("Trying authorization...")
                 #print("... with: %s" % related_request)
-                self.send_request(related_request)
+                #self.send_request(related_request)
+                self.registrar.transmit(related_request, None)
                 return
             else:
                 self.logger.debug("Couldn't authorize, being rejected!")
@@ -276,7 +274,7 @@ class Registrar(Loggable):
         
         
     def process_request(self, request):
-        if request["method"] != "REGISTER":
+        if request.method != "REGISTER":
             raise Error("Registrar has nothing to do with this request!")
         
         registering_uri = request["from"].uri
@@ -320,7 +318,7 @@ class Registrar(Loggable):
         #   None, False -     not found
         
         record_uri = request["from"].uri.canonical_aor()
-        hop = request["hop"]
+        hop = request.hop
         
         record = self.local_records_by_uri.get(record_uri) or self.local_records_by_uri.get(record_uri._replace(username=None))
         

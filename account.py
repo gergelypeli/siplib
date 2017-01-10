@@ -102,7 +102,7 @@ class LocalAccount(Account):
         
 
     def check_auth(self, request):
-        method = request["method"]
+        method = request.method
         auth = request.get("authorization")
         
         if not auth:
@@ -158,7 +158,7 @@ class RemoteAccount(Account):
             self.logger.debug("Digest algorithm not MD5!")
             return None
 
-        method = request["method"]
+        method = request.method
         # Since the other and will have no clue how the RURI changed during the routing,
         # it should only use the URI we put in this header for computations.
         uri = request["to"].uri.print()

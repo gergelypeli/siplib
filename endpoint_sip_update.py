@@ -1,5 +1,5 @@
 from log import Loggable
-from format import Status
+from format import Status, Sip
 from sdp import add_sdp, get_sdp
 import zap
 
@@ -34,15 +34,15 @@ class UpdateClientState(UpdateState):
         if not self.request:
             raise Exception("Update request was not sent, but now receiving one!")
             
-        if not msg["is_response"]:
+        if not msg.is_response:
             self.logger.warning("Rejecting incoming UPDATE because one was already sent!")
-            res = dict(status=Status(419))
+            res = Sip.response(status=Status(419))
             self.response_slot.zap(res, msg)
             return None, None, None
     
         self.request = None
         
-        if msg["status"].code == 200:
+        if msg.status.code == 200:
             self.logger.info("Processing message: UPDATE response with accept")
             sdp = get_sdp(msg)
             return msg, sdp, True
@@ -70,11 +70,11 @@ class UpdateServerState(UpdateState):
     def process_incoming(self, msg):
         if self.request:
             self.logger.warning("Update request was already received!")
-            res = dict(status=Status(419))
+            res = Sip.response(status=Status(419))
             self.response_slot.zap(res, msg)
             return None, None, None
             
-        if msg["is_response"]:
+        if msg.is_response:
             self.logger.warning("Got an update response without sending a request!")
             return None, None, None
             

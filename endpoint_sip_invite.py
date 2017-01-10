@@ -1,4 +1,4 @@
-from format import Status, Rack, make_cease_response
+from format import Status, Rack, make_cease_response, Sip
 from sdp import add_sdp, get_sdp
 from log import Loggable
 import zap
@@ -136,12 +136,12 @@ class InviteClientState(InviteState):
         
         
     def make_rack(self, rpr):
-        return Rack(rpr["rseq"], rpr["cseq"], rpr["method"])
+        return Rack(rpr["rseq"], rpr["cseq"], rpr.method)
         
 
     def make_prack(self, rpr, sdp=None):
         rack = self.make_rack(rpr)
-        req = dict(method="PRACK", rack=rack)
+        req = Sip.request(method="PRACK", rack=rack)
         
         if sdp:
             add_sdp(req, sdp)
@@ -158,7 +158,7 @@ class InviteClientState(InviteState):
     
         s = self.state
         req = self.request
-        method = msg["method"]
+        method = msg.method
 
         # CANCEL is possible in all states
         if method == "CANCEL":
@@ -216,10 +216,10 @@ class InviteClientState(InviteState):
         s = self.state
         req = self.request
 
-        method = msg["method"]
-        is_response = msg["is_response"]
+        method = msg.method
+        is_response = msg.is_response
         sdp = get_sdp(msg)
-        status = msg["status"] if is_response else None
+        status = msg.status if is_response else None
         has_reject = status and status.code >= 300
         has_final = status and status.code < 300 and status.code >= 200
         has_rpr = "100rel" in msg.get("require", set())
@@ -238,7 +238,7 @@ class InviteClientState(InviteState):
                 return self.recv("reject response", FINISH, msg)
             elif has_final:
                 if s in (REQUEST_OFFER,):
-                    ack = dict(method="ACK")
+                    ack = Sip.request(method="ACK")
                     self.send("ACK", KEEP, ack, req)
                     
                     if sdp:
@@ -246,7 +246,7 @@ class InviteClientState(InviteState):
                     else:
                         return self.recv("final response missing answer", ABORT)
                 elif s in (PROVISIONAL_ANSWER,):
-                    ack = dict(method="ACK")
+                    ack = Sip.request(method="ACK")
                     self.send("ACK", KEEP, ack, req)
                     
                     if sdp:
@@ -258,7 +258,7 @@ class InviteClientState(InviteState):
                         # Wait for answer to ACK
                         return self.recv("final response with offer", FINAL_OFFER, msg, sdp, False)
                     else:
-                        ack = dict(method="ACK")
+                        ack = Sip.request(method="ACK")
                         self.send("ACK for bad response", KEEP, ack, req)
                         return self.recv("final response missing offer", ABORT)
                 elif s in (PROVISIONAL_OFFER,):
@@ -266,18 +266,18 @@ class InviteClientState(InviteState):
                         # Wait for answer to ACK
                         return self.recv("final response with ignored offer", FINAL_OFFER, msg)
                     else:
-                        ack = dict(method="ACK")
+                        ack = Sip.request(method="ACK")
                         self.send("ACK for bad response", KEEP, ack, req)
                         return self.recv("final response missing offer", ABORT)
                 elif s in (EARLY_SESSION,):
                     if sdp:
                         # The Snom sends such SDP
-                        ack = dict(method="ACK")
+                        ack = Sip.request(method="ACK")
                         self.send("ACK", KEEP, ack, req)
                         
                         return self.recv("final response with ignored SDP", FINISH, msg)
                     else:
-                        ack = dict(method="ACK")
+                        ack = Sip.request(method="ACK")
                         self.send("ACK", KEEP, ack, req)
                         
                         return self.recv("final response", FINISH, msg)
@@ -294,7 +294,7 @@ class InviteClientState(InviteState):
                 self.rpr_last_rseq += 1
                 
                 if s in (REQUEST_OFFER,):
-                    pra = dict(method="PRACK", rack=self.make_rack(msg))
+                    pra = Sip.request(method="PRACK", rack=self.make_rack(msg))
                     self.send("PRACK", KEEP, pra)
                     
                     if sdp:
@@ -302,7 +302,7 @@ class InviteClientState(InviteState):
                     else:
                         return self.recv("reliable response", KEEP, msg)
                 elif s in (PROVISIONAL_ANSWER,):
-                    pra = dict(method="PRACK", rack=self.make_rack(msg))
+                    pra = Sip.request(method="PRACK", rack=self.make_rack(msg))
                     self.send("PRACK", KEEP, pra)
                     
                     if sdp:
@@ -327,7 +327,7 @@ class InviteClientState(InviteState):
                     else:
                         return self.recv("reliable response missing offer", ABORT)
                 elif s in (EARLY_SESSION,):
-                    pra = dict(method="PRACK", rack=self.make_rack(msg))
+                    pra = Sip.request(method="PRACK", rack=self.make_rack(msg))
                     self.send("PRACK", KEEP, pra)
                     
                     if sdp:
@@ -415,7 +415,7 @@ class InviteServerState(InviteState):
         s = self.state
         req = self.request
 
-        status = msg["status"]
+        status = msg.status
         has_reject = status and status.code >= 300
         has_final = status and status.code < 300 and status.code >= 200
         has_prov = status and status.code < 200
@@ -537,16 +537,16 @@ class InviteServerState(InviteState):
         s = self.state
         req = self.request
         
-        method = msg["method"]
+        method = msg.method
         sdp = get_sdp(msg)
 
         if method == "INVITE":
             if s == START:
                 if self.use_rpr and "100rel" not in msg.get("supported", set()):
-                    self.send_message(dict(status=Status(421, "100rel required")), msg)
+                    self.send_message(Sip.response(status=Status(421, "100rel required")), msg)
                     return self.recv("peer does not support 100rel", ABORT)
                 elif not self.use_rpr and "100rel" in msg.get("require", set()):
-                    self.send_message(dict(status=Status(420, "100rel unsupported")), msg)
+                    self.send_message(Sip.response(status=Status(420, "100rel unsupported")), msg)
                     return self.recv("peer requires 100rel", ABORT)
             
                 self.request = msg
@@ -564,10 +564,10 @@ class InviteServerState(InviteState):
             #   the To tag of the response to the CANCEL and the To tag
             #   in the response to the original request SHOULD be the same.
             # Which response, darling? The 100 Trying didn't have To tag, the others did.
-            res = dict(status=Status(200))
+            res = Sip.response(status=Status(200))
             self.send_message(res, msg)
         
-            res = dict(status=Status(487))  # ?
+            res = Sip.response(status=Status(487))  # ?
             self.send_message(res, self.request)
         
             return self.recv("cancelled", FINISH, msg, None)
@@ -575,8 +575,8 @@ class InviteServerState(InviteState):
         elif method == "PRACK":
             rseq, rcseq, rmethod = msg["rack"]
     
-            if rmethod != req["method"] or rcseq != req["cseq"] or rseq != self.rpr_last_rseq:
-                prr = dict(status=Status(481, "What Are You Pracking"))
+            if rmethod != req.method or rcseq != req["cseq"] or rseq != self.rpr_last_rseq:
+                prr = Sip.response(status=Status(481, "What Are You Pracking"))
                 self.send_message(prr, msg)
                 return self.recv("PRACK for wrong rpr", KEEP)
             
@@ -585,7 +585,7 @@ class InviteServerState(InviteState):
                 
             if s in (RELIABLE_OFFER,):
                 if sdp:
-                    prr = dict(status=Status(200))
+                    prr = Sip.response(status=Status(200))
                     self.send_message(prr, msg)
                     return self.recv("PRACK with answer", EARLY_SESSION, msg, sdp, True)
                 else:
@@ -596,28 +596,28 @@ class InviteServerState(InviteState):
                     self.unanswered_prack = msg
                     return self.recv("PRACK with offer", PRACK_OFFER, msg, sdp, False)
                 else:
-                    prr = dict(status=Status(200))
+                    prr = Sip.response(status=Status(200))
                     self.send_message(prr, msg)
                     return self.recv("plain PRACK", EARLY_SESSION, msg)
             elif s in (RELIABLE_PREANSWER,):
                 if sdp:
                     return self.recv("preanswer PRACK with unexpected SDP", ABORT)
                 else:
-                    prr = dict(status=Status(200))
+                    prr = Sip.response(status=Status(200))
                     self.send_message(prr, msg)
                     return self.recv("preanswer PRACK", REQUEST_OFFER, msg)
             elif s in (RELIABLE_POSTANSWER,):
                 if sdp:
                     return self.recv("postanswer PRACK with unexpected SDP", ABORT)
                 else:
-                    prr = dict(status=Status(200))
+                    prr = Sip.response(status=Status(200))
                     self.send_message(prr, msg)
                     return self.recv("postanswer PRACK", EARLY_SESSION, msg)
             else:
                 # We may retransmit PRACK-ed rpr-s to keep proxies happy. The client
                 # must discard those rpr-s, but thay may be bogue enough to PRACK
                 # them again, in which case we need to do something.
-                prr = dict(status=Status(481, "You Already Pracked It"))
+                prr = Sip.response(status=Status(481, "You Already Pracked It"))
                 self.send_message(prr, msg)
                 return self.recv("unexpected PRACK", KEEP)
                     
