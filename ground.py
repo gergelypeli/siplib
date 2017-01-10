@@ -2,6 +2,7 @@ from weakref import proxy, WeakValueDictionary
 
 from sdp import Session
 from log import Loggable
+from format import Reason
 
 
 # FIXME: currently we can't tell how many channels do we have to deal with
@@ -412,7 +413,9 @@ class Ground(Loggable):
             self.logger.info("Blind transfer %s from leg %s." % (tid, leg_oid0))
             
             leg_oid0x = self.unlink_legs(leg_oid0)
-            self.legs_by_oid[leg_oid0x].do(dict(type="hangup"))
+            reason = Reason("SIP", dict(cause="200", text="Call completed elsewhere"))
+            hangup = dict(type="hangup", reason=reason)
+            self.legs_by_oid[leg_oid0x].do(hangup)
             
             t["leg_oid"] = leg_oid0
             t["action"] = action

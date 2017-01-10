@@ -748,6 +748,19 @@ class CallInfo(namedtuple("CallInfo", [ "uri", "params" ])):
         return cls(uri, params)
 
 
+class Reason(namedtuple("Reason", [ "protocol", "params" ])):
+    def print(self):
+        return self.protocol + print_generic_params(self.params)
+        
+
+    @classmethod
+    def parse(cls, parser):
+        protocol = parser.grab_token()
+        params = parse_generic_params(parser)
+        
+        return cls(protocol, params)
+
+
 class SipMessage(HttpLikeMessage):
     LIST_HEADER_FIELDS = [ "via", "route", "record_route", "contact" ]
     
@@ -790,6 +803,8 @@ def print_structured_message(params):
         elif field in ("target_dialog", "replaces"):
             y = x.print()
         elif field in ("call_info", "alert_info"):
+            y = ", ".join(f.print() for f in x)
+        elif field in ("reason",):
             y = ", ".join(f.print() for f in x)
         elif field not in META_HEADER_FIELDS:
             y = x
@@ -892,6 +907,8 @@ def parse_structured_message(message):
             y = TargetDialog.parse(Parser(x))
         elif field in ("call_info", "alert_info"):
             y = parse_comma_separated(CallInfo, x)
+        elif field in ("reason",):
+            y = parse_comma_separated(Reason, x)
         elif field not in META_HEADER_FIELDS:
             y = x
         else:

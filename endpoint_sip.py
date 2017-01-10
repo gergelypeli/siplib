@@ -240,7 +240,8 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
                 return
 
             elif type == "hangup":
-                msg = self.make_message(action, method="BYE")
+                reason = action.get("reason")
+                msg = self.make_message(action, method="BYE", reason=[reason] if reason else None)
                 self.send_request(msg)
                 self.change_state(self.DISCONNECTING_OUT)
                 return
