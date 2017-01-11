@@ -151,22 +151,26 @@ class Ground(Loggable):
             
         if next_leg_oid:
             self.targets_by_source[next_leg_oid] = prev_leg_oid
+    
+        # If there was a problem, and an adjacent party died, we won't be able to
+        # forward events to it, but don't make the situation worse by crashing,
+        # just log an error.
         
         if queue0:
             if not prev_leg_oid:
-                raise Exception("No previous leg to queue events to!")
-                
-            for action in queue0:
-                self.logger.debug("Forwarding queued action to previous leg: %s" % action["type"])
-                self.legs_by_oid[prev_leg_oid].do(action)
+                self.logger.error("No previous leg to queue events to!")
+            else:
+                for action in queue0:
+                    self.logger.debug("Forwarding queued action to previous leg: %s" % action["type"])
+                    self.legs_by_oid[prev_leg_oid].do(action)
 
         if queue1:
             if not next_leg_oid:
-                raise Exception("No next leg to queue events to!")
-
-            for action in queue1:
-                self.logger.debug("Forwarding queued action to next leg: %s" % action["type"])
-                self.legs_by_oid[next_leg_oid].do(action)
+                self.logger.error("No next leg to queue events to!")
+            else:
+                for action in queue1:
+                    self.logger.debug("Forwarding queued action to next leg: %s" % action["type"])
+                    self.legs_by_oid[next_leg_oid].do(action)
 
 
     def spawn(self, leg_oid, action):

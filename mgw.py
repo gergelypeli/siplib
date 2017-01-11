@@ -485,6 +485,7 @@ class MediaGateway(Loggable):
         
     def modify_leg(self, label, params):
         self.modify_thing(self.legs_by_label, label, params)
+        self.logger.info("Modified leg %s: %s" % (label, params))
         
         
     def delete_leg(self, label):
@@ -528,7 +529,7 @@ class MediaGateway(Loggable):
             else:
                 raise Error("Invalid target %s!" % target)
         except Exception as e:
-            self.logger.debug("Processing error: %s" % e, exc_info=True)
+            self.logger.error("Processing error: %s" % e, exc_info=True)
             self.msgp.send_response(source, "error")
         else:
             self.msgp.send_response(source, "ok")

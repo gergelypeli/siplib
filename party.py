@@ -207,13 +207,14 @@ class Bridge(Party):
         self.forward_leg(0, dict(type="ring"))
 
 
-    def accept_incoming_leg(self):
+    def accept_incoming_leg(self, action):
         if self.is_accepted:
             return
             
         self.is_accepted = True
+        self.is_ringing = False  # make reringing possible
         self.logger.warning("Accepting.")
-        self.forward_leg(0, dict(type="accept"))
+        self.forward_leg(0, action)
             
 
     def reject_incoming_leg(self, status):
@@ -366,11 +367,10 @@ class Bridge(Party):
                         
                     # TODO: shall we auto-anchor the last remaining outgoing leg?
             elif type == "accept":
-                if self.is_anchored:
-                    self.forward_leg(0, action)
-                else:
-                    self.queue_leg_action(li, action)
+                if not self.is_anchored:
                     self.anchor_outgoing_leg(li)
+                    
+                self.accept_incoming_leg(action)  # must use this to set flags properly
             elif type == "hangup":
                 if self.is_anchored:
                     self.unanchor_legs()

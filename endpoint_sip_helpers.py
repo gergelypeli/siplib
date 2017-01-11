@@ -367,7 +367,7 @@ class SessionHelper:
             self.leg.remove_media_leg()
             
         # Modify
-        for i in range(min(channel_count, media_leg_count)):
+        for i in range(channel_count):
             lc = local_channels[i]
             rc = remote_channels[i]
             ml = self.leg.get_media_leg(i)

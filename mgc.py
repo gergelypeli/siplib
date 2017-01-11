@@ -54,7 +54,7 @@ class MediaThing(Loggable):
         if params == "ok":
             pass  #self.logger.debug("Huh, MGW message %s/%s was successful." % msgid)
         else:
-            self.logger.warning("Oops, MGW message %s/%s failed!" % source)
+            self.logger.error("Oops, MGW message %s/%s failed!" % source)
 
 
 class MediaLeg(MediaThing):

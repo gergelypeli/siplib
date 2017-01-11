@@ -350,6 +350,7 @@ class RtpBuilder:
     def build(self, packet):
         payload_type = self.payload_types_by_format.get(packet.format)
         if payload_type is None:
+            print("No payload for %s: %s" % (packet.format, self.payload_types_by_format))
             return None
             
         self.last_seq += 1

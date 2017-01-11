@@ -13,13 +13,13 @@ from log import setup_logging, log_exception, Oid
 from mgw import MediaGateway
 from switch import Switch
 import zap
-from test import CallerEndpoint, CalleeEndpoint, UnreachableEndpoint, RingingEndpoint, TestSubscriptionManager, TestLineManager, TestController
+from test import CallerEndpoint, CalleeEndpoint, UnreachableEndpoint, RingingEndpoint, ReRingingEndpoint, TestSubscriptionManager, TestLineManager, TestController
 
 
 TEST_DIALIN = 1
 TEST_DIALOUT = 2
 TEST_PICKUP = 3
-TEST = TEST_PICKUP
+TEST = TEST_DIALIN
 
 NUMBER_A_PREFIX = "2"
 NUMBER_A_SNOM_1 = "201"
@@ -29,8 +29,9 @@ NUMBER_A_LOCAL_CALLEE = "250"
 NUMBER_A_LOCAL_UNREACHABLE = "251"
 NUMBER_A_LOCAL_REJECTING = "252"
 NUMBER_A_LOCAL_RINGING = "253"
-NUMBER_A_LOCAL_RINGING_LINE = "254"
+NUMBER_A_LOCAL_RERINGING = "254"
 NUMBER_A_SERVICE_VOICEMAIL = "260"
+NUMBER_A_LOCAL_RINGING_LINE = "261"  # will be pickup
 
 NUMBER_B_PREFIX = "3"
 NUMBER_B_LOCAL_CALLEE = "350"
@@ -111,6 +112,8 @@ class TestSwitch(Switch):
             return UnreachableEndpoint()
         elif type == "ringing":
             return RingingEndpoint()
+        elif type == "reringing":
+            return ReRingingEndpoint()
         elif type == "line":
             return self.line_manager.make_line()
         else:
@@ -199,6 +202,9 @@ class SwitchA(TestSwitch):
                     return
                 elif dst_username == NUMBER_A_LOCAL_RINGING:
                     self.dial(action, "ringing")
+                    return
+                elif dst_username == NUMBER_A_LOCAL_RERINGING:
+                    self.dial(action, "reringing")
                     return
                 elif dst_username == NUMBER_A_LOCAL_RINGING_LINE:
                     dial = dict(action, ctx=dict(ctx, dst_username=NUMBER_A_LOCAL_RINGING))
