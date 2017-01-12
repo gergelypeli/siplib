@@ -67,7 +67,7 @@ class LocalRecord(Loggable):
         self.logger.info("Registered %s from %s via %s permanently." % (self.record_uri, uri, hop))
         
 
-    def recv_request(self, request):
+    def recv(self, request):
         now = datetime.datetime.now()
         hop = request.hop
         call_id = request["call_id"]
@@ -81,7 +81,8 @@ class LocalRecord(Loggable):
             
             if contact_info and contact_info.call_id == call_id and contact_info.cseq >= cseq:
                 # The RFC suggests 500, but that's a bit weird
-                self.send_response(Sip.response(status=Status(500, "Out of order request is not our fault")), request)
+                response = Sip.response(status=Status(500, "Out of order request is not our fault"), related=request)
+                self.send(response)
                 return
 
         # Okay, update them all
@@ -99,21 +100,22 @@ class LocalRecord(Loggable):
             seconds_left = int((contact_info.expiration - now).total_seconds())
             fetched.append(Nameaddr(uri=urihop.uri, params=dict(expires=str(seconds_left))))
 
-        self.send_response(Sip.response(status=Status(200, "OK"), contact=fetched), request)
+        response = Sip.response(status=Status(200, "OK"), related=request)
+        response["contact"] = fetched
+        self.send(response)
 
 
-    def send_response(self, response, related_request):
-        response.is_response = True
-        response.method = related_request.method
-        response.hop = related_request.hop
-        response["from"] = related_request["from"]
-        response["to"] = related_request["to"].tagged(generate_tag())
-        response["call_id"] = related_request["call_id"]
-        response["cseq"] = related_request["cseq"]
-
-        #response = safe_update(user_response, nondialog_response)
+    def send(self, response):
+        request = response.related
         
-        self.registrar.transmit(response, related_request)
+        response.method = request.method
+        response.hop = request.hop
+        response["from"] = request["from"]
+        response["to"] = request["to"].tagged(generate_tag())
+        response["call_id"] = request["call_id"]
+        response["cseq"] = request["cseq"]
+
+        self.registrar.transmit(response)
 
 
     def get_contacts(self):
@@ -176,15 +178,15 @@ class RemoteRecord(Loggable):
         expires = self.EXPIRES
         contact = [ Nameaddr(self.contact_uri, params=dict(expires=str(expires))) ]
         
-        request = Sip.request(method="REGISTER", contact=contact)
+        request = Sip.request(method="REGISTER")
+        request["contact"] = contact
         
-        self.send_request(request)
+        self.send(request)
         
         
-    def send_request(self, request):
+    def send(self, request):
         self.cseq += 1
 
-        request.is_response = False
         request.uri = self.registrar_uri
         request.hop = self.hop
         request['from'] = Nameaddr(self.record_uri).tagged(self.local_tag)
@@ -192,34 +194,27 @@ class RemoteRecord(Loggable):
         request["call_id"] = self.call_id
         request["cseq"] = self.cseq
         request["max_forwards"] = MAX_FORWARDS
-        #request["user_request": user_request.copy()
 
-        #request = safe_update(user_request, nondialog_request)
-
-        self.registrar.transmit(request, None)
+        self.registrar.transmit(request)
 
 
-    def recv_response(self, response, related_request):
+    def recv(self, response):
         status = response.status
         
         if status.code == 401:
             # Let's try authentication! TODO: 407, too!
-            account = self.registrar.get_remote_account(related_request.uri)
-            auth = account.provide_auth(response, related_request) if account else None
+            request = response.related
+            account = self.registrar.get_remote_account(request.uri)
+            auth = account.provide_auth(response) if account else None
                 
             if auth:
-                #user_request = related_request.user_request
-                #related_request.clear()
-                #related_request.update(user_request)
-                related_request.update(auth)
+                request.update(auth)
                 self.cseq += 1
-                related_request["cseq"] = self.cseq
-                related_request["via"] = None
+                request["cseq"] = self.cseq
+                request["via"] = None
                 
                 self.logger.debug("Trying authorization...")
-                #print("... with: %s" % related_request)
-                #self.send_request(related_request)
-                self.registrar.transmit(related_request, None)
+                self.registrar.transmit(request)
                 return
             else:
                 self.logger.debug("Couldn't authorize, being rejected!")
@@ -248,7 +243,7 @@ class Registrar(Loggable):
         
     def reject_request(self, request, status):
         response = make_simple_response(request, status)
-        self.transmit(response, request)
+        self.transmit(response)
 
 
     def add_local_record(self, record_uri, authname, auth_policy):
@@ -290,11 +285,11 @@ class Registrar(Loggable):
             self.reject_request(request, Status(404))
             return
         
-        record.recv_request(request)
+        record.recv(request)
         
         
-    def transmit(self, params, related_params=None):
-        self.switch.send_message(params, related_params)
+    def transmit(self, msg):
+        self.switch.send_message(msg)
 
 
     def lookup_contacts(self, record_uri):
@@ -365,11 +360,11 @@ class Registrar(Loggable):
             self.logger.error("Remote record hop was not resolved, ignoring!")
 
 
-    def process_response(self, response, related_request):
+    def process_response(self, response):
         record_uri = response['to'].uri
         record = self.remote_records_by_uri.get(record_uri)
         
         if record:
-            record.recv_response(response, related_request)
+            record.recv(response)
         else:
             self.logger.warning("Ignoring response to unknown remote record!")

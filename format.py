@@ -766,8 +766,8 @@ class SipLikeMessage(HttpLikeMessage):
     
     
 class Sip(dict):
-    def __init__(self, is_response=None, method=None, uri=None, status=None, body=None, hop=None, **kwargs):
-        dict.__init__(self, **kwargs)
+    def __init__(self, is_response=None, method=None, uri=None, status=None, body=None, hop=None, related=None):
+        dict.__init__(self)
         
         self.is_response = is_response
         self.method = method
@@ -775,7 +775,14 @@ class Sip(dict):
         self.status = status
         self.body = body
         self.hop = hop
-        #self.user_request = user_request
+        self.related = related
+        
+        # The related field is for branch buddies. Responses point to their request,
+        # CANCEL-s to their INVITE, ACK-s to their INVITE response.
+        # The latter is true for outgoing ACK-s, since they have to be associated to
+        # the InviteServer, but not true for incoming ACK-s, as 2xx ACK-s belong to
+        # a different transaction, so related will be None, while non-2xx ACK-s
+        # will be swallowed by the transaction layer anyway.
         
         
     def __bool__(self):
@@ -784,11 +791,23 @@ class Sip(dict):
         
     @classmethod
     def request(cls, **kwargs):
+        if "method" not in kwargs:
+            raise Exception("No method for request!")
+            
+        #if kwargs["method"] in ("ACK", "NAK", "CANCEL") and "related" not in kwargs:
+        #    raise Exception("No related for %s request!" % kwargs["method"])
+            
         return cls(is_response=False, **kwargs)
         
         
     @classmethod
     def response(cls, **kwargs):
+        if "status" not in kwargs:
+            raise Exception("No status for response!")
+            
+        #if "related" not in kwargs:
+        #    raise Exception("No related for response!")
+            
         return cls(is_response=True, **kwargs)
             
 
@@ -876,7 +895,7 @@ def parse_structured_message(slm):
         reason = unescape(parser.grab_token(REASON_ESCAPED))
         
         status = Status(code=code, reason=reason)
-        msg = Sip.response(status=status)
+        msg = Sip.response(status=status, related=None)  # TODO: just to circumvent our own check
     else:
         # Request
         method = token.upper()
@@ -892,7 +911,7 @@ def parse_structured_message(slm):
         if version != "2.0":
             raise Exception("Expected SIP version 2.0!")
         
-        msg = Sip.request(method=method, uri=uri)
+        msg = Sip.request(method=method, uri=uri, related=None)  # TODO: yepp...
 
     for field, x in slm.headers.items():
         # TODO: refactor a bit!
@@ -949,55 +968,31 @@ def parse_structured_message(slm):
 def make_simple_response(request, status, others=None):
     tag = "goodbye" if status.code > 100 else None
     
-    response = {
-#        "is_response": True,
-        "method": request.method,
-        "status": status,
-        "from": request["from"],
-        "to": request["to"].tagged(tag),
-        "call_id": request["call_id"],
-        "cseq": request["cseq"],
-        "hop": request.hop
-    }
+    response = Sip.response(status=status, method=request.method, hop=request.hop, related=request)
+    response["from"] = request["from"]
+    response["to"] = request["to"].tagged(tag)
+    response["call_id"] = request["call_id"]
+    response["cseq"] = request["cseq"]
     
     if others:
         response.update(others)
-        
-    return Sip.response(**response)
+    
+    return response
 
 
-def make_non_2xx_ack(request, tag):
-    return Sip.request(**{
-#        'is_response': False,
-        'method': "ACK",
-        'uri': request.uri,
-        'from': request["from"],
-        'to': request["to"].tagged(tag),
-        'call_id': request["call_id"],
-        'cseq': request["cseq"],
-        'route': request.get("route"),
-        'hop': request.hop
-    })
+def make_non_2xx_ack(response, method, uri, route=None):
+    request = Sip.request(method=method, uri=uri, hop=response.hop, related=response)
+    request["from"] = response["from"]
+    request["to"] = response["to"]
+    request["call_id"] = response["call_id"]
+    request["cseq"] = response["cseq"]
+    request["route"] = route
+
+    return request
 
 
-def make_timeout_response(request):
-    return make_simple_response(request, Status(Status.INTERNAL_TIMEOUT))
-
-
-def make_timeout_nak(response):
-    return Sip.request(**{
-#        "is_response": False,
-        "method": "NAK",
-        "from": response["from"],
-        "to": response["to"],
-        "call_id": response["call_id"],
-        "cseq": response["cseq"],
-        "hop": None
-    })
-
-
-def make_cease_response():
-    return Sip.response(status=Status(Status.INTERNAL_CEASE))
+def make_cease_response(request):
+    return Sip.response(status=Status(Status.INTERNAL_CEASE), related=request)
     
     
 def is_cease_response(msg):

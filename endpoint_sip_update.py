@@ -25,7 +25,7 @@ class UpdateClientState(UpdateState):
         add_sdp(msg, sdp)
 
         self.logger.info("Sending message: UPDATE with offer")
-        self.message_slot.zap(msg, None)
+        self.message_slot.zap(msg)
         self.request = msg
 
 
@@ -35,8 +35,8 @@ class UpdateClientState(UpdateState):
             
         if not msg.is_response:
             self.logger.warning("Rejecting incoming UPDATE because one was already sent!")
-            res = Sip.response(status=Status(419))
-            self.message_slot.zap(res, msg)
+            res = Sip.response(status=Status(419), related=msg)
+            self.message_slot.zap(res)
             return None, None, None
     
         self.request = None
@@ -62,15 +62,16 @@ class UpdateServerState(UpdateState):
         else:
             self.logger.info("Sending message: UPDATE response with reject")
             
-        self.message_slot.zap(msg, self.request)
+        msg.related = self.request
+        self.message_slot.zap(msg)
         self.request = None
             
             
     def process_incoming(self, msg):
         if self.request:
             self.logger.warning("Update request was already received!")
-            res = Sip.response(status=Status(419))
-            self.message_slot.zap(res, msg)
+            res = Sip.response(status=Status(419), related=msg)
+            self.message_slot.zap(res)
             return None, None, None
             
         if msg.is_response:

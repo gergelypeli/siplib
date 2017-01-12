@@ -136,7 +136,8 @@ class LocalAccount(Account):
 
 
 class RemoteAccount(Account):
-    def provide_auth(self, response, request):
+    def provide_auth(self, response):
+        request = response.related
         www_auth = response.get("www_authenticate")
         auth = request.get("authorization")
         

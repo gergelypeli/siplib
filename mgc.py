@@ -244,7 +244,6 @@ class Controller(Loggable):
 
 
     def process_response(self, origin, params, source):
-        #self.logger.info("XXX Received response %s with %s tagged %s" % (msgid, params, origin))
         label, drop_response = origin
 
         if not label:

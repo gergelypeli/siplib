@@ -469,8 +469,6 @@ class TestLine(Bridge):
         
             
     def do_slot(self, li, action):
-        self.logger.info("XXX do_slot %d: %s" % (li, action["type"]))
-        
         session = action.get("session")
         if session:
             self.legs[li].session_state.set_ground_session(session)

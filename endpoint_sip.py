@@ -58,8 +58,8 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
         return msg
         
 
-    def send(self, msg, related_msg=None):
-        self.dialog.send(self.add_abilities(msg), related_msg)
+    def send(self, msg):
+        self.dialog.send(self.add_abilities(msg))
 
 
     def may_finish(self):
@@ -153,7 +153,7 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
                 # would be too complex for now.
                 
                 msg = self.make_message(action, method="CANCEL")
-                self.invite_outgoing(msg)
+                self.invite_outgoing(msg, None, None)
                 self.change_state(self.DISCONNECTING_OUT)
                 return
                 
@@ -241,7 +241,8 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
 
             elif type == "hangup":
                 reason = action.get("reason")
-                msg = self.make_message(action, method="BYE", reason=[reason] if reason else None)
+                msg = self.make_message(action, method="BYE")
+                msg["reason"] = [reason] if reason else None
                 self.send(msg)
                 self.change_state(self.DISCONNECTING_OUT)
                 return
@@ -508,7 +509,7 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
                     return
                 
                 request = msg
-                self.send(Sip.response(status=Status(200, "OK")), request)
+                self.send(Sip.response(status=Status(200, "OK"), related=request))
                 self.change_state(self.DOWN)
                 action = self.make_action(request, type="hangup")
                 self.forward(action)
@@ -524,7 +525,7 @@ class SipEndpoint(Endpoint, InviteUpdateHelper, SessionHelper):
 
                 request = msg
                 self.logger.debug("Mutual BYE, finishing immediately.")
-                self.send(Sip.response(status=Status(200)), request)
+                self.send(Sip.response(status=Status(200), related=request))
                 self.change_state(self.DOWN)
                 self.may_finish()
                 return

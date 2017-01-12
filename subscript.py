@@ -70,8 +70,9 @@ class EventSource(Loggable):
                     subscription.expiration_deadline = datetime.datetime.now() + datetime.timedelta(seconds=expires)
                     subscription.expiration_plug = zap.time_slot(expires).plug(self.expired, id=id)
                 
-                    res = Sip.response(status=Status(200, "OK"), expires=expires)
-                    subscription.dialog.send(res, request)
+                    res = Sip.response(status=Status(200, "OK"), related=request)
+                    res["expires"] = expires
+                    subscription.dialog.send(res)
 
                     # FIXME
                     contact = subscription.dialog.peer_contact.uri
@@ -84,8 +85,9 @@ class EventSource(Loggable):
                     else:
                         self.logger.info("Subscription %s polled." % (id,))
 
-                    res = Sip.response(status=Status(200, "OK"), expires=expires)
-                    subscription.dialog.send(res, request)
+                    res = Sip.response(status=Status(200, "OK"), related=request)
+                    res["expires"] = expires
+                    subscription.dialog.send(res)
 
                     self.notify_one(id, "timeout")
                     self.subscriptions_by_id.pop(id, None)
@@ -127,11 +129,10 @@ class EventSource(Loggable):
             ss = "terminated;reason=%s" % reason
             
         # Must make copies in case of multiple subscriptions
-        req = Sip.request(
-            method="NOTIFY",
-            subscription_state=ss,
-            **state
-        )
+        req = Sip.request(method="NOTIFY")
+        req["subscription_state"] = ss
+        req.body = state.pop("body", None)
+        req.update(state)
         
         subscription.dialog.send(req)
         
@@ -252,14 +253,14 @@ class SubscriptionManager(Loggable):
         self.event_sources_by_key = {}
         
 
-    def transmit(self, params, related_params=None):
+    def transmit(self, msg):
         # For out of dialog responses
-        self.switch.send_message(params, related_params)
+        self.switch.send_message(msg)
 
         
     def reject_request(self, request, status):
         response = make_simple_response(request, status)
-        self.transmit(response, request)
+        self.transmit(response)
 
 
     def identify_event_source(self, request):

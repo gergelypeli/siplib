@@ -78,18 +78,18 @@ class Switch(Loggable):
         return self.account_manager.get_remote_account(uri)
         
         
-    def send_message(self, msg, related_msg=None):
-        return self.transaction_manager.send_message(msg, related_msg)
+    def send_message(self, msg):
+        return self.transaction_manager.send_message(msg)
         
     
     def reject_request(self, request, code, reason=None):
         response = make_simple_response(request, Status(code, reason))
-        self.send_message(response, request)
+        self.send_message(response)
 
 
-    def challenge_request(self, msg, challenge):
-        response = make_simple_response(msg, Status(401, "Come Again"), challenge)
-        self.send_message(response, msg)
+    def challenge_request(self, request, challenge):
+        response = make_simple_response(request, Status(401, "Come Again"), challenge)
+        self.send_message(response)
 
 
     def make_dialog(self):
@@ -178,7 +178,7 @@ class Switch(Loggable):
         return False
     
 
-    def process(self, msg, related_msg):
+    def process(self, msg):
         if not msg.is_response:
             request = msg
             method = request.method
@@ -192,8 +192,9 @@ class Switch(Loggable):
                 self.registrar.process_request(request)
                 return
 
-            # Out of dialog requests
             if "tag" not in request["to"].params:
+                # Out of dialog requests
+                
                 if method == "INVITE":
                     self.start_sip_call(request)
                     return
@@ -201,9 +202,9 @@ class Switch(Loggable):
                     self.subscription_manager.process(request)
                     return
                 elif method == "CANCEL":
-                    # The related_msg may be None if the transaction manager didn't find it
-                    if related_msg and related_msg.method == "INVITE":
-                        self.dialog_manager.process(request, related_msg)
+                    # The related msg may be None if the transaction manager didn't find it
+                    if request.related and request.related.method == "INVITE":
+                        self.dialog_manager.process(request)
                         return
                     else:
                         self.reject_request(request, 481, "Transaction Does Not Exist")
@@ -212,6 +213,11 @@ class Switch(Loggable):
                 self.reject_request(request, 501, "Method Not Implemented")
             else:
                 # In dialog requests
+                
+                if method == "ACK" and msg.related:
+                    # ACK for a non-2xx response, DJ, drop it!
+                    return
+                
                 processed = self.dialog_manager.process(request)
                 if processed:
                     return
@@ -222,10 +228,10 @@ class Switch(Loggable):
             method = response.method
         
             if method == "REGISTER":
-                self.registrar.process_response(response, related_msg)
+                self.registrar.process_response(response)
                 return
 
-            processed = self.dialog_manager.process(response, related_msg)
+            processed = self.dialog_manager.process(response)
             if processed:
                 return
 

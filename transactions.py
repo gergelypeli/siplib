@@ -3,7 +3,7 @@ import datetime
 from weakref import proxy
 from log import Loggable
 
-from format import Via, Status, make_simple_response, make_non_2xx_ack, make_cease_response, make_timeout_nak, make_timeout_response, is_cease_response, Sip
+from format import Via, Status, make_simple_response, make_non_2xx_ack, make_cease_response, is_cease_response, Sip
 import zap
 
 # tr id: (branch, method)
@@ -85,13 +85,17 @@ class Transaction:
     def finish(self):
         raise NotImplementedError()
         
-        
-    def report(self, msg):
-        raise NotImplementedError()
-
 
     def process(self, msg):
         raise NotImplementedError()
+
+        
+    def report(self, msg):
+        if not msg:
+            # Subclasses must replace it with a meaningful timeout message
+            raise Error("Timeout message not handled correctly!")
+            
+        self.manager.report(msg)
 
         
     def transmission_timed_out(self):
@@ -154,9 +158,11 @@ class PlainClientTransaction(Transaction):
 
     def report(self, response):
         if not response:
-            response = make_timeout_response(self.outgoing_msg)
+            response = make_simple_response(self.outgoing_msg, Status(Status.INTERNAL_TIMEOUT))
+        else:
+            response.related = self.outgoing_msg
             
-        self.manager.report_response(response, self.outgoing_msg)
+        Transaction.report(self, response)
 
 
     def finish(self):
@@ -192,16 +198,18 @@ class PlainServerTransaction(Transaction):
         Transaction.__init__(self, manager, branch, method)
         
         self.incoming_msg = None
-        self.related_msg = related_msg  # This is only used for incoming CANCELs
-        
-        
-    def report(self, request):
-        if not request:
-            request = make_timeout_nak(self.outgoing_msg)
-            
-        self.manager.report_request(request, self.related_msg)
+        self.related_msg = related_msg
         
 
+    def report(self, request):
+        if not request:
+            request = make_non_2xx_ack(self.outgoing_msg, "NAK", self.incoming_msg.uri, self.incoming_msg["route"])  # Used for incoming INVITE
+        else:
+            request.related = self.related_msg  # Used for incoming CANCEL and ACK
+
+        Transaction.report(self, request)
+
+        
     def finish(self):
         self.manager.remove_server_transaction((self.branch, self.method))
         
@@ -214,7 +222,9 @@ class PlainServerTransaction(Transaction):
         elif self.state == self.WAITING:
             pass
         elif self.state == self.LINGERING:
-            self.retransmit()
+            # ACK server has no outgoing response
+            if self.outgoing_msg:
+                self.retransmit()
         else:
             raise Error("Hm?")
 
@@ -283,7 +293,7 @@ class InviteClientTransaction(PlainClientTransaction):
                 # final non-2xx responses are ACK-ed here in the same transaction (17.1.1.3)
                 # send this ACK before an upper layer changes the outgoing message,
                 # it can happen with authorization!
-                ack_params = make_non_2xx_ack(self.outgoing_msg, remote_tag)
+                ack_params = make_non_2xx_ack(response, "ACK", self.outgoing_msg.uri, self.outgoing_msg.get("route"))
                 self.create_and_send_ack(self.branch, ack_params)
         
             # LOL, 17.1.1.2 originally required the INVITE client transaction to
@@ -305,11 +315,11 @@ class InviteServerTransaction(PlainServerTransaction):
     # STARTING -> recv request -> WAITING -> send prov -> PROVISIONING ->
     # send 100rel -> TRANSMITTING -> send virt -> PROVISIONING ->
     # send final -> TRANSMITTING -> send virt -> LINGERING -> timeout -> DONE
-    
+
     def process(self, request):
         if self.state == self.STARTING:
             self.incoming_msg = request
-            self.manager.report_request(request)
+            self.report(request)
                 
             # Send 100 only for initial INVITE-s
             if not request["to"].params.get("tag"):
@@ -358,22 +368,6 @@ class AckServerTransaction(PlainServerTransaction):
 
         self.change_state(self.LINGERING)
         # Don't send anything
-
-
-    def process(self, request):
-        if self.state == self.STARTING:
-            self.incoming_msg = request
-            
-            if not self.related_msg:
-                self.report(request)  # Only report 2xx-ACK-s
-                
-            self.change_state(self.WAITING)
-        elif self.state == self.WAITING:
-            pass
-        elif self.state == self.LINGERING:
-            pass  # Duplicates shouldn't trigger retransmissions, because there isn't any
-        else:
-            raise Error("Hm?")
 
 
 class TransactionManager(Loggable):
@@ -464,10 +458,10 @@ class TransactionManager(Loggable):
             if invite_str:
                 # We must have sent a non-200 response to this, so no dialog was created.
                 # Send a cease response to stop the response retransmissions.
-                invite_str.send(make_cease_response())
+                invite_str.send(make_cease_response(invite_str.incoming_msg))
 
                 # Related message will only be set for non-2xx ACK-s
-                related_msg = invite_str.incoming_msg
+                related_msg = invite_str.outgoing_msg
             else:
                 related_msg = None
 
@@ -483,13 +477,14 @@ class TransactionManager(Loggable):
         tr.process(msg)
         
 
-    def send_message(self, msg, related_msg=None):
+    def send_message(self, msg):
         if msg.is_response:
-            if not related_msg:
+            if not msg.related:
                 raise Error("Related request is not given for response!")
                 
-            request = related_msg
+            request = msg.related
             tr = self.server_transactions.get(self.identify(request))
+            
             if tr:
                 tr.send(msg)
             else:
@@ -501,10 +496,10 @@ class TransactionManager(Loggable):
 
         if method == "ACK":
             # 2xx-ACK from Dialog
-            if not related_msg:
+            if not msg.related:
                 raise Error("Related response is not given for ACK!")
                 
-            response_params = related_msg
+            response_params = msg.related
             invite_tr = self.client_transactions.get(self.identify(response_params))
             if not invite_tr:
                 raise Error("No transaction to ACK!")
@@ -512,10 +507,10 @@ class TransactionManager(Loggable):
             invite_tr.create_and_send_ack(self.generate_branch(), msg)
             return
         elif method == "CANCEL":
-            if not related_msg:
+            if not msg.related:
                 raise Error("Related request is not given for CANCEL!")
             
-            request_params = related_msg
+            request_params = msg.related
             branch, method = self.identify(request_params)
 
             tr = PlainClientTransaction(proxy(self), branch, method)
@@ -541,9 +536,5 @@ class TransactionManager(Loggable):
         tr.send(msg)
 
 
-    def report_response(self, msg, related_msg):
-        self.message_slot.zap(msg, related_msg)
-
-
-    def report_request(self, msg, related_msg=None):
-        self.message_slot.zap(msg, related_msg)
+    def report(self, msg):
+        self.message_slot.zap(msg)
