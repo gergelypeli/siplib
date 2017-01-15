@@ -7,7 +7,7 @@ from subscript import SubscriptionManager, MessageSummaryEventSource, DialogEven
 from log import Loggable
 from mgc import Controller  #, PlayerMediaLeg  #, EchoMediaLeg
 import zap
-import resolver
+#import resolver
 
 
 TEST_ENDPOINT_SESSION = dict(

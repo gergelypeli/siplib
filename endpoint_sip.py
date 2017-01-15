@@ -23,7 +23,6 @@ class SipEndpoint(Endpoint, SessionHelper):
 
     def __init__(self, manager, dialog):
         Endpoint.__init__(self)
-        #InviteUpdateHelper.__init__(self, use_rpr=True)
         SessionHelper.__init__(self)
 
         self.manager = manager
@@ -32,9 +31,6 @@ class SipEndpoint(Endpoint, SessionHelper):
         self.dialog = dialog
         self.dialog.message_slot.plug(self.process)
         
-        #self.sdp_builder = SdpBuilder()
-        #self.sdp_parser = SdpParser()
-
         self.iuc = InviteUpdateComplex(proxy(self), self.USE_RPR)
         
 
@@ -55,14 +51,6 @@ class SipEndpoint(Endpoint, SessionHelper):
         return self.dialog.get_local_tag()
         
         
-    #def parse_sdp(self, sdp, is_answer):
-    #    return self.sdp_parser.parse(sdp, is_answer)
-        
-        
-    #def build_sdp(self, session):
-    #    return self.sdp_builder.build(session), (session.is_accept() or session.is_reject())
-        
-
     def change_state(self, new_state):
         self.logger.debug("Changing state %s => %s" % (self.state, new_state))
         self.state = new_state
@@ -108,12 +96,6 @@ class SipEndpoint(Endpoint, SessionHelper):
 
 
     def do(self, action):
-        #if action["type"] in ("session", "ring", "accept", "reject"):
-        #    action = self.iu_check_action(action)
-            
-        #if not action:
-        #    return
-            
         type = action["type"]
         
         if type == "dial" and not self.dst.get("hop"):
@@ -152,7 +134,6 @@ class SipEndpoint(Endpoint, SessionHelper):
                 self.dialog.setup_outgoing(uri, fr, to, route, hop)
                 
                 msg = self.make_message(action, method="INVITE")
-                #self.invite_outgoing(msg, sdp, is_answer)
                 if not sdp and is_answer is None:
                     is_answer = False
                     
@@ -170,13 +151,11 @@ class SipEndpoint(Endpoint, SessionHelper):
                 # would be too complex for now.
                 
                 msg = self.make_message(action, method="CANCEL")
-                #self.invite_outgoing(msg, None, None)
                 self.iuc.out_client(msg)
                 self.change_state(self.DISCONNECTING_OUT)
                 return
                 
             elif type == "session":
-                #self.try_sending_session_by_anything_but_invite_response(action, sdp, is_answer)
                 self.iuc.out_sdp(sdp, is_answer)
                 
                 # This might have sent an ACK
@@ -193,7 +172,6 @@ class SipEndpoint(Endpoint, SessionHelper):
             
             if session:
                 ok = self.iuc.out_sdp(sdp, is_answer)
-                #ok = self.try_sending_session_by_anything_but_invite_response(action, sdp, is_answer)
                 
                 if ok:
                     # Rip the SDP from the response
@@ -226,7 +204,6 @@ class SipEndpoint(Endpoint, SessionHelper):
                 raise Exception("Unknown action type: %s!" % type)
                 
             msg = self.make_message(action, status=status)
-            #self.invite_outgoing(msg, sdp, is_answer)
             if sdp and is_answer is not None:
                 self.queue_sdp(sdp, is_answer)
                 
@@ -250,7 +227,6 @@ class SipEndpoint(Endpoint, SessionHelper):
                 # TODO: how can we be sure that an invite response is appropriate here?
                 status = Status(488 if not sdp else 200)
                 msg = self.make_message(action, status=status)
-                #self.invite_outgoing(msg, sdp, is_answer)
                 self.iuc.out_server(msg)
                 return
         
@@ -368,8 +344,6 @@ class SipEndpoint(Endpoint, SessionHelper):
                 src = dict(request, type="sip")
                 ctx = {}
                 
-                #self.invite_new(is_outgoing=False)
-                #request, sdp, is_answer = self.invite_incoming(request)
                 request, sdp, is_answer = self.iuc.in_server(request)
                 
                 if self.iuc.is_finished():
@@ -400,7 +374,6 @@ class SipEndpoint(Endpoint, SessionHelper):
                     return
                     
                 request = msg
-                #request, sdp, is_answer = self.invite_incoming(request)
                 request, sdp, is_answer = self.iuc.in_server(request)
                 
                 if not request:
@@ -426,7 +399,6 @@ class SipEndpoint(Endpoint, SessionHelper):
                 return
                 
             elif method == "UPDATE":
-                #msg, sdp, is_answer = self.update_incoming(msg)
                 msg, sdp, is_answer = self.iuc.in_update(msg)
                 self.process_session(msg, sdp, is_answer)
                 return
@@ -443,7 +415,6 @@ class SipEndpoint(Endpoint, SessionHelper):
                 status = response.status
                 
                 response, sdp, is_answer = self.iuc.in_client(response)
-                #response, sdp, is_answer = self.invite_incoming(response)
                 if not response:
                     return
                 
@@ -493,21 +464,14 @@ class SipEndpoint(Endpoint, SessionHelper):
                     
             elif method == "UPDATE":
                 msg, sdp, is_answer = self.iuc.in_update(msg)
-                #msg, sdp, is_answer = self.update_incoming(msg)
                 self.process_session(msg, sdp, is_answer)
                 return
 
         elif self.state == self.UP:
             if method in ("INVITE", "ACK", "NAK", "PRACK", "UPDATE"):
-                #msg, sdp, is_answer = self.invite_incoming(msg)
                 msg, sdp, is_answer = self.iuc.in_generic(msg)
                 self.process_session(msg, sdp, is_answer)
                 return
-                
-            #elif method == "UPDATE":
-            #    msg, sdp, is_answer = self.update_incoming(msg)
-            #    self.process_session(msg, sdp, is_answer)
-            #    return
                 
             elif method == "REFER":
                 if msg.is_response:
