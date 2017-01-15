@@ -26,6 +26,10 @@ def get_sdp(params):
     else:
         return None
         
+        
+def has_sdp(params):
+    return params.get("content_type") == "application/sdp"
+    
 
 last_session_id = 0
 

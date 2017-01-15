@@ -409,12 +409,12 @@ class SessionHelper:
         
         if result in (SessionState.IGNORE_UNEXPECTED, SessionState.IGNORE_RESOLVED, SessionState.IGNORE_STALE):
             self.logger.info("Won't process incoming session: %s." % result)
-            return None
+            return #None
         elif result in (SessionState.REJECT_DUPLICATE, SessionState.REJECT_COLLIDING):
             self.logger.error("Can't process incoming session: %s!" % result)
             # TODO: let the offerer know if it was just a collision
             # FIXME: and now what?
-            return None
+            return #None
         
         local_session = self.leg.session_state.get_ground_session()
         
@@ -444,13 +444,13 @@ class SessionHelper:
         
         if result in (SessionState.IGNORE_UNEXPECTED, SessionState.IGNORE_RESOLVED, SessionState.IGNORE_STALE):
             self.logger.info("Won't send outgoing session: %s." % result)
-            return None, None
+            return# None, None
         elif result in (SessionState.REJECT_DUPLICATE, SessionState.REJECT_COLLIDING):
             self.logger.warning("Can't send outgoing session: %s!" % result)
             # TODO: let the offerer know if it was just a collision
             action = dict(type="session", session=Session.make_reject())
             self.forward(action)
-            return None, None
+            return# None, None
         
         remote_session = self.leg.session_state.get_party_session()
         

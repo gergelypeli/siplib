@@ -91,7 +91,12 @@ class TestEndpoint(PlannedEndpoint):
         
         
     def idle(self):
-        self.leg.get_media_leg(0).play(self.media_filename, self.media_format, volume=0.1, fade=3)
+        ml = self.leg.get_media_leg(0)
+        
+        if ml:
+            ml.play(self.media_filename, self.media_format, volume=0.1, fade=3)
+        else:
+            self.logger.error("No media leg was created!")
 
         while True:
             action = yield from self.wait_action()
@@ -224,8 +229,8 @@ class CallerEndpoint(TestEndpoint):
     def plan(self):
         self.logger.debug("Caller created")
         
-        address = yield from resolver.wait_resolve("index.hu")
-        self.logger.debug("Resolved index.hu asynchronously to: %s" % address)
+        #address = yield from resolver.wait_resolve("index.hu")
+        #self.logger.debug("Resolved index.hu asynchronously to: %s" % address)
         
         yield from self.wait_input("Press any key to dial out!")
         
@@ -459,7 +464,7 @@ class TestLine(Bridge):
             
             
     def forward_leg(self, li, action):
-        self.logger.info("Line forward_leg %d: %s" % (li, action["type"]))
+        #self.logger.info("Line forward_leg %d: %s" % (li, action["type"]))
         
         session = action.get("session")
         if session:
