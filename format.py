@@ -302,46 +302,44 @@ class Addr(namedtuple("Addr", [ "host", "port" ])):
 Addr.__new__.__defaults__ = (None,)
 
 
-class Status(namedtuple("Status", [ "code", "reason" ])):
-    INTERNAL_TIMEOUT = 8
-    INTERNAL_CEASE = 87
-    
-    REASONS_BY_CODE = {
-          8: "Internal Request Timeout",
-         87: "Internal Response Ceased",
-        100: "Trying",
-        180: "Ringing",
-        183: "Session Progress",
-        200: "OK",
-        400: "Bad Request",
-        401: "Unauthorized",
-        403: "Forbidden",
-        404: "Not Found",
-        408: "Request Timeout",
-        421: "Extension Required",
-        423: "Interval Too Brief",
-        480: "Temporarily Unavailable",
-        481: "Call/Transaction Does Not Exist",
-        482: "Loop Detected",
-        483: "Too Many Hops",
-        486: "Busy Here",
-        487: "Request Terminated",
-        488: "Not Acceptable Here",
-        489: "Bad Event",
-        491: "Request Pending",
-        500: "Internal Error",
-        501: "Not Implemented",
-        503: "Service Unavailable",
-        504: "Server Timeout",
-        600: "Busy Everywhere",
-        603: "Decline",
-        604: "Does Not Exist Anywhere",
-        606: "Not Acceptable"
-    }
-    
-    def __new__(cls, code, reason=None):
-        reason = reason or cls.REASONS_BY_CODE.get(code) or "Just because"
-        return super().__new__(cls, code, reason)
+Status = namedtuple("Status", [ "code", "reason" ])
+
+Status.INTERNAL_REQUEST_TIMEOUT = Status(8, "Internal Request Timeout")
+Status.INTERNAL_RESPONSE_CEASED = Status(87, "Internal Response Ceased")
+
+Status.TRYING = Status(100, "Trying")
+Status.RINGING = Status(180, "Ringing")
+Status.SESSION_PROGRESS = Status(183, "Session Progress")
+
+Status.OK = Status(200, "OK")
+
+Status.BAD_REQUEST = Status(400, "Bad Request")
+Status.UNAUTHORIZED = Status(401, "Unauthorized")
+Status.FORBIDDEN = Status(403, "Forbidden")
+Status.NOT_FOUND = Status(404, "Not Found")
+Status.REQUEST_TIMEOUT = Status(408, "Request Timeout")
+Status.EXTENSION_REQUIRED = Status(421, "Extension Required")
+Status.INTERVAL_TOO_BRIEF = Status(423, "Interval Too Brief")
+Status.TEMPORARILY_UNAVAILABLE = Status(480, "Temporarily Unavailable")
+Status.CALL_DOES_NOT_EXIST = Status(481, "Call Does Not Exist")  # twins
+Status.TRANSACTION_DOES_NOT_EXIST = Status(481, "Transaction Does Not Exist")  # twins
+Status.DIALOG_DOES_NOT_EXIST = Status(481, "Dialog Does Not Exist")  # twins
+Status.LOOP_DETECTED = Status(482, "Loop Detected")
+Status.TOO_MANY_HOPS = Status(483, "Too Many Hops")
+Status.BUSY_HERE = Status(486, "Busy Here")
+Status.REQUEST_TERMINATED = Status(487, "Request Terminated")
+Status.NOT_ACCEPTABLE_HERE = Status(488, "Not Acceptable Here")
+Status.BAD_EVENT = Status(489, "Bad Event")
+Status.REQUEST_PENDING = Status(491, "Request Pending")
+
+Status.INTERNAL_ERROR = Status(500, "Internal Error")
+Status.NOT_IMPLEMENTED = Status(501, "Not Implemented")
+Status.SERVICE_UNAVAILABLE = Status(503, "Service Unavailable")
+Status.SERVER_TIMEOUT = Status(504, "Server Timeout")
+Status.BUSY_EVERYWHERE = Status(600, "Busy Everywhere")
+Status.DECLINE = Status(603, "Decline")
+Status.DOES_NOT_EXIST_ANYWHERE = Status(604, "Does Not Exist Anywhere")
+Status.NOT_ACCEPTABLE = Status(606, "Not Acceptable")
 
 
 class Rack(namedtuple("Rack", [ "rseq", "cseq", "method" ])):
@@ -992,8 +990,8 @@ def make_non_2xx_ack(response, method, uri, route=None):
 
 
 def make_cease_response(request):
-    return Sip.response(status=Status(Status.INTERNAL_CEASE), related=request)
+    return Sip.response(status=Status.INTERNAL_RESPONSE_CEASED, related=request)
     
     
 def is_cease_response(msg):
-    return msg.status.code == Status.INTERNAL_CEASE
+    return msg.status == Status.INTERNAL_RESPONSE_CEASED

@@ -82,13 +82,13 @@ class Switch(Loggable):
         return self.transaction_manager.send_message(msg)
         
     
-    def reject_request(self, request, code, reason=None):
-        response = make_simple_response(request, Status(code, reason))
+    def reject_request(self, request, status):
+        response = make_simple_response(request, status)
         self.send_message(response)
 
 
     def challenge_request(self, request, challenge):
-        response = make_simple_response(request, Status(401, "Come Again"), challenge)
+        response = make_simple_response(request, Status.UNAUTHORIZED, challenge)
         self.send_message(response)
 
 
@@ -143,10 +143,10 @@ class Switch(Loggable):
 
         if not authname:
             if sure:
-                self.reject_request(request, 403, "Hop not allowed")
+                self.reject_request(request, Status.FORBIDDEN)  # hop not allowed
                 return True
             else:
-                self.reject_request(request, 403, "Sender not allowed")
+                self.reject_request(request, Status.FORBIDDEN)  # sender not allowed
                 return True
 
         if sure:
@@ -155,7 +155,7 @@ class Switch(Loggable):
         account = self.account_manager.get_local_account(authname)
         if not account:
             self.logger.error("Account %s referred, but not found!" % authname)
-            self.reject_request(request, 500)
+            self.reject_request(request, Status.INTERNAL_SERVER_ERROR)
             return True
             
         method = request.method
@@ -207,10 +207,10 @@ class Switch(Loggable):
                         self.dialog_manager.process(request)
                         return
                     else:
-                        self.reject_request(request, 481, "Transaction Does Not Exist")
+                        self.reject_request(request, Status.TRANSACTION_DOES_NOT_EXIST)
                         return
     
-                self.reject_request(request, 501, "Method Not Implemented")
+                self.reject_request(request, Status.NOT_IMPLEMENTED)
             else:
                 # In dialog requests
                 
@@ -222,7 +222,7 @@ class Switch(Loggable):
                 if processed:
                     return
     
-                self.reject_request(request, 481, "Dialog Does Not Exist")
+                self.reject_request(request, Status.DIALOG_DOES_NOT_EXIST)
         else:
             response = msg
             method = response.method

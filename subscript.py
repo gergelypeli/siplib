@@ -53,7 +53,7 @@ class EventSource(Loggable):
             
                 if expires > 0:
                     if expires < min_expires:
-                        res = Sip.response(status=Status(423), expires=min_expires)
+                        res = Sip.response(status=Status.INTERVAL_TOO_BRIEF, expires=min_expires)
                         subscription.dialog.send(res, request)
                 
                         if not subscription.expiration_plug:
@@ -70,7 +70,7 @@ class EventSource(Loggable):
                     subscription.expiration_deadline = datetime.datetime.now() + datetime.timedelta(seconds=expires)
                     subscription.expiration_plug = zap.time_slot(expires).plug(self.expired, id=id)
                 
-                    res = Sip.response(status=Status(200, "OK"), related=request)
+                    res = Sip.response(status=Status.OK, related=request)
                     res["expires"] = expires
                     subscription.dialog.send(res)
 
@@ -85,7 +85,7 @@ class EventSource(Loggable):
                     else:
                         self.logger.info("Subscription %s polled." % (id,))
 
-                    res = Sip.response(status=Status(200, "OK"), related=request)
+                    res = Sip.response(status=Status.OK, related=request)
                     res["expires"] = expires
                     subscription.dialog.send(res)
 
@@ -294,13 +294,13 @@ class SubscriptionManager(Loggable):
         
         if not key:
             self.logger.warning("Rejecting subscription for unidentifiable event source!")
-            self.reject_request(request, Status(404))
+            self.reject_request(request, Status.NOT_FOUND)
             return
         
         es = self.event_sources_by_key.get(key)
         if not es:
             self.logger.warning("Rejecting subscription for nonexistent event source: %s" % (key,))
-            self.reject_request(request, Status(404))
+            self.reject_request(request, Status.NOT_FOUND)
             return
             
         dialog = self.switch.make_dialog()

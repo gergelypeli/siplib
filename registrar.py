@@ -81,7 +81,7 @@ class LocalRecord(Loggable):
             
             if contact_info and contact_info.call_id == call_id and contact_info.cseq >= cseq:
                 # The RFC suggests 500, but that's a bit weird
-                response = Sip.response(status=Status(500, "Out of order request is not our fault"), related=request)
+                response = Sip.response(status=Status.INTERNAL_SERVER_ERROR, related=request)
                 self.send(response)
                 return
 
@@ -100,7 +100,7 @@ class LocalRecord(Loggable):
             seconds_left = int((contact_info.expiration - now).total_seconds())
             fetched.append(Nameaddr(uri=urihop.uri, params=dict(expires=str(seconds_left))))
 
-        response = Sip.response(status=Status(200, "OK"), related=request)
+        response = Sip.response(status=Status.OK, related=request)
         response["contact"] = fetched
         self.send(response)
 
@@ -276,13 +276,13 @@ class Registrar(Loggable):
         record_uri = request["to"].uri.canonical_aor()
         
         if not self.may_register(registering_uri, record_uri):
-            self.reject_request(request, Status(403, "Forbidden"))
+            self.reject_request(request, Status.FORBIDDEN)
             return
         
         record = self.local_records_by_uri.get(record_uri)
         if not record:
             self.logger.warning("Local record not found: %s" % record_uri)
-            self.reject_request(request, Status(404))
+            self.reject_request(request, Status.NOT_FOUND)
             return
         
         record.recv(request)

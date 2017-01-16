@@ -145,7 +145,7 @@ class RejectingEndpoint(TestEndpoint):
         yield from self.wait_this_action("dial")
         self.logger.debug("Got dial, but not now rejecting it.")
 
-        self.forward(dict(type="reject", status=Status(603)))
+        self.forward(dict(type="reject", status=Status.DECLINE))
         self.logger.debug("And now done.")
 
 
@@ -434,7 +434,7 @@ class TestLine(Bridge):
         
         if not contacts:
             self.logger.debug("Record %s has no SIP contacts, rejecting!" % (record_uri,))
-            self.reject_incoming_leg(Status(404))
+            self.reject_incoming_leg(Status.NOT_FOUND)
             
         self.logger.debug("Record %s has %d SIP contacts." % (record_uri, len(contacts)))
         sip_from = Nameaddr(Uri(src_addr, src_username), src_name)

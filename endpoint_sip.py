@@ -184,18 +184,18 @@ class SipEndpoint(Endpoint, SessionHelper):
 
             # Session rejects automatically screw the whole call, regardless of the action
             if session and session.is_reject():
-                status = Status(488)
+                status = Status.NOT_ACCEPTABLE_HERE
             elif type == "session":
-                status = Status(180 if already_ringing else 183)
+                status = Status.RINGING if already_ringing else Status.SESSION_PROGRESS
             elif type == "ring":
-                status = Status(180)
+                status = Status.RINGING
                 if not already_ringing:
                     self.change_state(self.DIALING_IN_RINGING)
             elif type == "accept":
-                status = Status(200)
+                status = Status.OK
                 # Wait for the ACK before changing state
             elif type == "reject":
-                status = action["status"] or Status(500)
+                status = action["status"] or Status.INTERNAL_SERVER_ERROR
             else:
                 raise Exception("Unknown action type: %s!" % type)
                 
@@ -217,7 +217,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                 if ok:
                     return
                     
-                status = Status(488 if session.is_reject() else 200)
+                status = Status.NOT_ACCEPTABLE_HERE if session.is_reject() else Status.OK
                 msg = self.make_message(action, status=status)
                 self.iuc.out_server(msg)
                 return
@@ -254,7 +254,7 @@ class SipEndpoint(Endpoint, SessionHelper):
         refer_to = request.get("refer_to")
         if not refer_to:
             self.logger.warning("No Refer-To header!")
-            self.send(Sip.response(status=Status(400)), request)
+            self.send(Sip.response(status=Status.BAD_REQUEST), request)
             return
             
         replaces = refer_to.uri.headers.get("replaces")
@@ -281,7 +281,7 @@ class SipEndpoint(Endpoint, SessionHelper):
         
             if not other:
                 self.logger.warning("No target dialog found, l=%s, r=%s, c=%s" % (local_tag, remote_tag, call_id))
-                self.send(Sip.response(status=Status(404)), request)
+                self.send(Sip.response(status=Status.NOT_FOUND), request)
                 return
                 
             self.logger.info("Attended transfer to SIP endpoint %s." % local_tag)
@@ -289,7 +289,7 @@ class SipEndpoint(Endpoint, SessionHelper):
             src = None
             
         refer_sub = "false" if request.get("refer_sub") == "false" else "true"
-        self.send(Sip.response(status=Status(200), refer_sub=refer_sub), request)
+        self.send(Sip.response(status=Status.OK, refer_sub=refer_sub), request)
             
         if refer_sub != "false":
             notify = Sip.request(
@@ -485,7 +485,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                     return
                 
                 request = msg
-                self.send(Sip.response(status=Status(200, "OK"), related=request))
+                self.send(Sip.response(status=Status.OK, related=request))
                 self.change_state(self.DOWN)
                 action = self.make_action(request, type="hangup")
                 self.forward(action)
@@ -501,7 +501,7 @@ class SipEndpoint(Endpoint, SessionHelper):
 
                 request = msg
                 self.logger.debug("Mutual BYE, finishing immediately.")
-                self.send(Sip.response(status=Status(200), related=request))
+                self.send(Sip.response(status=Status.OK, related=request))
                 self.change_state(self.DOWN)
                 self.may_finish()
                 return

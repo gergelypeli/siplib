@@ -171,7 +171,7 @@ class SwitchA(TestSwitch):
                     dst_uri = Uri(Addr(A_DOMAIN), src_username)
                     self.logger.info("Okay, pickup from %s to %s." % (target_number, dst_uri))
 
-                    self.reject_incoming_leg(Status(603, "Picking Up"))
+                    self.reject_incoming_leg(Status.DECLINE)
                     self.ground.switch.line_manager.call_pickup(target_number, dst_uri)
                     return
                 

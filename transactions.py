@@ -158,7 +158,7 @@ class PlainClientTransaction(Transaction):
 
     def report(self, response):
         if not response:
-            response = make_simple_response(self.outgoing_msg, Status(Status.INTERNAL_TIMEOUT))
+            response = make_simple_response(self.outgoing_msg, Status.INTERNAL_RESPONSE_TIMEOUT)
         else:
             response.related = self.outgoing_msg
             
@@ -323,7 +323,7 @@ class InviteServerTransaction(PlainServerTransaction):
                 
             # Send 100 only for initial INVITE-s
             if not request["to"].params.get("tag"):
-                self.send(make_simple_response(request, Status(100, "Trying")))
+                self.send(make_simple_response(request, Status.TRYING))
         elif self.state == self.WAITING:
             pass
         elif self.state == self.PROVISIONING:

@@ -284,7 +284,7 @@ class Bridge(Party):
                     self.remove_leg(0)
                 else:
                     # Havent accepted yet, so send a reject instead
-                    self.reject_incoming_leg(Status(500))
+                    self.reject_incoming_leg(Status.INTERNAL_SERVER_ERROR)
         else:
             if self.legs:
                 # No incoming leg, no fun
@@ -319,7 +319,7 @@ class Bridge(Party):
                     self.process_dial(action)
                 except Exception as e:
                     self.logger.error("Dial processing error: %s" % (e,), exc_info=True)
-                    self.reject_incoming_leg(Status(500))
+                    self.reject_incoming_leg(Status.INTERNAL_SERVER_ERROR)
                     self.hangup_outgoing_legs()
                 else:
                     # If the dial action is executed by this fallback code, then the
@@ -416,7 +416,7 @@ class Routing(Bridge):
         
 
     def process_dial(self, action):
-        self.reject_incoming_leg(Status(604))
+        self.reject_incoming_leg(Status.DOES_NOT_EXIST_ANYWHERE)
 
         
     def anchor_outgoing_leg(self, li):
@@ -467,7 +467,7 @@ class PlannedRouting(zap.Planned, Routing):
         
         if exception:
             self.logger.error("Routing plan aborted with exception: %s" % exception)
-            self.reject_incoming_leg(Status(500))
+            self.reject_incoming_leg(Status.INTERNAL_SERVER_ERROR)
             self.hangup_outgoing_legs(None)
         else:
             # Auto-anchoring

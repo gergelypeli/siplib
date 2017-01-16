@@ -290,7 +290,7 @@ class InviteUpdateComplex(Loggable):
 
         if self.unresponded_update and (session.is_accept() or session.is_reject()):
             self.logger.info("Sending UPDATE response with answer.")
-            status = Status(200 if session.is_accept() else 488)
+            status = Status.OK if session.is_accept() else Status.NOT_ACCEPTABLE_HERE
             response = Sip.response(status=status, related=self.unresponded_update)
             sdp = self.build_sdp(session)
             add_sdp(response, sdp)
@@ -361,11 +361,11 @@ class InviteUpdateComplex(Loggable):
                 self.logger.info("Sending PRACK response with answer.")
                 
                 if session.is_accept():
-                    status = Status(200)
+                    status = Status.OK
                     sdp = self.build_sdp(session)
                 else:
                     self.logger.warning("Oh, wait, it's a reject... whatever!")
-                    status = Status(488)
+                    status = Status.NOT_ACCEPTABLE_HERE
                     sdp = None
                     
                 response = Sip.response(status=status, related=self.unresponded_prack)
@@ -396,7 +396,7 @@ class InviteUpdateComplex(Loggable):
         if request.method == "INVITE":
             if self.is_busy():
                 self.logger.warning("Got conflicting INVITE request, rejecting!")
-                response = Sip.response(status=Status(400), related=request)
+                response = Sip.response(status=Status.REQUEST_PENDING, related=request)
                 self.send_message(response)
                 return None, None
 
@@ -410,16 +410,16 @@ class InviteUpdateComplex(Loggable):
         elif request.method == "CANCEL":
             if not self.unresponded_invite:
                 self.logger.warning("Got unexpected CANCEL request, rejecting!")
-                response = Sip.response(status=Status(481), related=request)
+                response = Sip.response(status=Status.TRANSACTION_DOES_NOT_EXIST, related=request)
                 self.send_message(response)
                 return None, None
 
             self.logger.info("Got CANCEL request.")
             
-            response = Sip.response(status=Status(200), related=request)
+            response = Sip.response(status=Status.OK, related=request)
             self.send_message(response)
             
-            response = Sip.response(status=Status(487), related=self.unresponded_invite)
+            response = Sip.response(status=Status.REQUEST_TERMINATED, related=self.unresponded_invite)
             self.send_message(response)
             
             self.unresponded_invite = None
@@ -428,7 +428,7 @@ class InviteUpdateComplex(Loggable):
         elif request.method == "PRACK":
             if not self.unpracked_rpr:
                 self.logger.warning("Got unexpected PRACK request, rejecting!")
-                response = Sip.response(status=Status(400), related=request)
+                response = Sip.response(status=Status.BAD_REQUEST, related=request)
                 self.send_message(response)
                 return None, None
 
@@ -437,7 +437,7 @@ class InviteUpdateComplex(Loggable):
             
             if rmethod != rpr.related.method or rcseq != rpr.related["cseq"] or rseq != rpr["rseq"]:
                 self.logger.warning("Got PRACK request with bad parameters, rejecting!")
-                response = Sip.response(status=Status(400), related=request)
+                response = Sip.response(status=Status.BAD_REQUEST, related=request)
                 self.send_message(response)
                 return None, None
 
@@ -446,7 +446,7 @@ class InviteUpdateComplex(Loggable):
             if not sdp:
                 if has_sdp(self.unpracked_rpr) and self.is_queried:
                     self.logger.warning("Got PRACK request with missing answer, rejecting!")
-                    response = Sip.response(status=Status(400), related=request)
+                    response = Sip.response(status=Status.BAD_REQUEST, related=request)
                     self.send_message(response)
                     
                     self.unpracked_rpr = None
@@ -454,7 +454,7 @@ class InviteUpdateComplex(Loggable):
                     return request, None
                 else:
                     self.logger.info("Got empty PRACK request.")
-                    response = Sip.response(status=Status(200), related=request)
+                    response = Sip.response(status=Status.OK, related=request)
                     self.send_message(response)
                     
                     self.unpracked_rpr = None
@@ -465,7 +465,7 @@ class InviteUpdateComplex(Loggable):
                     if self.is_queried:
                         self.logger.info("Got PRACK request with answer.")
                         session = self.parse_sdp(sdp, True)
-                        response = Sip.response(status=Status(200), related=request)
+                        response = Sip.response(status=Status.OK, related=request)
                         self.send_message(response)
                     
                         self.is_established = True
@@ -482,7 +482,7 @@ class InviteUpdateComplex(Loggable):
                         return request, session
                 else:
                     self.logger.warning("Got PRACK request with unexpected SDP, rejecting!")
-                    response = Sip.response(status=Status(400), related=request)
+                    response = Sip.response(status=Status.BAD_REQUEST, related=request)
                     self.send_message(response)
                     
                     self.unpracked_rpr = None
@@ -605,7 +605,7 @@ class InviteUpdateComplex(Loggable):
                 self.logger.info("Sending final INVITE response with answer.")
             elif session.is_reject():
                 self.logger.warning("Can't keep status of final INVITE response with reject!")
-                response.status = Status(488)
+                response.status = Status.NOT_ACCEPTABLE_HERE
             else:
                 raise Exception("A session query slipped through the checks!")
                 
@@ -631,13 +631,13 @@ class InviteUpdateComplex(Loggable):
             
             if self.unresponded_invite and not self.is_established:
                 self.logger.warning("Got UPDATE request while INVITE unestablished, rejecting!")
-                response = Sip.response(status=Status(491), related=request)
+                response = Sip.response(status=Status.REQUEST_PENDING, related=request)
                 self.send_message(response)
                 return None, None
                 
             if self.unresponded_update:
                 self.logger.warning("Got conflicting UPDATE request, rejecting!")
-                response = Sip.response(status=Status(491), related=request)
+                response = Sip.response(status=Status.REQUEST_PENDING, related=request)
                 self.send_message(response)
                 return None, None
                 
