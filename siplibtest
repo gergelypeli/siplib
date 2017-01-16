@@ -251,8 +251,8 @@ class SwitchA(TestSwitch):
         self.subscription_manager.add_event_source("voicemail", dict(mailbox="201"))
         
         # Add a line state
-        self.subscription_manager.add_event_source("busylamp", dict(entity="201"))
-        self.subscription_manager.add_event_source("busylamp", dict(entity="254"))
+        self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_SNOM_1))
+        self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_LOCAL_RINGING_LINE))
         
         if TEST == TEST_PICKUP:
             zap.time_slot(3).plug(self.test_pickuping)

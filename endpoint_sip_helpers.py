@@ -1,6 +1,6 @@
 from collections import namedtuple
 
-from sdp import SdpBuilder, SdpParser, STATIC_PAYLOAD_TYPES, Session
+from sdp import STATIC_PAYLOAD_TYPES, Session
 from ground import SessionState
 
 
@@ -12,8 +12,8 @@ class SessionHelper:
         self.allocated_media = []
         
         # These are not Loggable (yet)
-        self.sdp_builder = SdpBuilder()
-        self.sdp_parser = SdpParser()
+        #self.sdp_builder = SdpBuilder()
+        #self.sdp_parser = SdpParser()
 
 
     def media_leg_notified(self, type, params, mli):
@@ -154,11 +154,11 @@ class SessionHelper:
             remote_channels[i]["mgw_affinity"] = self.allocated_media[i].mgw_sid
 
 
-    def process_incoming_sdp(self, sdp, is_answer):
-        if sdp is None and is_answer is None:
-            return None  # no session to process
+    def process_remote_session(self, remote_session):
+        #if sdp is None and is_answer is None:
+        #    return None  # no session to process
             
-        remote_session = self.sdp_parser.parse(sdp, is_answer)
+        #remote_session = self.sdp_parser.parse(sdp, is_answer)
         result = self.leg.session_state.set_party_session(remote_session)
         
         if result in (SessionState.IGNORE_UNEXPECTED, SessionState.IGNORE_RESOLVED, SessionState.IGNORE_STALE):
@@ -181,18 +181,18 @@ class SessionHelper:
         elif remote_session.is_reject():
             self.deallocate_local_media(local_session)
 
-        return remote_session
+        #return remote_session
             
     
-    def process_outgoing_session(self, local_session):
+    def process_local_session(self, local_session):
         # Results:
         #   None, None  - nothing to do
         #   sdp, False  - offer
         #   sdp, True   - accept
         #   None, False - query
         #   None, True  - reject
-        if not local_session:
-            return None, None
+        #if not local_session:
+        #    return None, None
             
         result = self.leg.session_state.set_ground_session(local_session)
         
@@ -219,10 +219,10 @@ class SessionHelper:
         elif local_session.is_reject():
             pass
 
-        sdp = self.sdp_builder.build(local_session)
-        is_answer = local_session.is_accept() or local_session.is_reject()
+        #sdp = self.sdp_builder.build(local_session)
+        #is_answer = local_session.is_accept() or local_session.is_reject()
         
-        return sdp, is_answer
+        #return sdp, is_answer
 
 
     def clear_local_media(self):

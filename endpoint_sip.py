@@ -2,6 +2,7 @@ from weakref import WeakValueDictionary, proxy
 
 from format import Status, TargetDialog, Parser, Sip
 from party import Endpoint
+from sdp import Session
 from endpoint_sip_helpers import SessionHelper
 from endpoint_sip_iuc import InviteUpdateComplex
 from log import Loggable
@@ -110,7 +111,8 @@ class SipEndpoint(Endpoint, SessionHelper):
             self.logger.info("Doing %s action." % type)
         
         session = action.get("session")
-        sdp, is_answer = self.process_outgoing_session(session)
+        if session:
+            self.process_local_session(session)
         
         if self.state in (self.DOWN,):
             if type == "dial":
@@ -134,10 +136,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                 self.dialog.setup_outgoing(uri, fr, to, route, hop)
                 
                 msg = self.make_message(action, method="INVITE")
-                if not sdp and is_answer is None:
-                    is_answer = False
-                    
-                self.iuc.queue_sdp(sdp, is_answer)
+                self.iuc.queue_session(session or Session.make_query())
                 self.iuc.out_client(msg)
                 self.change_state(self.DIALING_OUT)
                 
@@ -156,7 +155,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                 return
                 
             elif type == "session":
-                self.iuc.out_sdp(sdp, is_answer)
+                self.iuc.out_session(session)
                 
                 # This might have sent an ACK
                 if self.iuc.is_finished():
@@ -171,23 +170,20 @@ class SipEndpoint(Endpoint, SessionHelper):
             # not seem to be illegal, only as fucked up as PRACK offers in general.
             
             if session:
-                ok = self.iuc.out_sdp(sdp, is_answer)
+                ok = self.iuc.out_session(session)
                 
                 if ok:
                     # Rip the SDP from the response
                     if type == "session":
                         return
-                    else:
-                        sdp = None
-                        is_answer = None
 
-                # Otherwise we'll use an INVITE response for the SDP
+                # Otherwise it was just queued
 
             status = None
             already_ringing = (self.state == self.DIALING_IN_RINGING)
 
             # Session rejects automatically screw the whole call, regardless of the action
-            if not sdp and is_answer:
+            if session and session.is_reject():
                 status = Status(488)
             elif type == "session":
                 status = Status(180 if already_ringing else 183)
@@ -204,9 +200,6 @@ class SipEndpoint(Endpoint, SessionHelper):
                 raise Exception("Unknown action type: %s!" % type)
                 
             msg = self.make_message(action, status=status)
-            if sdp and is_answer is not None:
-                self.queue_sdp(sdp, is_answer)
-                
             self.iuc.out_server(msg)
             
             if status.code >= 300:
@@ -220,12 +213,11 @@ class SipEndpoint(Endpoint, SessionHelper):
             # Re-INVITE stuff
             
             if type == "session":
-                ok = self.iuc.out_sdp(sdp, is_answer)
+                ok = self.iuc.out_session(session)
                 if ok:
                     return
                     
-                # TODO: how can we be sure that an invite response is appropriate here?
-                status = Status(488 if not sdp else 200)
+                status = Status(488 if session.is_reject() else 200)
                 msg = self.make_message(action, status=status)
                 self.iuc.out_server(msg)
                 return
@@ -251,10 +243,9 @@ class SipEndpoint(Endpoint, SessionHelper):
         raise Exception("Weird thing to do %s in state %s!" % (type, self.state))
 
 
-    def process_session(self, msg, sdp, is_answer):
-        session = self.process_incoming_sdp(sdp, is_answer)
-
+    def process_session(self, msg, session):
         if session:
+            self.process_remote_session(session)
             action = self.make_action(msg, type="session", session=session)
             self.forward(action)
 
@@ -344,7 +335,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                 src = dict(request, type="sip")
                 ctx = {}
                 
-                request, sdp, is_answer = self.iuc.in_server(request)
+                request, session = self.iuc.in_server(request)
                 
                 if self.iuc.is_finished():
                     # May happen with 100rel support conflict
@@ -352,7 +343,8 @@ class SipEndpoint(Endpoint, SessionHelper):
                     self.may_finish()
                     return
                 
-                session = self.process_incoming_sdp(sdp, is_answer)
+                if session:
+                    self.process_remote_session(session)
                 
                 self.change_state(self.DIALING_IN)
                 
@@ -374,7 +366,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                     return
                     
                 request = msg
-                request, sdp, is_answer = self.iuc.in_server(request)
+                request, session = self.iuc.in_server(request)
                 
                 if not request:
                     return
@@ -387,20 +379,20 @@ class SipEndpoint(Endpoint, SessionHelper):
                     
                 elif method == "ACK":
                     self.change_state(self.UP)
-                    self.process_session(request, sdp, is_answer)
+                    self.process_session(request, session)
                         
                 elif method == "NAK":
                     self.send(Sip.request(method="BYE"))  # required behavior
                     self.change_state(self.DISCONNECTING_OUT)
                     
                 elif method == "PRACK":
-                    self.process_session(request, sdp, is_answer)
+                    self.process_session(request, session)
                     
                 return
                 
             elif method == "UPDATE":
-                msg, sdp, is_answer = self.iuc.in_update(msg)
-                self.process_session(msg, sdp, is_answer)
+                msg, session = self.iuc.in_update(msg)
+                self.process_session(msg, session)
                 return
                 
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
@@ -414,11 +406,12 @@ class SipEndpoint(Endpoint, SessionHelper):
                 response = msg
                 status = response.status
                 
-                response, sdp, is_answer = self.iuc.in_client(response)
+                response, session = self.iuc.in_client(response)
                 if not response:
                     return
                 
-                session = self.process_incoming_sdp(sdp, is_answer)
+                if session:
+                    self.process_remote_session(session)
 
                 if method == "INVITE":
                     if status.code == 180:
@@ -463,14 +456,14 @@ class SipEndpoint(Endpoint, SessionHelper):
                     return # Nothing meaningful should arrive in PRACK responses
                     
             elif method == "UPDATE":
-                msg, sdp, is_answer = self.iuc.in_update(msg)
-                self.process_session(msg, sdp, is_answer)
+                msg, session = self.iuc.in_update(msg)
+                self.process_session(msg, session)
                 return
 
         elif self.state == self.UP:
             if method in ("INVITE", "ACK", "NAK", "PRACK", "UPDATE"):
-                msg, sdp, is_answer = self.iuc.in_generic(msg)
-                self.process_session(msg, sdp, is_answer)
+                msg, session = self.iuc.in_generic(msg)
+                self.process_session(msg, session)
                 return
                 
             elif method == "REFER":

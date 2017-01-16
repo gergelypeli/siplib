@@ -1,11 +1,6 @@
-from collections import namedtuple
-
 from format import Status, Rack, Sip
-from sdp import add_sdp, get_sdp, has_sdp
+from sdp import add_sdp, get_sdp, has_sdp, SdpBuilder, SdpParser, Session
 from log import Loggable
-
-
-ESdp = namedtuple("ESdp", [ "sdp", "is_answer" ])
 
 
 class InviteUpdateComplex(Loggable):
@@ -15,9 +10,13 @@ class InviteUpdateComplex(Loggable):
         self.sip_endpoint = sip_endpoint
         self.use_rpr = use_rpr
         self.is_ever_finished = False
+
+        # These are not Loggable (yet)
+        self.sdp_builder = SdpBuilder()
+        self.sdp_parser = SdpParser()
         
         self.outgoing_response_queue = []
-        self.outgoing_sdp_queue = []
+        self.outgoing_session_queue = []
 
         self.unresponded_invite = None
         self.unacked_final = None
@@ -35,6 +34,14 @@ class InviteUpdateComplex(Loggable):
 
     def send_message(self, msg):
         self.sip_endpoint.send(msg)
+        
+        
+    def build_sdp(self, session):
+        return self.sdp_builder.build(session)
+        
+        
+    def parse_sdp(self, sdp, is_answer):
+        return self.sdp_parser.parse(sdp, is_answer)
         
         
     def make_rack(self, rpr):
@@ -87,14 +94,14 @@ class InviteUpdateComplex(Loggable):
             for response in responses:
                 self.out_server(response)
                 
-        if self.outgoing_sdp_queue:
-            self.logger.info("Retrying %d outgoing sessions." % len(self.outgoing_sdp_queue))
+        if self.outgoing_session_queue:
+            self.logger.info("Retrying %d outgoing sessions." % len(self.outgoing_session_queue))
             
-            items = self.outgoing_sdp_queue
-            self.outgoing_sdp_queue = []
+            sessions = self.outgoing_session_queue
+            self.outgoing_session_queue = []
             
-            for sdp, is_answer in items:
-                self.out_sdp(sdp, is_answer)
+            for session in sessions:
+                self.out_session(session)
 
 
     def may_finish(self):
@@ -119,19 +126,20 @@ class InviteUpdateComplex(Loggable):
             if self.is_busy():
                 raise Exception("INVITE already in progress!")
             
-            if not self.outgoing_sdp_queue:
+            if not self.outgoing_session_queue:
                 raise Exception("INVITE request has no queued session!")
                 
-            sdp, is_answer = self.outgoing_sdp_queue.pop(0)
+            session = self.outgoing_session_queue.pop(0)
             
-            if is_answer:
+            if session.is_offer():
+                self.logger.info("INVITE request taking a session offer.")
+                sdp = self.build_sdp(session)
+                add_sdp(request, sdp)
+            elif session.is_query():
+                self.logger.info("INVITE request taking a session query.")
+            else:
                 self.logger.error("INVITE request can't take a session answer!")
                 return
-            elif sdp:
-                self.logger.info("INVITE request taking a session offer.")
-                add_sdp(request, sdp)
-            else:
-                self.logger.info("INVITE request taking a session query.")
 
             if self.use_rpr:
                 request.setdefault("require", set()).add("100rel")
@@ -139,7 +147,7 @@ class InviteUpdateComplex(Loggable):
             
             self.send_message(request)
             
-            self.reset(is_client=True, is_queried=not sdp)
+            self.reset(is_client=True, is_queried=session.is_query())
             self.unresponded_invite = request
             return
         elif request.method == "CANCEL":
@@ -160,16 +168,19 @@ class InviteUpdateComplex(Loggable):
                 return None, None, None
             
             sdp = get_sdp(response)
-            is_answer = None
+            session = None
         
             if sdp:
-                if not self.invite_response_sdp:
-                    self.invite_response_sdp = sdp
-                    is_answer = not self.is_queried
-                    self.logger.info("Using SDP from INVITE response as %s." % ("answer" if is_answer else "offer"))
-                else:
+                if self.invite_response_sdp:
                     self.logger.info("Ignoring duplicate SDP from INVITE response.")
-                    sdp = None
+                elif not self.is_queried:
+                    session = self.parse_sdp(sdp, True)
+                    self.invite_response_sdp = sdp
+                    self.logger.info("Using SDP from INVITE response as answer.")
+                else:
+                    session = self.parse_sdp(sdp, False)
+                    self.invite_response_sdp = sdp
+                    self.logger.info("Using SDP from INVITE response as offer.")
             else:
                 self.logger.info("No SDP in INVITE response.")
         
@@ -177,11 +188,11 @@ class InviteUpdateComplex(Loggable):
                 if "100rel" in response.get("require", set()):
                     self.unpracked_rpr = response
                 
-                    if sdp:
-                        if not is_answer:
+                    if session:
+                        if session.is_offer():
                             self.logger.info("Got reliable offer, waiting for answer to PRACK.")
                             self.retry()  # may be queued already
-                            return response, sdp, is_answer
+                            return response, session
                         else:
                             # Got answer, send PRACK
                             self.logger.info("Got reliable answer, sending empty PRACK.")
@@ -192,7 +203,7 @@ class InviteUpdateComplex(Loggable):
                             self.is_established = True
                             self.unpracked_rpr = None
                             self.unresponded_prack = request
-                            return response, sdp, is_answer
+                            return response, session
                     else:
                         if self.is_queried and not self.is_established:
                             self.logger.warning("Nasty peer sent an empty reliable response before the offer, welp!")
@@ -205,26 +216,26 @@ class InviteUpdateComplex(Loggable):
                     
                         self.unpracked_rpr = None
                         self.unresponded_prack = request
-                        return response, None, None
+                        return response, session
                 else:
-                    if sdp:
-                        if not is_answer:
+                    if session:
+                        if session.is_offer():
                             self.logger.info("Got unreliable response with offer.")
                         else:
                             self.logger.info("Got unreliable response with answer.")
                     else:
                         self.logger.info("Got empty unreliable response.")
                         
-                    return response, sdp, is_answer
+                    return response, session
             elif response.status.code < 300:
                 self.unresponded_invite = None
                 self.unacked_final = response
             
-                if sdp:
-                    if not is_answer:
+                if session:
+                    if session.is_offer():
                         self.logger.info("Got final offer, waiting for answer to ACK.")
                         self.retry()  # may be queued already
-                        return response, sdp, is_answer
+                        return response, session
                     else:
                         self.logger.info("Got final answer, sending empty ACK.")
                         request = Sip.request(method="ACK", related=response)
@@ -232,7 +243,7 @@ class InviteUpdateComplex(Loggable):
                 
                         self.unacked_final = None
                         self.may_finish()
-                        return response, sdp, is_answer
+                        return response, session
                 else:
                     self.logger.info("Got empty final response, sending empty ACK.")
                     request = Sip.request(method="ACK", related=response)
@@ -240,12 +251,12 @@ class InviteUpdateComplex(Loggable):
                 
                     self.unacked_final = None
                     self.may_finish()
-                    return response, None, None
+                    return response, session
             else:
                 self.logger.info("Got final rejection, no need to ACK here.")
                 self.unresponded_invite = None
                 self.may_finish()
-                return response, None, None
+                return response, session
                                 
         elif response.method == "PRACK":
             if has_sdp(response):
@@ -256,103 +267,124 @@ class InviteUpdateComplex(Loggable):
             self.unresponded_prack = None
             self.retry()
             
-            return response, None, None
+            return response, None
         elif response.method == "CANCEL":
             self.logger.info("Got CANCEL response.")
             self.unresponded_cancel = None
             self.may_finish()
-            return response, None, None
+            return response, None
 
 
-    def queue_sdp(self, sdp, is_answer):
-        if sdp is None and is_answer is None:
+    def queue_session(self, session):
+        if not session:
             raise Exception("Wanted to queue an empty session!")
             
-        what = ("accept" if is_answer else "offer") if sdp else ("reject" if is_answer else "query")
+        what = "query" if session.is_query() else "offer" if session.is_offer() else "accept" if session.is_accept() else "reject"
         self.logger.info("Queuing outgoing session %s." % what)
-        self.outgoing_sdp_queue.append((sdp, is_answer))
+        self.outgoing_session_queue.append(session)
         
 
-    def out_sdp(self, sdp, is_answer):
-        if sdp is None and is_answer is None:
+    def out_session(self, session):
+        if not session:
             raise Exception("Wanted to send an empty session!")
 
-        if self.unresponded_update and is_answer:
+        if self.unresponded_update and (session.is_accept() or session.is_reject()):
             self.logger.info("Sending UPDATE response with answer.")
-            status = Status(200 if sdp else 488)
+            status = Status(200 if session.is_accept() else 488)
             response = Sip.response(status=status, related=self.unresponded_update)
+            sdp = self.build_sdp(session)
             add_sdp(response, sdp)
             self.send_message(response)
             
             self.unresponded_update = None
             return True
-        elif not self.unresponded_update and self.is_established and sdp and not is_answer:
+        elif not self.unresponded_update and self.is_established and session.is_offer():
             self.logger.info("Sending UPDATE request with offer.")
             request = Sip.request(method="UPDATE")
+            sdp = self.build_sdp(session)
             add_sdp(request, sdp)
             self.send_message(request)
             
             self.unresponded_update = request
             return True
         elif not self.is_busy():
-            if is_answer:
+            if session.is_accept() or session.is_reject():
                 self.logger.error("Can't start a re-INVITE with a session answer, ignoring!")
                 return
                 
-            self.logger.info("Sending INVITE request with %s." % ("query" if not sdp else "offer"))
-            self.queue_sdp(sdp, is_answer)
+            self.logger.info("Sending INVITE request with %s." % ("query" if session.is_query() else "offer"))
+            self.queue_session(session)
             self.out_client(Sip.request(method="INVITE"))
             return True
-        elif not sdp and not is_answer:
+        elif session.is_query():
             self.logger.info("Can't send query in current INVITE, must queue.")
-            self.queue_sdp(sdp, is_answer)
+            self.queue_session(session)
             return False
         elif self.is_client:
-            if self.unpracked_rpr and is_answer:
+            if self.unpracked_rpr and (session.is_accept() or session.is_reject()):
                 self.logger.info("Sending PRACK request with answer.")
                 request = Sip.request(method="PRACK")
                 request["rack"] = self.make_rack(self.unpracked_rpr)
-                add_sdp(request, sdp)
+                
+                if session.is_accept():
+                    sdp = self.build_sdp(session)
+                    add_sdp(request, sdp)
+                else:
+                    self.logger.warning("Oh, wait, it's a session reject... whatever!")
+                    
                 self.send_message(request)
                 
                 self.is_established = True
                 self.unpracked_rpr = None
                 self.unresponded_prack = request
                 return True
-            elif self.unacked_final and is_answer:
+            elif self.unacked_final and (session.is_accept() or session.is_reject()):
                 self.logger.info("Sending ACK request with answer.")
-                # Can't reject in ACK
                 request = Sip.request(method="ACK", related=self.unacked_final)
-                add_sdp(request, sdp)
+
+                if session.is_accept():
+                    sdp = self.build_sdp(session)
+                    add_sdp(request, sdp)
+                else:
+                    self.logger.warning("Oh, wait, it's a session reject... whatever!")
+                    
                 self.send_message(request)
 
                 self.unacked_final = None
                 return True
             else:
                 self.logger.info("Can't send session in current INVITE, must queue.")
-                self.queue_sdp(sdp, is_answer)
+                self.queue_session(session)
                 return False
         else:
-            if self.unresponded_prack and is_answer:
+            if self.unresponded_prack and (session.is_accept() or session.is_reject()):
                 self.logger.info("Sending PRACK response with answer.")
-                # If the client dared to send a PRACK offer, then we dare to reject it.
-                status = Status(200 if sdp else 488)
+                
+                if session.is_accept():
+                    status = Status(200)
+                    sdp = self.build_sdp(session)
+                else:
+                    self.logger.warning("Oh, wait, it's a reject... whatever!")
+                    status = Status(488)
+                    sdp = None
+                    
                 response = Sip.response(status=status, related=self.unresponded_prack)
-                add_sdp(response, sdp)
+                if sdp:
+                    add_sdp(response, sdp)
                 self.send_message(response)
                 
                 self.unresponded_prack = None
                 return True
             elif self.outgoing_response_queue:
                 self.logger.info("Sending queued INVITE response with session.")
-                self.queue_sdp(sdp, is_answer)
+                self.queue_session(session)
                 self.retry()
                 return True
-            # We never send an INVITE response by ourselves, because it may be included
+            # We never send sessions in an INVITE response, because it may be included
             # in an explicit response.
             else:
                 self.logger.info("Can't send session in current INVITE, must queue.")
-                self.queue_sdp(sdp, is_answer)
+                self.queue_session(session)
                 return False
                 
     
@@ -366,21 +398,21 @@ class InviteUpdateComplex(Loggable):
                 self.logger.warning("Got conflicting INVITE request, rejecting!")
                 response = Sip.response(status=Status(400), related=request)
                 self.send_message(response)
-                return None, None, None
+                return None, None
 
             sdp = get_sdp(request)
-            is_answer = False
+            session = self.parse_sdp(sdp) if sdp else Session.make_query()
             self.logger.info("Got INVITE request with %s." % ("offer" if sdp else "query"))
             
             self.reset(is_client=False, is_queried=not sdp)
             self.unresponded_invite = request
-            return request, sdp, is_answer
+            return request, session
         elif request.method == "CANCEL":
             if not self.unresponded_invite:
                 self.logger.warning("Got unexpected CANCEL request, rejecting!")
                 response = Sip.response(status=Status(481), related=request)
                 self.send_message(response)
-                return None, None, None
+                return None, None
 
             self.logger.info("Got CANCEL request.")
             
@@ -392,13 +424,13 @@ class InviteUpdateComplex(Loggable):
             
             self.unresponded_invite = None
             self.unacked_final = response
-            return request, None, None
+            return request, None
         elif request.method == "PRACK":
             if not self.unpracked_rpr:
                 self.logger.warning("Got unexpected PRACK request, rejecting!")
                 response = Sip.response(status=Status(400), related=request)
                 self.send_message(response)
-                return None, None, None
+                return None, None
 
             rseq, rcseq, rmethod = request["rack"]
             rpr = self.unpracked_rpr
@@ -407,20 +439,19 @@ class InviteUpdateComplex(Loggable):
                 self.logger.warning("Got PRACK request with bad parameters, rejecting!")
                 response = Sip.response(status=Status(400), related=request)
                 self.send_message(response)
-                return None, None, None
+                return None, None
 
             sdp = get_sdp(request)
-            is_answer = self.is_queried if sdp else None
             
             if not sdp:
                 if has_sdp(self.unpracked_rpr) and self.is_queried:
-                    self.logger.warning("Got PRACK request with missing answer!")
+                    self.logger.warning("Got PRACK request with missing answer, rejecting!")
                     response = Sip.response(status=Status(400), related=request)
                     self.send_message(response)
                     
                     self.unpracked_rpr = None
                     self.retry()
-                    return request, None, None
+                    return request, None
                 else:
                     self.logger.info("Got empty PRACK request.")
                     response = Sip.response(status=Status(200), related=request)
@@ -428,25 +459,27 @@ class InviteUpdateComplex(Loggable):
                     
                     self.unpracked_rpr = None
                     self.retry()
-                    return request, None, None
+                    return request, None
             else:
                 if has_sdp(self.unpracked_rpr):
                     if self.is_queried:
                         self.logger.info("Got PRACK request with answer.")
+                        session = self.parse_sdp(sdp, True)
                         response = Sip.response(status=Status(200), related=request)
                         self.send_message(response)
                     
                         self.is_established = True
                         self.unpracked_rpr = None
                         self.retry()
-                        return request, sdp, is_answer
+                        return request, session
                     else:
-                        self.logger.info("Got PRACK request with offer.")
+                        self.logger.info("Got PRACK request with new offer.")
+                        session = self.parse_sdp(sdp, False)
                     
                         self.unpracked_rpr = None
                         self.unresponded_prack = request
                         self.retry()
-                        return request, sdp, is_answer
+                        return request, session
                 else:
                     self.logger.warning("Got PRACK request with unexpected SDP, rejecting!")
                     response = Sip.response(status=Status(400), related=request)
@@ -454,36 +487,36 @@ class InviteUpdateComplex(Loggable):
                     
                     self.unpracked_rpr = None
                     self.retry()
-                    return None, None, None
+                    return None, None
         elif request.method == "ACK":
             if not self.unacked_final:
                 self.logger.warning("Got unexpected ACK, ignoring!")
-                return None, None, None
+                return None, None
                 
             sdp = get_sdp(request)
-            is_answer = self.is_queried if sdp else None
             
             if not sdp:
                 if self.is_queried and not self.is_established:
                     self.logger.warning("Got ACK with missing SDP, ignoring!")
-                    return None, None, None
-                else:
-                    self.logger.info("Got empty ACK.")
+                    return None, None
+
+                self.logger.info("Got empty ACK.")
             
                 self.unacked_final = None
                 self.may_finish()
-                return request, sdp, is_answer
+                return request, None
             else:
-                if self.is_queried:
+                if self.is_queried and not self.established:
                     self.logger.info("Got ACK with answer.")
+                    session = self.parse_sdp(sdp, True)
                     self.unacked_final = None
                     self.may_finish()
-                    return request, sdp, is_answer
+                    return request, session
                 else:
                     self.logger.warning("Got ACK with unexpected SDP!")
                     self.unacked_final = None
                     self.may_finish()
-                    return request, sdp, is_answer
+                    return request, None
         else:
             self.logger.warning("Got unexpected request!")
         
@@ -500,44 +533,38 @@ class InviteUpdateComplex(Loggable):
             return
             
         response.related = self.unresponded_invite
+        session = None
 
-        # Take an outgoing session if available
-        sdp, is_answer = self.outgoing_sdp_queue[0] if self.outgoing_sdp_queue else (None, None)
-        
         if response.status.code >= 300:
             self.logger.info("No session needed, because it's a non-2xx response.")
         elif self.is_established:
             self.logger.info("No session needed, because it's already established.")
         elif self.invite_response_sdp:
             self.logger.info("No session needed, because already responded one.")
-            sdp = self.invite_response_sdp
-            is_answer = not self.is_queried
-        elif is_answer is None:
+            add_sdp(response, self.invite_response_sdp)
+        elif not self.outgoing_session_queue:
             self.logger.info("No queued session.")
-        elif not self.is_queried and is_answer:
-            self.logger.info("Unqueueing answer.")
-            self.outgoing_sdp_queue.pop(0)
-            if sdp:
-                add_sdp(response, sdp)
-        elif self.is_queried and not is_answer and sdp:
-            self.logger.info("Unqueueing offer.")
-            self.outgoing_sdp_queue.pop(0)
-            add_sdp(response, sdp)
         else:
-            self.logger.error("Wrong type of session queued, dropping!")
-            self.outgoing_sdp_queue.pop(0)
-            sdp = None
-            is_answer = None
+            session = self.outgoing_session_queue.pop(0)
             
-        if sdp:
-            add_sdp(response, sdp)
+            if not self.is_queried and (session.is_accept() or session.is_reject()):
+                self.logger.info("Unqueueing answer.")
+                if session.is_accept():
+                    sdp = self.build_sdp(session)
+                    add_sdp(response, sdp)
+                    self.invite_response_sdp = sdp
+            elif self.is_queried and session.is_offer():
+                self.logger.info("Unqueueing offer.")
+                sdp = self.build_sdp(session)
+                add_sdp(response, sdp)
+                self.invite_response_sdp = sdp
+            else:
+                self.logger.error("Wrong type of session queued, dropping!")
+                session = None
             
         if response.status.code < 200:
-            if sdp:
-                self.invite_response_sdp = sdp
-                
             if self.use_rpr:
-                if not sdp:
+                if not session:
                     if self.is_queried and not self.is_established:
                         self.logger.info("Can't send reliable INVITE response before offer, must queue.")
                         self.outgoing_response_queue.append(response)
@@ -545,7 +572,7 @@ class InviteUpdateComplex(Loggable):
                     else:
                         self.logger.info("Sending empty reliable INVITE response.")
                 else:
-                    if not is_answer:
+                    if session.is_offer():
                         self.logger.info("Sending reliable INVITE response with offer.")
                     else:
                         self.logger.info("Sending reliable INVITE response with answer.")
@@ -559,10 +586,10 @@ class InviteUpdateComplex(Loggable):
                 self.unpracked_rpr = response
                 return
             else:
-                if not sdp:
+                if not session:
                     self.logger.info("Sending empty unreliable INVITE response.")
                 else:
-                    if not is_answer:
+                    if session.is_offer():
                         self.logger.info("Sending unreliable INVITE response with offer.")
                     else:
                         self.logger.info("Sending unreliable INVITE response with answer.")
@@ -570,19 +597,18 @@ class InviteUpdateComplex(Loggable):
                 self.send_message(response)
                 return
         elif response.status.code < 300:
-            if not sdp:
-                if is_answer:
-                    self.logger.warning("Can't keep status of final INVITE response with reject!")
-                    response.status = Status(488)
-                else:
-                    # queries were already checked
-                    self.logger.info("Sending empty final INVITE response.")
+            if not session:
+                self.logger.info("Sending empty final INVITE response.")
+            elif session.is_offer():
+                self.logger.info("Sending final INVITE response with offer.")
+            elif session.is_accept():
+                self.logger.info("Sending final INVITE response with answer.")
+            elif session.is_reject():
+                self.logger.warning("Can't keep status of final INVITE response with reject!")
+                response.status = Status(488)
             else:
-                if not is_answer:
-                    self.logger.info("Sending final INVITE response with offer.")
-                else:
-                    self.logger.info("Sending final INVITE response with answer.")
-                    
+                raise Exception("A session query slipped through the checks!")
+                
             self.send_message(response)
             
             self.unacked_final = response
@@ -607,33 +633,33 @@ class InviteUpdateComplex(Loggable):
                 self.logger.warning("Got UPDATE request while INVITE unestablished, rejecting!")
                 response = Sip.response(status=Status(491), related=request)
                 self.send_message(response)
-                return None, None, None
+                return None, None
                 
             if self.unresponded_update:
                 self.logger.warning("Got conflicting UPDATE request, rejecting!")
                 response = Sip.response(status=Status(491), related=request)
                 self.send_message(response)
-                return None, None, None
+                return None, None
                 
             self.logger.info("Got UPDATE request with offer.")
             sdp = get_sdp(request)
-            is_answer = False
+            session = self.parse_sdp(sdp, False)
             
             self.unresponded_update = request
-            return request, sdp, is_answer
+            return request, session
         else:
             response = message
             
             if not self.unresponded_update:
                 self.logger.warning("Got unexpected UPDATE response, ignoring!")
-                return None, None, None
+                return None, None
             
             self.logger.info("Got UPDATE response with answer.")
             sdp = get_sdp(response)
-            is_answer = True
+            session = self.parse_sdp(sdp, True)
             
             self.unresponded_update = None
-            return response, sdp, is_answer
+            return response, session
 
 
     def in_generic(self, message):
