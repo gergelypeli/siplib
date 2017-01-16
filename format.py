@@ -788,25 +788,19 @@ class Sip(dict):
         
         
     @classmethod
-    def request(cls, **kwargs):
-        if "method" not in kwargs:
+    def request(cls, method=None, uri=None, body=None, hop=None, related=None):
+        if not method:
             raise Exception("No method for request!")
             
-        #if kwargs["method"] in ("ACK", "NAK", "CANCEL") and "related" not in kwargs:
-        #    raise Exception("No related for %s request!" % kwargs["method"])
-            
-        return cls(is_response=False, **kwargs)
+        return cls(is_response=False, method=method, uri=uri, body=body, hop=hop, related=related)
         
         
     @classmethod
-    def response(cls, **kwargs):
-        if "status" not in kwargs:
+    def response(cls, status=None, method=None, body=None, hop=None, related=None):
+        if not status:
             raise Exception("No status for response!")
             
-        #if "related" not in kwargs:
-        #    raise Exception("No related for response!")
-            
-        return cls(is_response=True, **kwargs)
+        return cls(is_response=True, status=status, method=method, body=body, hop=hop, related=related)
             
 
 def print_structured_message(msg):
