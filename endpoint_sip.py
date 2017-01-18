@@ -77,19 +77,6 @@ class SipEndpoint(Endpoint, SessionHelper):
         self.forward(dict(params, type=type))
         
         
-    def make_message(self, action, **kwargs):
-        if "method" in kwargs:
-            return Sip.request(**kwargs)
-        elif "status" in kwargs:
-            return Sip.response(**kwargs)
-        else:
-            raise Exception("Bogus message!")
-        
-        
-    def make_action(self, msg, **kwargs):
-        return kwargs
-        
-
     def hop_selected(self, hop, action):
         self.dst["hop"] = hop
         self.logger.debug("Retrying dial with resolved hop")
@@ -135,7 +122,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                 self.logger.info("Using hop %s to reach %s." % (hop, uri))
                 self.dialog.setup_outgoing(uri, fr, to, route, hop)
                 
-                msg = self.make_message(action, method="INVITE")
+                msg = Sip.request(method="INVITE")
                 self.iuc.queue_session(session or Session.make_query())
                 self.iuc.out_client(msg)
                 self.change_state(self.DIALING_OUT)
@@ -149,7 +136,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                 # overtake the invite. This is actually in the RFC. But that
                 # would be too complex for now.
                 
-                msg = self.make_message(action, method="CANCEL")
+                msg = Sip.request(method="CANCEL")
                 self.iuc.out_client(msg)
                 self.change_state(self.DISCONNECTING_OUT)
                 return
@@ -199,7 +186,7 @@ class SipEndpoint(Endpoint, SessionHelper):
             else:
                 raise Exception("Unknown action type: %s!" % type)
                 
-            msg = self.make_message(action, status=status)
+            msg = Sip.response(status=status)
             self.iuc.out_server(msg)
             
             if status.code >= 300:
@@ -218,7 +205,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                     return
                     
                 status = Status.NOT_ACCEPTABLE_HERE if session.is_reject() else Status.OK
-                msg = self.make_message(action, status=status)
+                msg = Sip.response(status=status)
                 self.iuc.out_server(msg)
                 return
         
@@ -230,7 +217,7 @@ class SipEndpoint(Endpoint, SessionHelper):
 
             elif type == "hangup":
                 reason = action.get("reason")
-                msg = self.make_message(action, method="BYE")
+                msg = Sip.request(method="BYE")
                 msg["reason"] = [reason] if reason else None
                 self.send(msg)
                 self.change_state(self.DISCONNECTING_OUT)
@@ -246,7 +233,7 @@ class SipEndpoint(Endpoint, SessionHelper):
     def process_session(self, msg, session):
         if session:
             self.process_remote_session(session)
-            action = self.make_action(msg, type="session", session=session)
+            action = dict(type="session", session=session)
             self.forward(action)
 
 
@@ -304,14 +291,14 @@ class SipEndpoint(Endpoint, SessionHelper):
 
         if not other:
             # blind
-            action = self.make_action(request, type="transfer", transfer_id=tid, call_info=self.call_info, ctx={}, src=src)
+            action = dict(type="transfer", transfer_id=tid, call_info=self.call_info, ctx={}, src=src)
             self.forward(action)
         else:
             # attended
-            action = other.make_action(request, type="transfer", transfer_id=tid)
+            action = dict(type="transfer", transfer_id=tid)
             other.forward(action)
 
-            action = self.make_action(request, type="transfer", transfer_id=tid)
+            action = dict(type="transfer", transfer_id=tid)
             self.forward(action)
 
 
@@ -348,7 +335,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                 
                 self.change_state(self.DIALING_IN)
                 
-                action = self.make_action(request,
+                action = dict(
                     type="dial",
                     call_info=self.get_call_info(),
                     src=src,
@@ -373,7 +360,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                     
                 elif method == "CANCEL":
                     self.change_state(self.DOWN)
-                    action = self.make_action(request, type="hangup")
+                    action = dict(type="hangup")
                     self.forward(action)
                     self.may_finish()
                     
@@ -417,19 +404,19 @@ class SipEndpoint(Endpoint, SessionHelper):
                     if status.code == 180:
                         if self.state == self.DIALING_OUT_RINGING:
                             if session:
-                                action = self.make_action(response, type="session", session=session)
+                                action = dict(type="session", session=session)
                                 self.forward(action)
                         
                         else:
                             self.change_state(self.DIALING_OUT_RINGING)
-                            action = self.make_action(response, type="ring", session=session)
+                            action = dict(type="ring", session=session)
                             self.forward(action)
 
                         return
 
                     elif status.code == 183:
                         if session:
-                            action = self.make_action(response, type="session", session=session)
+                            action = dict(type="session", session=session)
                             self.forward(action)
 
                         return
@@ -438,7 +425,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                         if not self.invite_is_active():
                             # Transaction now acked, invite should be finished now
                             self.change_state(self.DOWN)
-                            action = self.make_action(response, type="reject", status=status)
+                            action = dict(type="reject", status=status)
                             self.forward(action)
                             self.may_finish()
                         
@@ -448,7 +435,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                         if self.iuc.is_finished():
                             self.change_state(self.UP)
                         
-                        action = self.make_action(response, type="accept", session=session)
+                        action = dict(type="accept", session=session)
                         self.forward(action)
                         return
                         
@@ -487,7 +474,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                 request = msg
                 self.send(Sip.response(status=Status.OK, related=request))
                 self.change_state(self.DOWN)
-                action = self.make_action(request, type="hangup")
+                action = dict(type="hangup")
                 self.forward(action)
                 self.may_finish()
                 return
