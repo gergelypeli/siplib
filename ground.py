@@ -385,7 +385,8 @@ class Ground(Loggable):
         t = self.transfers_by_id.pop(tid)
         leg_oid = t["leg_oid"]
         action = t["action"]
-        self.spawn(leg_oid, dict(action, type="dial"))
+        dst = dict(type="redial")
+        self.spawn(leg_oid, dict(action, type="dial", dst=dst))
         
         
     def transfer_leg(self, leg_oid0, action):

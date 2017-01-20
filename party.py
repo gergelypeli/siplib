@@ -1,7 +1,7 @@
 from weakref import proxy
 
 from ground import GroundDweller
-from format import Status
+from format import Status, Reason
 import zap
 
 
@@ -182,9 +182,9 @@ class Bridge(Party):
         
 
     def dial(self, action, type=None, **kwargs):
+        li = self.add_leg()
         dst = dict(type=type, **kwargs) if type else None
         action = dict(action, dst=dst)
-        li = self.add_leg()
         self.forward_leg(li, action)
         
         return li
@@ -284,7 +284,7 @@ class Bridge(Party):
                     self.remove_leg(0)
                 else:
                     # Havent accepted yet, so send a reject instead
-                    self.reject_incoming_leg(Status.INTERNAL_SERVER_ERROR)
+                    self.reject_incoming_leg(Status.SERVER_INTERNAL_ERROR)
         else:
             if self.legs:
                 # No incoming leg, no fun
@@ -319,7 +319,7 @@ class Bridge(Party):
                     self.process_dial(action)
                 except Exception as e:
                     self.logger.error("Dial processing error: %s" % (e,), exc_info=True)
-                    self.reject_incoming_leg(Status.INTERNAL_SERVER_ERROR)
+                    self.reject_incoming_leg(Status.SERVER_INTERNAL_ERROR)
                     self.hangup_outgoing_legs()
                 else:
                     # If the dial action is executed by this fallback code, then the
@@ -467,7 +467,7 @@ class PlannedRouting(zap.Planned, Routing):
         
         if exception:
             self.logger.error("Routing plan aborted with exception: %s" % exception)
-            self.reject_incoming_leg(Status.INTERNAL_SERVER_ERROR)
+            self.reject_incoming_leg(Status.SERVER_INTERNAL_ERROR)
             self.hangup_outgoing_legs(None)
         else:
             # Auto-anchoring
@@ -535,4 +535,100 @@ class RecordingBridge(Bridge):
         if session and session.is_accept():
             self.hack_media(li, session)
         
+        Bridge.do_slot(self, li, action)
+
+
+class RedialBridge(Bridge):
+    def __init__(self):
+        Bridge.__init__(self)
+
+        self.is_ringing = False
+        self.is_playing = False
+        
+
+    def identify(self, dst):
+        return None
+        
+        
+    def play_ringback(self):
+        media_leg = self.legs[0].get_media_leg(0)
+        ss = self.legs[0].session_state
+
+        # We may not get the answer until the call is accepted
+        ground_session = ss.get_ground_session() or ss.pending_ground_session
+    
+        if not media_leg and ground_session:
+            self.logger.info("Creating media leg for artificial ringback tone.")
+            channel = ground_session["channels"][0]
+            ctype = channel["type"]
+            mgw_affinity = channel.get("mgw_affinity")
+
+            mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
+            channel["mgw_affinity"] = mgw_sid
+            
+            media_leg = self.make_media_leg("player")
+            media_leg.set_mgw(mgw_sid)
+            self.legs[0].add_media_leg(media_leg)
+        
+        if media_leg and self.is_ringing and not self.is_playing:
+            self.is_playing = True
+            self.logger.info("Playing artificial ringback tone.")
+            format = ("PCMA", 8000, 1, None)  # FIXME
+            media_leg.play("ringtone.wav", format, volume=0.1)
+        
+        
+    def stop_ringback(self):
+        media_leg = self.legs[0].get_media_leg(0)
+
+        if self.is_playing:
+            self.logger.info("Stopping artificial ringback tone.")
+            self.is_playing = False
+
+        if media_leg:
+            self.legs[0].remove_media_leg()
+            
+        
+    def do_slot(self, li, action):
+        self.logger.info("Redial do_slot %d: %s" % (li, action))
+        
+        media_leg = self.legs[0].get_media_leg(0)
+        
+        session = action.get("session")
+        
+        if session:
+            ss = self.legs[0].session_state
+            
+            if li == 0:
+                ss.set_ground_session(session)
+            else:
+                ss.set_party_session(session)
+
+            self.play_ringback()
+            
+        if li > 0:
+            type = action["type"]
+            
+            if type == "ring":
+                self.is_ringing = True
+                self.play_ringback()
+                self.logger.info("Not forwarding ring action.")
+                return
+
+            if type == "accept":
+                self.stop_ringback()
+                
+                self.logger.info("Not forwarding accept action, collapsing instead.")
+                self.unanchor_legs()
+                self.collapse_unanchored_legs([], [])
+                return
+
+            if type == "reject":
+                self.stop_ringback()
+                
+                status = action.get("status") or Status.SERVER_INTERNAL_ERROR
+                reason = Reason("SIP", dict(cause=status.code, text=status.reason))
+
+                self.logger.info("Forwarding reject as hangup with reason %s." % (reason,))
+                action = dict(type="hangup", reason=reason)
+
         Bridge.do_slot(self, li, action)

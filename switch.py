@@ -4,7 +4,7 @@ from format import Status
 from transport import TransportManager
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
-from party import Bridge, RecordingBridge, Routing
+from party import Bridge, RecordingBridge, Routing, RedialBridge
 from endpoint_sip import SipManager
 from ground import Ground
 from registrar import Registrar
@@ -105,6 +105,8 @@ class Switch(Loggable):
             return Bridge()
         elif type == "record":
             return RecordingBridge()
+        elif type == "redial":
+            return RedialBridge()
         else:
             raise Exception("Unknown party type '%s'!" % type)
 
@@ -155,7 +157,7 @@ class Switch(Loggable):
         account = self.account_manager.get_local_account(authname)
         if not account:
             self.logger.error("Account %s referred, but not found!" % authname)
-            self.reject_request(request, Status.INTERNAL_SERVER_ERROR)
+            self.reject_request(request, Status.SERVER_INTERNAL_ERROR)
             return True
             
         method = request.method

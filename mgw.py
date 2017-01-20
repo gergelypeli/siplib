@@ -258,23 +258,20 @@ class NetLeg(Leg):
         if not self.remote_addr or not self.remote_addr[1]:
             return
             
-        #print("Sending to %s" % (self.remote_addr,))
+        #self.logger.info("Sending RTP packet to %s" % (self.remote_addr,))
         # packet should be a bytearray here
         self.socket.sendto(udp, self.remote_addr)
     
     
     def send_packet(self, packet):
-        if not self.dtmf_injector.process(packet):
-            self.send_checked(packet)
+        for p in self.dtmf_injector.process(packet):
+            self.send_checked(p)
 
 
     def notify(self, type, params):
         if type == "tone":
             name = params.get("name")
-            packets = self.dtmf_injector.inject(name)
-        
-            for packet in packets:
-                self.send_checked(packet)
+            self.dtmf_injector.inject(name)
         else:
             Leg.notify(self, type, params)
         
@@ -303,6 +300,7 @@ class PlayerLeg(Leg):
         self.rtp_player = None
         self.format = None
         self.volume = 1
+        self.filename = None
 
 
     def modify(self, params):
@@ -325,11 +323,17 @@ class PlayerLeg(Leg):
             self.format = Format(*params["format"])
                 
         if "filename" in params:
+            self.filename = params["filename"]
             samples = read_wav(params["filename"])
             
             self.rtp_player = RtpPlayer(self.format, samples, self.volume, fade)
             self.rtp_player.packet_slot.plug(self.recv_packet)
 
+
+    def recv_packet(self, packet):
+        #self.logger.info("Generated packet from %s." % self.filename)
+        Leg.recv_packet(self, packet)
+        
 
     def send_packet(self, packet):
         pass

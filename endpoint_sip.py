@@ -182,7 +182,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                 status = Status.OK
                 # Wait for the ACK before changing state
             elif type == "reject":
-                status = action["status"] or Status.INTERNAL_SERVER_ERROR
+                status = action["status"] or Status.SERVER_INTERNAL_ERROR
             else:
                 raise Exception("Unknown action type: %s!" % type)
                 
@@ -276,16 +276,16 @@ class SipEndpoint(Endpoint, SessionHelper):
             src = None
             
         refer_sub = "false" if request.get("refer_sub") == "false" else "true"
-        self.send(Sip.response(status=Status.OK, refer_sub=refer_sub), request)
+        response = Sip.response(status=Status.OK, related=request)
+        response["refer_sub"] = refer_sub
+        self.send(response)
             
         if refer_sub != "false":
-            notify = Sip.request(
-                method="NOTIFY",
-                event="refer",
-                subscription_state="terminated;reason=noresource",
-                content_type="message/sipfrag",
-                body="SIP/2.0 200 OK".encode("utf8")
-            )
+            notify = Sip.request(method="NOTIFY")
+            notify["event"] = "refer"
+            notify["subscription_state"] = "terminated;reason=noresource"
+            notify["content_type"] = "message/sipfrag"
+            notify.body = "SIP/2.0 200 OK".encode("utf8")
         
             self.send(notify)
 

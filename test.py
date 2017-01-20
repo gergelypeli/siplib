@@ -1,6 +1,6 @@
 from weakref import proxy, WeakSet
 
-from format import Uri, Nameaddr, Status, AbsoluteUri, CallInfo, Reason
+from format import Uri, Nameaddr, Status, AbsoluteUri, CallInfo
 from party import PlannedEndpoint, Bridge
 from sdp import Session
 from subscript import SubscriptionManager, MessageSummaryEventSource, DialogEventSource
@@ -162,16 +162,25 @@ class RingingEndpoint(TestEndpoint):
         self.logger.debug("And now the caller hung up.")
 
 
-class ReRingingEndpoint(TestEndpoint):
+class BlindTransferringEndpoint(TestEndpoint):
+    def identify(self, dst):
+        self.referred_by = dst["referred_by"]  # Nameaddr
+        self.refer_to = dst["refer_to"]  # Nameaddr
+        
+        TestEndpoint.identify(self, dst)
+        
+        return self.referred_by.uri.username
+        
+        
     def plan(self):
-        self.logger.debug("ReRinging endpoint created.")
+        self.logger.debug("Blind transferring endpoint created.")
         
         action = yield from self.wait_this_action("dial")
         
         offer = action.get("session")
         answer = self.update_session(offer)
 
-        self.logger.info("Ringing normally.")
+        self.logger.info("Ringing a bit.")
         self.forward(dict(type="ring", session=answer))
         yield from self.sleep(1)
 
@@ -179,14 +188,14 @@ class ReRingingEndpoint(TestEndpoint):
         self.forward(dict(type="accept"))
         yield from self.sleep(3)
         
-        self.logger.info("Reringing.")
-        self.forward(dict(type="ring"))
-        yield from self.sleep(3)
-
-        self.logger.info("Rerejecting.")
-        self.forward(dict(type="reject"))
+        self.logger.info("Transferring to %s." % (self.refer_to,))
+        tid = self.ground.make_transfer("blind")
+        src = { 'type': "sip", 'from': self.referred_by, 'to': self.refer_to }
+        action = dict(type="transfer", transfer_id=tid, call_info=self.call_info, ctx={}, src=src)
+        self.forward(action)
         
-        self.logger.debug("And now we rerejected the caller.")
+        yield from self.wait_this_action("hangup")
+        self.logger.debug("And now we're hung up.")
 
 
 class CalleeEndpoint(TestEndpoint):
@@ -397,7 +406,6 @@ class TestLine(Bridge):
         self.username = dst["username"]
         self.is_outgoing = dst.get("is_outgoing", False)  # From the device's perspective
         self.is_confirmed = False
-        self.is_unconfirmed = False  # fell back to ringing after a blind transfer
         self.ctx = {}
         
         self.manager.register(self.username, self)
@@ -463,21 +471,7 @@ class TestLine(Bridge):
             Bridge.process_leg_transfer(self, li, action)
             
             
-    def forward_leg(self, li, action):
-        #self.logger.info("Line forward_leg %d: %s" % (li, action["type"]))
-        
-        session = action.get("session")
-        if session:
-            self.legs[li].session_state.set_party_session(session)
-
-        Bridge.forward_leg(self, li, action)
-        
-            
     def do_slot(self, li, action):
-        session = action.get("session")
-        if session:
-            self.legs[li].session_state.set_ground_session(session)
-        
         type = action["type"]
         
         if type == "accept":
@@ -487,57 +481,6 @@ class TestLine(Bridge):
             self.is_confirmed = None
             self.update_busylamp_state()
         
-        to_me = (self.is_outgoing and li > 0) or (not self.is_outgoing and li == 0)
-        
-        if to_me:
-            my_li = max(self.legs.keys()) if li == 0 else 0
-            my_leg = self.legs[my_li]
-        
-            if self.is_confirmed and not self.is_unconfirmed and action["type"] == "ring":
-                self.logger.info("Call unconfirmed, playing artificial ringing tone.")
-                self.is_unconfirmed = True
-            
-                media_leg = my_leg.get_media_leg(0)
-            
-                if not media_leg:
-                    party_session = my_leg.session_state.get_party_session()
-                    channel = party_session["channels"][0]
-            
-                    ctype = channel["type"]
-                    mgw_affinity = channel.get("mgw_affinity")
-                    mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
-
-                    channel["mgw_affinity"] = mgw_sid
-                    media_leg = self.make_media_leg("player")
-                    media_leg.set_mgw(mgw_sid)
-                    my_leg.add_media_leg(media_leg)
-                
-                media_leg.play("ringtone.wav", ("PCMA", 8000, 1, None), volume=0.1)
-            
-                # Don't forward this ring
-                return
-            
-            if self.is_unconfirmed and action["type"] == "accept":
-                self.logger.info("Call reconfirmed, stopping artificial ringing tone.")
-                self.is_unconfirmed = False
-                my_leg.remove_media_leg()
-            
-                # Don't forward this accept
-                return
-            
-            if self.is_unconfirmed and action["type"] == "reject":
-                self.logger.info("Call rerejected, hanging up instead.")
-                self.is_unconfirmed = False
-                my_leg.remove_media_leg()
-            
-                status = action.get("status")
-                action = dict(type="hangup")
-            
-                if status:
-                    action["reason"] = Reason("SIP", dict(cause=status.code, text=status.reason))
-                
-                # Do forward this hangup
-            
         return Bridge.do_slot(self, li, action)
         
         

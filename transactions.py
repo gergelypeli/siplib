@@ -245,9 +245,10 @@ class AckClientTransaction(PlainClientTransaction):
     # STARTING -> send request -> WAITING -> removed by owner INVITE
     
     def send(self, request):
-        self.change_state(self.WAITING)
-        
         PlainClientTransaction.send(self, request)
+        
+        # Stop the retransmissions
+        self.change_state(self.WAITING)
 
 
     def process(self, response):

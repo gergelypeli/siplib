@@ -81,7 +81,7 @@ class LocalRecord(Loggable):
             
             if contact_info and contact_info.call_id == call_id and contact_info.cseq >= cseq:
                 # The RFC suggests 500, but that's a bit weird
-                response = Sip.response(status=Status.INTERNAL_SERVER_ERROR, related=request)
+                response = Sip.response(status=Status.SERVER_INTERNAL_ERROR, related=request)
                 self.send(response)
                 return
 

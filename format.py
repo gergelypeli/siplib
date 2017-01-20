@@ -332,7 +332,7 @@ Status.NOT_ACCEPTABLE_HERE = Status(488, "Not Acceptable Here")
 Status.BAD_EVENT = Status(489, "Bad Event")
 Status.REQUEST_PENDING = Status(491, "Request Pending")
 
-Status.INTERNAL_ERROR = Status(500, "Internal Error")
+Status.SERVER_INTERNAL_ERROR = Status(500, "Server Internal Error")
 Status.NOT_IMPLEMENTED = Status(501, "Not Implemented")
 Status.SERVICE_UNAVAILABLE = Status(503, "Service Unavailable")
 Status.SERVER_TIMEOUT = Status(504, "Server Timeout")

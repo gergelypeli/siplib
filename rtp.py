@@ -292,7 +292,9 @@ class DtmfInjector(DtmfBase):
         DtmfBase.__init__(self)
 
         self.format = None
-        self.next_time_ms = None
+        self.dtmf_name = None
+        self.dtmf_start_ms = None
+        self.dtmf_end_ms = None
 
 
     def set_format(self, format):
@@ -300,39 +302,41 @@ class DtmfInjector(DtmfBase):
         
         
     def inject(self, name):
-        # TODO: this is wrong if one frame is made of multiple packets, we'd
-        # cut it in half with this! Must delay sending until the current frame ends!
-        # Wait until the time stamp increases? No, we can't wait for external packets...
-        
-        event = self.events_by_key.get(name)
-        if not event:
-            return []
-
-        volume = 10
-        timestamp = self.ticks(self.next_time_ms, self.format.clock)
-        duration = self.ticks(self.DTMF_DURATION_MS, self.format.clock)
-    
-        payload = build_telephone_event(event, True, volume, duration)
-        packet = Packet(self.format, timestamp, True, payload)
-        
-        self.next_time_ms += self.DTMF_DURATION_MS
-        
-        return [ packet, packet, packet ]
+        self.dtmf_name = name
         
         
     def process(self, packet):
         this_time_ms = self.msecs(packet.timestamp, packet.format.clock)
         
-        if self.next_time_ms is not None:
-            if this_time_ms < self.next_time_ms:
-                return True
-        
-        duration = self.packet_duration(packet)
-        duration_ms = self.msecs(duration, packet.format.clock)
-        
-        self.next_time_ms = this_time_ms + duration_ms
+        if self.dtmf_name:
+            event = self.events_by_key.get(name)
+            self.dtmf_name = None
             
-        return False
+            if event:
+                volume = 10
+                duration_ms = self.DTMF_DURATION_MS
+                
+                timestamp = self.ticks(this_time_ms, self.format.clock)
+                duration = self.ticks(duration_ms, self.format.clock)
+    
+                payload = build_telephone_event(event, True, volume, duration)
+                dtmf = Packet(self.format, timestamp, True, payload)
+
+                self.dtmf_start_ms = this_time_ms
+                self.dtmf_end_ms = this_time_ms + duration_ms
+            
+                return [ dtmf, dtmf, dtmf ]
+    
+        if self.dtmf_start_ms:
+            if this_time_ms >= self.dtmf_start_ms and this_time_ms < self.dtmf_end_ms:
+                return []
+                
+        # Reset state for any packet outside the covered interval, so when the stream
+        # is restarted, we don't keep on blocking the output.
+        self.dtmf_start_ms = None
+        self.dtmf_end_ms = None
+        
+        return [ packet ]
 
 
 class RtpBuilder:

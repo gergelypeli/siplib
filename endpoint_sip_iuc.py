@@ -112,7 +112,15 @@ class InviteUpdateComplex(Loggable):
             self.is_ever_finished = True
             self.retry()
         else:
-            self.logger.info("Can't finish yet.")
+            what = [
+                "unresponded INVITE" if self.unresponded_invite else None,
+                "un-ACK-ed final" if self.unacked_final else None,
+                "un-PRACK-ed rpr" if self.unpracked_rpr else None,
+                "unresponded PRACK" if self.unresponded_prack else None,
+                "unresponded UPDATE" if self.unresponded_update else None,
+                "unresponded CANCEL" if self.unresponded_cancel else None
+            ]
+            self.logger.info("Can't finish yet, has %s." % ", ".join(w for w in what if w))
 
             
     # Client
@@ -165,7 +173,7 @@ class InviteUpdateComplex(Loggable):
             
             if not self.unresponded_invite:
                 self.logger.warning("No INVITE in progress, ignoring response!")
-                return None, None, None
+                return None, None
             
             sdp = get_sdp(response)
             session = None
@@ -401,7 +409,7 @@ class InviteUpdateComplex(Loggable):
                 return None, None
 
             sdp = get_sdp(request)
-            session = self.parse_sdp(sdp) if sdp else Session.make_query()
+            session = self.parse_sdp(sdp, False) if sdp else Session.make_query()
             self.logger.info("Got INVITE request with %s." % ("offer" if sdp else "query"))
             
             self.reset(is_client=False, is_queried=not sdp)
@@ -611,6 +619,7 @@ class InviteUpdateComplex(Loggable):
                 
             self.send_message(response)
             
+            self.unresponded_invite = None
             self.unacked_final = response
             self.invite_response_sdp = None
             return
@@ -618,6 +627,7 @@ class InviteUpdateComplex(Loggable):
             self.logger.info("Sending rejecting INVITE response.")
             self.send_message(response)
             
+            self.unresponded_invite = None
             self.unacked_final = response
             self.invite_response_sdp = None
             return
@@ -672,3 +682,4 @@ class InviteUpdateComplex(Loggable):
                 return self.in_client(message)
         else:
             self.logger.warning("Unexpected message: %s" % message.method)
+            return None, None
