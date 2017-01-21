@@ -24,7 +24,7 @@ class Ground(Loggable):
         self.leg_oids_by_anchor = {}
         self.transfers_by_id = {}
         self.transfer_count = 0
-        self.blind_transfer_ids_by_leg_oid = {}
+        #self.blind_transfer_ids_by_leg_oid = {}
         
         
     def generate_context_oid(self):
@@ -203,13 +203,13 @@ class Ground(Loggable):
         elif action["type"] == "dial":
             self.spawn(leg_oid, action)
             return
-        elif action["type"] == "session":
-            tid = self.blind_transfer_ids_by_leg_oid.pop(leg_oid, None)
+        #elif action["type"] == "session":
+        #    tid = self.blind_transfer_ids_by_leg_oid.pop(leg_oid, None)
             
-            if tid:
-                self.transfers_by_id[tid]["action"]["session"] = action["session"]
-                self.blind_transfer(tid)
-                return
+        #    if tid:
+        #        self.transfers_by_id[tid]["action"]["session"] = action["session"]
+        #        self.blind_transfer(tid)
+        #        return
             
         self.logger.error("Couldn't forward %s from %s!" % (action["type"], leg_oid))
 
@@ -380,13 +380,13 @@ class Ground(Loggable):
         return tid
 
 
-    def blind_transfer(self, tid):
-        self.logger.info("Blind transfer %s dialing out with offer." % (tid,))
-        t = self.transfers_by_id.pop(tid)
-        leg_oid = t["leg_oid"]
-        action = t["action"]
-        dst = dict(type="redial")
-        self.spawn(leg_oid, dict(action, type="dial", dst=dst))
+    #def blind_transfer(self, tid):
+    #    self.logger.info("Blind transfer %s dialing out with offer." % (tid,))
+    #    t = self.transfers_by_id.pop(tid)
+    #    leg_oid = t["leg_oid"]
+    #    action = t["action"]
+    #    dst = dict(type="redial")
+    #    self.spawn(leg_oid, dict(action, type="dial", dst=dst))
         
         
     def transfer_leg(self, leg_oid0, action):
@@ -415,24 +415,36 @@ class Ground(Loggable):
             self.link_legs(leg_oid0, leg_oid1)
             # TODO: correct media, and ringing state!
         elif t["type"] == "blind":
+            self.transfers_by_id.pop(tid)
             self.logger.info("Blind transfer %s from leg %s." % (tid, leg_oid0))
             
             leg_oid0x = self.unlink_legs(leg_oid0)
             reason = Reason("SIP", dict(cause="200", text="Call completed elsewhere"))
             hangup = dict(type="hangup", reason=reason)
             self.legs_by_oid[leg_oid0x].do(hangup)
-            
-            t["leg_oid"] = leg_oid0
-            t["action"] = action
 
-            if action.get("session"):
-                self.blind_transfer(tid)
-            else:
-                self.logger.info("Suspending blind transfer %s until a session is available." % tid)
-                self.blind_transfer_ids_by_leg_oid[leg_oid0] = tid
+            leg = self.legs_by_oid[leg_oid0]
+            forward_session = leg.session_state.party_session or leg.session_state.pending_party_session
+            backward_session = leg.session_state.ground_session
+            dst = dict(type="redial")
             
-                query = dict(type="session", session=Session.make_query())
-                self.legs_by_oid[leg_oid0].do(query)
+            if forward_session:
+                dst = dict(type="session_negotiator", forward_session=forward_session, backward_session=backward_session, next_dst=dst)
+                
+            dial = dict(action, type="dial", dst=dst)
+            self.spawn(leg_oid0, dial)
+            
+            #t["leg_oid"] = leg_oid0
+            #t["action"] = action
+
+            #if action.get("session"):
+            #    self.blind_transfer(tid)
+            #else:
+            #    self.logger.info("Suspending blind transfer %s until a session is available." % tid)
+            #    self.blind_transfer_ids_by_leg_oid[leg_oid0] = tid
+            
+            #    query = dict(type="session", session=Session.make_query())
+            #    self.legs_by_oid[leg_oid0].do(query)
             
                 # We'll continue when the transferred leg yields a session offer, and
                 # we realize it is not linked to anything yet, see self.forward.
@@ -585,7 +597,46 @@ class Leg(GroundDweller):
         self.session_state = SessionState()
 
 
+    def process_party_session(self, session):
+        result = self.session_state.set_party_session(session)
+        
+        if result in (SessionState.IGNORE_UNEXPECTED, SessionState.IGNORE_RESOLVED, SessionState.IGNORE_STALE):
+            self.logger.error("Ignoring party session (%s)!" % result)
+            return False
+        elif result in (SessionState.REJECT_COLLIDING, SessionState.REJECT_DUPLICATE):
+            self.logger.error("Rejecting party session (%s)!" % result)
+            self.do(dict(type="session", session=Session.make_reject()))
+            return False
+        else:
+            return True
+
+
+    def process_ground_session(self, session):
+        result = self.session_state.set_ground_session(session)
+        
+        if result in (SessionState.IGNORE_UNEXPECTED, SessionState.IGNORE_RESOLVED, SessionState.IGNORE_STALE):
+            self.logger.error("Ignoring ground session (%s)!" % result)
+            return False
+        elif result in (SessionState.REJECT_COLLIDING, SessionState.REJECT_DUPLICATE):
+            self.logger.error("Rejecting ground session (%s)!" % result)
+            self.forward(dict(type="session", session=Session.make_reject()))
+            return False
+        else:
+            return True
+    
+
     def forward(self, action):
+        session = action.get("session")
+        
+        if session:
+            keep = self.process_party_session(session)
+            
+            if not keep:
+                if action["type"] == "session":
+                    return
+                else:
+                    action.pop("session")
+                    
         self.ground.forward(self.oid, action)
         
         
@@ -632,4 +683,15 @@ class Leg(GroundDweller):
 
 
     def do(self, action):
+        session = action.get("session")
+        
+        if session:
+            keep = self.process_ground_session(session)
+            
+            if not keep:
+                if action["type"] == "session":
+                    return
+                else:
+                    action.pop("session")
+
         self.owner.do_slot(self.number, action)

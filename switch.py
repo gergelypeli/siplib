@@ -4,7 +4,7 @@ from format import Status
 from transport import TransportManager
 from transactions import TransactionManager, make_simple_response
 from dialog import Dialog, DialogManager
-from party import Bridge, RecordingBridge, Routing, RedialBridge
+from party import Bridge, RecordingBridge, Routing, RedialBridge, SessionNegotiatorBridge
 from endpoint_sip import SipManager
 from ground import Ground
 from registrar import Registrar
@@ -107,6 +107,8 @@ class Switch(Loggable):
             return RecordingBridge()
         elif type == "redial":
             return RedialBridge()
+        elif type == "session_negotiator":
+            return SessionNegotiatorBridge()
         else:
             raise Exception("Unknown party type '%s'!" % type)
 

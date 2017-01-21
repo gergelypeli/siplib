@@ -2,6 +2,7 @@ from weakref import proxy
 
 from ground import GroundDweller
 from format import Status, Reason
+from sdp import Session
 import zap
 
 
@@ -545,6 +546,9 @@ class RedialBridge(Bridge):
         self.is_ringing = False
         self.is_playing = False
         
+        # We use leg #1 party session to play media to, because it is updated
+        # automatically for backward actions before do_slot is called.
+        
 
     def identify(self, dst):
         return None
@@ -552,14 +556,14 @@ class RedialBridge(Bridge):
         
     def play_ringback(self):
         media_leg = self.legs[0].get_media_leg(0)
-        ss = self.legs[0].session_state
+        ss = self.legs[1].session_state
 
         # We may not get the answer until the call is accepted
-        ground_session = ss.get_ground_session() or ss.pending_ground_session
+        session = ss.get_party_session() or ss.pending_party_session
     
-        if not media_leg and ground_session:
+        if not media_leg and session:
             self.logger.info("Creating media leg for artificial ringback tone.")
-            channel = ground_session["channels"][0]
+            channel = session["channels"][0]
             ctype = channel["type"]
             mgw_affinity = channel.get("mgw_affinity")
 
@@ -591,20 +595,8 @@ class RedialBridge(Bridge):
     def do_slot(self, li, action):
         self.logger.info("Redial do_slot %d: %s" % (li, action))
         
-        media_leg = self.legs[0].get_media_leg(0)
+        #media_leg = self.legs[0].get_media_leg(0)
         
-        session = action.get("session")
-        
-        if session:
-            ss = self.legs[0].session_state
-            
-            if li == 0:
-                ss.set_ground_session(session)
-            else:
-                ss.set_party_session(session)
-
-            self.play_ringback()
-            
         if li > 0:
             type = action["type"]
             
@@ -614,7 +606,7 @@ class RedialBridge(Bridge):
                 self.logger.info("Not forwarding ring action.")
                 return
 
-            if type == "accept":
+            elif type == "accept":
                 self.stop_ringback()
                 
                 self.logger.info("Not forwarding accept action, collapsing instead.")
@@ -622,7 +614,7 @@ class RedialBridge(Bridge):
                 self.collapse_unanchored_legs([], [])
                 return
 
-            if type == "reject":
+            elif type == "reject":
                 self.stop_ringback()
                 
                 status = action.get("status") or Status.SERVER_INTERNAL_ERROR
@@ -630,5 +622,100 @@ class RedialBridge(Bridge):
 
                 self.logger.info("Forwarding reject as hangup with reason %s." % (reason,))
                 action = dict(type="hangup", reason=reason)
+                
+            else:
+                self.play_ringback()  # just try, maybe we have the session right
 
+        Bridge.do_slot(self, li, action)
+
+
+class SessionNegotiatorBridge(Bridge):
+    CHANNEL_KEYS = ("type", "proto", "send", "recv", "formats", "attributes", "mgw_affinity")
+    
+    
+    def identify(self, dst):
+        self.forward_session = dst["forward_session"]
+        self.backward_session = dst.get("backward_session")
+        self.next_dst = dst["next_dst"]
+        self.is_backward = None
+        
+        return None
+        
+        
+    def simply(self, s):
+        return [ [ c.get(k) for k in self.CHANNEL_KEYS ] for c in s["channels"] ] if s else None
+    
+    
+    def process_dial(self, action):
+        self.dial(action, **self.next_dst)
+        
+        
+    def do_slot(self, li, action):
+        type = action["type"]
+        session = action.pop("session", None)
+
+        if self.is_backward is None:
+            if session:
+                raise Exception("Unexpected initial session!")
+                
+            if li != 0:
+                raise Exception("Unexpected initial direction!")
+                
+            if self.forward_session.is_offer():
+                offer = self.forward_session
+            else:
+                offer = self.forward_session.flipped()
+                    
+            self.logger.info("Sending initial forward offer in %s action." % type)
+            action["session"] = offer
+            self.is_backward = False
+        elif session:
+            if session.is_query():
+                self.logger.warning("Got unexpected session query, ignoring!")
+            elif session.is_offer():
+                self.logger.warning("Got unexpected session offer, rejecting!")
+                self.forward_leg(li, dict(type="session", session=Session.make_reject()))
+            elif session.is_accept():
+                if li == 0:
+                    # Forward answer
+                    
+                    if self.is_backward:
+                        if self.simply(session) == self.simply(self.forward_session):
+                            self.logger.info("Got the same forward answer, completing.")
+                            self.unanchor_legs()
+                            actions = [ action ] if type != "session" else []
+                            self.collapse_unanchored_legs([], actions)
+                            return
+                        else:
+                            self.logger.info("Got different forward answer, reoffering.")
+                            self.forward_session = session
+                            action["session"] = session.flipped()
+                            self.is_backward = False
+                    else:
+                        self.logger.warning("Got unexpected forward answer, ignoring!")
+                else:
+                    # Backward answer
+                    
+                    if self.is_backward:
+                        self.logger.warning("Got unexpected backward answer, ignoring!")
+                    else:
+                        if self.simply(session) == self.simply(self.backward_session):
+                            self.logger.info("Got the same backward answer, completing.")
+                            self.unanchor_legs()
+                            actions = [ action ] if type != "session" else []
+                            self.collapse_unanchored_legs(actions, [])
+                            return
+                        else:
+                            self.logger.info("Got different backward answer, reoffering.")
+                            self.backward_session = session
+                            action["session"] = session.flipped()
+                            self.is_backward = True
+            elif session.is_reject():
+                # We should probably hang up both parties here.
+                self.logger.warning("Session rejected, now what?")
+                return
+            
+        if type == "session" and not action.get("session"):
+            return
+            
         Bridge.do_slot(self, li, action)

@@ -309,7 +309,7 @@ class DtmfInjector(DtmfBase):
         this_time_ms = self.msecs(packet.timestamp, packet.format.clock)
         
         if self.dtmf_name:
-            event = self.events_by_key.get(name)
+            event = self.events_by_key.get(self.dtmf_name)
             self.dtmf_name = None
             
             if event:
