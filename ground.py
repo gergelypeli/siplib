@@ -155,10 +155,12 @@ class Ground(Loggable):
         # If there was a problem, and an adjacent party died, we won't be able to
         # forward events to it, but don't make the situation worse by crashing,
         # just log an error.
+        # Actually it's not even an error, it happens after a divert, the transfer
+        # unlinks legs, and the following reject eventually falls into the empty space.
         
         if queue0:
             if not prev_leg_oid:
-                self.logger.error("No previous leg to queue events to!")
+                self.logger.info("No previous leg, dropping events: %s" % ([ a["type"] for a in queue0 ],))
             else:
                 for action in queue0:
                     self.logger.debug("Forwarding queued action to previous leg: %s" % action["type"])
@@ -166,7 +168,7 @@ class Ground(Loggable):
 
         if queue1:
             if not next_leg_oid:
-                self.logger.error("No next leg to queue events to!")
+                self.logger.info("No next leg, dropping events: %s" % ([ a["type"] for a in queue1 ],))
             else:
                 for action in queue1:
                     self.logger.debug("Forwarding queued action to next leg: %s" % action["type"])
@@ -370,8 +372,19 @@ class Ground(Loggable):
             
         if not self.parties_by_oid:
             self.logger.info("No more parties left.")
+
+
+    def session_negotiator_dst(self, leg_oid0, dst):
+        leg = self.legs_by_oid[leg_oid0]
+        forward_session = leg.session_state.party_session or leg.session_state.pending_party_session
+        backward_session = leg.session_state.ground_session
         
+        if forward_session:
+            dst = dict(type="session_negotiator", forward_session=forward_session, backward_session=backward_session, next_dst=dst)
+
+        return dst
         
+
     def make_transfer(self, type):
         self.transfer_count += 1
         tid = self.transfer_count
@@ -380,15 +393,6 @@ class Ground(Loggable):
         return tid
 
 
-    #def blind_transfer(self, tid):
-    #    self.logger.info("Blind transfer %s dialing out with offer." % (tid,))
-    #    t = self.transfers_by_id.pop(tid)
-    #    leg_oid = t["leg_oid"]
-    #    action = t["action"]
-    #    dst = dict(type="redial")
-    #    self.spawn(leg_oid, dict(action, type="dial", dst=dst))
-        
-        
     def transfer_leg(self, leg_oid0, action):
         if action["type"] != "transfer":
             raise Exception("Not a transfer action!")
@@ -423,32 +427,26 @@ class Ground(Loggable):
             hangup = dict(type="hangup", reason=reason)
             self.legs_by_oid[leg_oid0x].do(hangup)
 
-            leg = self.legs_by_oid[leg_oid0]
-            forward_session = leg.session_state.party_session or leg.session_state.pending_party_session
-            backward_session = leg.session_state.ground_session
             dst = dict(type="redial")
-            
-            if forward_session:
-                dst = dict(type="session_negotiator", forward_session=forward_session, backward_session=backward_session, next_dst=dst)
-                
+            dst = self.session_negotiator_dst(leg_oid0, dst)
+
             dial = dict(action, type="dial", dst=dst)
             self.spawn(leg_oid0, dial)
-            
-            #t["leg_oid"] = leg_oid0
-            #t["action"] = action
+        elif t["type"] == "divert":
+            self.transfers_by_id.pop(tid)
+            self.logger.info("Divert %s from leg %s." % (tid, leg_oid0))
 
-            #if action.get("session"):
-            #    self.blind_transfer(tid)
-            #else:
-            #    self.logger.info("Suspending blind transfer %s until a session is available." % tid)
-            #    self.blind_transfer_ids_by_leg_oid[leg_oid0] = tid
+            # No need to hang this one up, it will reject anyway.
+            self.unlink_legs(leg_oid0)
+
+            dst = None
+            dst = self.session_negotiator_dst(leg_oid0, dst)
             
-            #    query = dict(type="session", session=Session.make_query())
-            #    self.legs_by_oid[leg_oid0].do(query)
+            dial = dict(action, type="dial", dst=dst)
+            self.spawn(leg_oid0, dial)
+        else:
+            self.logger.error("Ignoring unknown transfer type: %s!" % t['type'])
             
-                # We'll continue when the transferred leg yields a session offer, and
-                # we realize it is not linked to anything yet, see self.forward.
-        
 
     def select_hop_slot(self, next_uri):
         return self.switch.select_hop_slot(next_uri)

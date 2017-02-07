@@ -19,7 +19,7 @@ from test import CallerEndpoint, CalleeEndpoint, UnreachableEndpoint, RingingEnd
 TEST_DIALIN = 1
 TEST_DIALOUT = 2
 TEST_PICKUP = 3
-TEST = TEST_DIALIN
+TEST = TEST_DIALOUT
 
 NUMBER_A_PREFIX = "2"
 NUMBER_A_SNOM_1 = "201"
@@ -164,6 +164,7 @@ class SwitchA(TestSwitch):
                 src_addr = ctx["src_addr"]
                 src_username = ctx["src_username"]
                 dst_username = ctx["dst_username"]
+                self.logger.info("Prerouting from %s." % (src_username,))
                 
                 if dst_username.startswith("*"):
                     # Call pickup testing
@@ -184,12 +185,13 @@ class SwitchA(TestSwitch):
             
             dst_username = ctx["dst_username"]
             dst_addr = ctx["dst_addr"]
+            self.logger.info("Routing to %s." % (dst_username,))
             
             if dst_username >= "200" and dst_username < "250":
                 # Numbers for registering clients
                 self.dial(action, "line", addr=dst_addr, username=dst_username)
                 return
-            elif dst_username >= "250" and dst_username < "260":
+            elif dst_username >= "250" and dst_username < "300":
                 # Numbers for local clients
                 if dst_username == NUMBER_A_LOCAL_CALLEE:
                     self.dial(action, "callee")

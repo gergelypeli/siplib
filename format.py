@@ -822,7 +822,7 @@ def print_structured_message(msg):
         
         if x is None:
             continue
-        elif field in ("from", "to", "refer_to", "referred_by"):
+        elif field in ("from", "to", "refer_to", "referred_by", "diversion"):
             y = x.print()
         elif field == "cseq":
             y = "%d %s" % (x, msg.method)
@@ -907,7 +907,7 @@ def parse_structured_message(slm):
 
     for field, x in slm.headers.items():
         # TODO: refactor a bit!
-        if field in ("from", "to", "refer_to", "referred_by"):
+        if field in ("from", "to", "refer_to", "referred_by", "diversion"):
             y = Nameaddr.parse(Parser(x))
         elif field in ("contact", "route"):
             y = []

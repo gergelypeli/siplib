@@ -1,6 +1,6 @@
 from weakref import WeakValueDictionary, proxy
 
-from format import Status, TargetDialog, Parser, Sip
+from format import Status, TargetDialog, Parser, Sip, Reason
 from party import Endpoint
 from sdp import Session
 from endpoint_sip_helpers import SessionHelper
@@ -127,6 +127,10 @@ class SipEndpoint(Endpoint, SessionHelper):
                 self.iuc.out_client(msg)
                 self.change_state(self.DIALING_OUT)
                 
+                return
+            elif type == "hangup":
+                # This may happen after reporting a divert.
+                self.logger.info("Hangup in DOWN state, ignoring.")
                 return
 
         elif self.state in (self.DIALING_OUT, self.DIALING_OUT_RINGING):
@@ -422,12 +426,34 @@ class SipEndpoint(Endpoint, SessionHelper):
                         return
                     
                     elif status.code >= 300:
-                        if not self.invite_is_active():
-                            # Transaction now acked, invite should be finished now
-                            self.change_state(self.DOWN)
-                            action = dict(type="reject", status=status)
+                        # Don't wait for any outgoing message, because after reporting a reject,
+                        # nothing will come.
+                        
+                        # Do this before reporting transfers, so we know we're already down.
+                        self.change_state(self.DOWN)
+
+                        if status.code in (301, 302):
+                            contact = response["contact"][0]
+                            self.logger.info("Divert to %s." % (contact,))
+                            tid = self.ground.make_transfer("divert")
+
+                            diversion = response.get("diversion")
+                            reason_string = diversion.params.get("reason") if diversion else status.reason
+                            reason = Reason("SIP", dict(cause=status.code, text=reason_string))
+
+                            src = {
+                                'type': "sip",
+                                'from': response["to"],
+                                'to': contact,
+                                'reason': reason  # TODO: use this for all transfers!
+                            }
+
+                            action = dict(type="transfer", transfer_id=tid, call_info=self.call_info, ctx={}, src=src)
                             self.forward(action)
-                            self.may_finish()
+
+                        action = dict(type="reject", status=status)
+                        self.forward(action)
+                        self.may_finish()
                         
                         return
 

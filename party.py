@@ -647,7 +647,7 @@ class SessionNegotiatorBridge(Bridge):
     
     
     def process_dial(self, action):
-        self.dial(action, **self.next_dst)
+        self.dial(action, **(self.next_dst or {}))
         
         
     def do_slot(self, li, action):
