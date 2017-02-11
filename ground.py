@@ -692,4 +692,4 @@ class Leg(GroundDweller):
                 else:
                     action.pop("session")
 
-        self.owner.do_slot(self.number, action)
+        self.owner.do_leg(self.number, action)

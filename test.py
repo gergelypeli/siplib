@@ -478,7 +478,7 @@ class TestLine(Bridge):
             Bridge.process_leg_transfer(self, li, action)
             
             
-    def do_slot(self, li, action):
+    def do_leg(self, li, action):
         type = action["type"]
         
         if type == "accept":
@@ -488,7 +488,7 @@ class TestLine(Bridge):
             self.is_confirmed = None
             self.update_busylamp_state()
         
-        return Bridge.do_slot(self, li, action)
+        return Bridge.do_leg(self, li, action)
         
         
     def call_pickup(self, dst_uri):

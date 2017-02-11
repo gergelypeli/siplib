@@ -50,8 +50,8 @@ class Party(GroundDweller):
             self.finished_slot = None
 
 
-    def do_slot(self, li, action):
-        self.logger.critical("No do_slot: %r" % self)
+    def do_leg(self, li, action):
+        self.logger.critical("No do_leg: %r" % self)
         raise NotImplementedError()
 
 
@@ -81,7 +81,7 @@ class Endpoint(Party):
         raise NotImplementedError()
         
 
-    def do_slot(self, li, action):
+    def do_leg(self, li, action):
         self.do(action)
 
 
@@ -416,7 +416,7 @@ class Bridge(Party):
         self.may_finish()
 
 
-    def do_slot(self, li, action):
+    def do_leg(self, li, action):
         self.process_leg_action(li, action)
 
 
@@ -492,7 +492,7 @@ class PlannedRouting(zap.Planned, Routing):
         self.may_finish()
         
         
-    def do_slot(self, li, action):
+    def do_leg(self, li, action):
         self.logger.debug("Planned routing processing a %s" % action["type"])
         self.send_event(li, action)
 
@@ -542,13 +542,13 @@ class RecordingBridge(Bridge):
                 self.logger.info("Hah, a two-way call.")
                 
 
-    def do_slot(self, li, action):
+    def do_leg(self, li, action):
         session = action.get("session")
         
         if session and session.is_accept():
             self.hack_media(li, session)
         
-        Bridge.do_slot(self, li, action)
+        Bridge.do_leg(self, li, action)
 
 
 class RedialBridge(Bridge):
@@ -559,7 +559,7 @@ class RedialBridge(Bridge):
         self.is_playing = False
         
         # We use leg #1 party session to play media to, because it is updated
-        # automatically for backward actions before do_slot is called.
+        # automatically for backward actions before do_leg is called.
         
 
     def identify(self, dst):
@@ -604,8 +604,8 @@ class RedialBridge(Bridge):
             self.legs[0].remove_media_leg()
             
         
-    def do_slot(self, li, action):
-        self.logger.info("Redial do_slot %d: %s" % (li, action))
+    def do_leg(self, li, action):
+        self.logger.info("Redial do_leg %d: %s" % (li, action))
         
         #media_leg = self.legs[0].get_media_leg(0)
         
@@ -638,7 +638,7 @@ class RedialBridge(Bridge):
             else:
                 self.play_ringback()  # just try, maybe we have the session right
 
-        Bridge.do_slot(self, li, action)
+        Bridge.do_leg(self, li, action)
 
 
 class SessionNegotiatorBridge(Bridge):
@@ -662,7 +662,7 @@ class SessionNegotiatorBridge(Bridge):
         self.dial(action, **(self.next_dst or {}))
         
         
-    def do_slot(self, li, action):
+    def do_leg(self, li, action):
         type = action["type"]
         session = action.pop("session", None)
 
@@ -730,4 +730,4 @@ class SessionNegotiatorBridge(Bridge):
         if type == "session" and not action.get("session"):
             return
             
-        Bridge.do_slot(self, li, action)
+        Bridge.do_leg(self, li, action)
