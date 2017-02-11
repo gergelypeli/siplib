@@ -248,16 +248,8 @@ class CallerEndpoint(TestEndpoint):
             'from': self.sip_from,
             'to': self.sip_to
         }
-        
-        offer = None
-        action = dict(
-            type="dial",
-            call_info=self.get_call_info(),
-            src=src,
-            ctx={},
-            session=offer
-        )
-        self.forward(action)
+
+        self.dial(src, session=None)
 
         while True:
             action = yield from self.wait_action()

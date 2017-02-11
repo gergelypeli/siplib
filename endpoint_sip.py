@@ -295,7 +295,7 @@ class SipEndpoint(Endpoint, SessionHelper):
 
         if not other:
             # blind
-            action = dict(type="transfer", transfer_id=tid, call_info=self.call_info, ctx={}, src=src)
+            action = dict(type="transfer", transfer_id=tid, src=src)
             self.forward(action)
         else:
             # attended
@@ -324,7 +324,6 @@ class SipEndpoint(Endpoint, SessionHelper):
 
                 request = msg
                 src = dict(request, type="sip")
-                ctx = {}
                 
                 request, session = self.iuc.in_server(request)
                 
@@ -338,16 +337,8 @@ class SipEndpoint(Endpoint, SessionHelper):
                     self.process_remote_session(session)
                 
                 self.change_state(self.DIALING_IN)
-                
-                action = dict(
-                    type="dial",
-                    call_info=self.get_call_info(),
-                    src=src,
-                    ctx=ctx,
-                    session=session
-                )
-                
-                self.forward(action)
+
+                self.dial(src, session)
                 return
 
         elif self.state in (self.DIALING_IN, self.DIALING_IN_RINGING):
@@ -434,8 +425,8 @@ class SipEndpoint(Endpoint, SessionHelper):
 
                         if status.code in (301, 302):
                             contact = response["contact"][0]
-                            self.logger.info("Divert to %s." % (contact,))
-                            tid = self.ground.make_transfer("divert")
+                            self.logger.info("Deflect to %s." % (contact,))
+                            tid = self.ground.make_transfer("deflect")
 
                             diversion = response.get("diversion")
                             reason_string = diversion.params.get("reason") if diversion else status.reason
@@ -448,7 +439,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                                 'reason': reason  # TODO: use this for all transfers!
                             }
 
-                            action = dict(type="transfer", transfer_id=tid, call_info=self.call_info, ctx={}, src=src)
+                            action = dict(type="transfer", transfer_id=tid, src=src)
                             self.forward(action)
 
                         action = dict(type="reject", status=status)

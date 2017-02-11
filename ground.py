@@ -350,9 +350,9 @@ class Ground(Loggable):
         party.set_call_info(call_info)
         identity = party.identify(params)
         
-        num = call_info["party_count"]
+        #num = call_info["party_count"]
         call_info["party_count"] += 1
-        oid = call_info["oid"].add("party", num).add(type, identity)
+        oid = call_info["oid"].add(type, identity)
         self.logger.info("Made party %s" % oid)
         
         if oid in self.parties_by_oid:
@@ -393,11 +393,17 @@ class Ground(Loggable):
         return tid
 
 
+    def spawn_transfer(self, leg_oid0, action, dst):
+        call_info = self.switch.make_call_info()
+        dial = dict(action, type="dial", dst=dst, ctx={}, call_info=call_info)
+        self.spawn(leg_oid0, dial)
+
+
     def transfer_leg(self, leg_oid0, action):
         if action["type"] != "transfer":
             raise Exception("Not a transfer action!")
             
-        tid = action["transfer_id"]
+        tid = action.pop("transfer_id")
         t = self.transfers_by_id[tid]
         
         if t["type"] == "attended":
@@ -430,20 +436,18 @@ class Ground(Loggable):
             dst = dict(type="redial")
             dst = self.session_negotiator_dst(leg_oid0, dst)
 
-            dial = dict(action, type="dial", dst=dst)
-            self.spawn(leg_oid0, dial)
-        elif t["type"] == "divert":
+            self.spawn_transfer(leg_oid0, action, dst)
+        elif t["type"] == "deflect":
             self.transfers_by_id.pop(tid)
-            self.logger.info("Divert %s from leg %s." % (tid, leg_oid0))
+            self.logger.info("Deflect %s from leg %s." % (tid, leg_oid0))
 
             # No need to hang this one up, it will reject anyway.
             self.unlink_legs(leg_oid0)
 
             dst = None
             dst = self.session_negotiator_dst(leg_oid0, dst)
-            
-            dial = dict(action, type="dial", dst=dst)
-            self.spawn(leg_oid0, dial)
+
+            self.spawn_transfer(leg_oid0, action, dst)
         else:
             self.logger.error("Ignoring unknown transfer type: %s!" % t['type'])
             

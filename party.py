@@ -88,6 +88,18 @@ class Endpoint(Party):
     def forward(self, action):
         self.leg.forward(action)
 
+
+    def dial(self, src, session=None):
+        action = dict(
+            type="dial",
+            call_info=self.get_call_info(),
+            src=src,
+            ctx={},
+            session=session
+        )
+        
+        self.forward(action)
+
         
     def process_transfer(self, action):
         self.ground.transfer_leg(self.leg.oid, action)
