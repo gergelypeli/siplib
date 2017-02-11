@@ -202,13 +202,16 @@ class DialogEventSource(EventSource):
         if side_info is not None:
             lines.append('<%s>' % side)
         
-            identity = side_info.get("identity")
+            identity = side_info.get("identity")  # nameaddr
             if identity:
                 lines.append('<identity display="%s">%s</identity>' % (identity.name, identity.uri))
         
-            target = side_info.get("target")
+            target = side_info.get("target")  # nameaddr
             if target:
-                lines.append('<target uri="%s"/>' % (target,))
+                lines.append('<target uri="%s"/>' % (target.uri,))
+
+            # TODO: target.params are treated as Contact header parameters,
+            # and can be included in <param/> sub-elements.
             
             lines.append('</%s>' % side)
             
@@ -225,10 +228,19 @@ class DialogEventSource(EventSource):
         self.version += 1
         
         for id, info in ds.items():
-            direction = "initiator" if info["is_outgoing"] else "recipient"
-            lines.append('<dialog id="%s" direction="%s">' % (id, direction))
+            is_outgoing, is_confirmed = info["is_outgoing"], info["is_confirmed"]
+            call_id, local_tag, remote_tag = (info.get(x) for x in ("call_id", "local_tag", "remote_tag"))
             
-            state = "confirmed" if info["is_confirmed"] else "early"
+            attrs = [
+                'id="%s"' % id,
+                'direction="%s"' % ("initiator" if is_outgoing else "recipient"),
+                'call-id="%s"' % call_id if call_id else None,
+                'local-tag="%s"' % local_tag if local_tag else None,
+                'remote-tag="%s"' % remote_tag if remote_tag else None
+            ]
+            lines.append('<dialog %s>' % " ".join(a for a in attrs if a))
+            
+            state = "confirmed" if is_confirmed else "early"
             lines.append('<state>%s</state>' % state)
             
             lines.extend(self.side_lines("local", info))

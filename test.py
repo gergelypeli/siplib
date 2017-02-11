@@ -312,6 +312,20 @@ class VoicemailEventSource(MessageSummaryEventSource):
 
 
 class BusylampEventSource(DialogEventSource):
+    # To make call pickup work with Snom-s, one of these options should be used,
+    # in order of increasing preference:
+    #
+    # * Report local and remote targets correctly. Add and artificially created, but safe
+    #   call-id value. The remote URI is the switch's contact address, the Snom will send
+    #   and INVITE to this URI with a Replaces header containing the call-id. The switch
+    #   must accept this INVITE, extract the Replaces, and treat this as a pickup.
+    #   This is not implemented yet, and probably never will be.
+    #
+    # * Report screwed up pickup code in the remote target with no call-id. Normal
+    #   pickup will follow.
+    #
+    # * Don't report anything, set explicit pickup prefixes on the phone.
+    
     def identify(self, params):
         self.set_entity(params["entity"])
 
@@ -325,7 +339,8 @@ class BusylampEventSource(DialogEventSource):
         if is_confirmed is None:
             self.calls_by_number.pop(call_number)
         else:
-            self.calls_by_number[call_number] = dict(is_outgoing=is_outgoing, is_confirmed=is_confirmed)
+            state = dict(is_outgoing=is_outgoing, is_confirmed=is_confirmed)
+            self.calls_by_number[call_number] = state
             
         self.logger.info("%s: %s" % (self.entity, self.calls_by_number))
         
