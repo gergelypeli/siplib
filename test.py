@@ -498,7 +498,7 @@ class TestLine(Bridge):
             
         self.logger.info("Call pickup to %s." % (dst_uri,))
         
-        tid = self.ground.make_transfer("blind")  # TODO: pickup?
+        tid = self.ground.make_transfer("pickup")
         src = {
             'type': "sip",
             'from': Nameaddr(Uri(self.ctx["src_addr"], self.ctx["src_username"]), self.ctx["src_name"]),
@@ -507,7 +507,7 @@ class TestLine(Bridge):
 
         # FIXME: A session query was necessary here because the caller was Caller,
         # and sent a query itself. This can get messy, implement properly!
-        action = dict(type="transfer", transfer_id=tid, call_info=self.call_info, ctx={}, src=src, session=Session.make_query())
+        action = dict(type="transfer", transfer_id=tid, src=src)  #, session=Session.make_query())
         self.forward_leg(0, action)
         return True
         

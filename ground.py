@@ -377,17 +377,6 @@ class Ground(Loggable):
             self.logger.info("No more parties left.")
 
 
-    def session_negotiator_dst(self, leg_oid0, dst):
-        leg = self.legs_by_oid[leg_oid0]
-        forward_session = leg.session_state.party_session or leg.session_state.pending_party_session
-        backward_session = leg.session_state.ground_session
-        
-        if forward_session:
-            dst = dict(type="session_negotiator", forward_session=forward_session, backward_session=backward_session, next_dst=dst)
-
-        return dst
-        
-
     def make_transfer(self, type):
         self.transfer_count += 1
         tid = self.transfer_count
@@ -396,7 +385,26 @@ class Ground(Loggable):
         return tid
 
 
-    def spawn_transfer(self, leg_oid0, action, dst):
+    def spawn_transfer(self, leg_oid0, action, need_hangup, need_redial):
+        leg_oid0x = self.unlink_legs(leg_oid0)
+        
+        if need_hangup:
+            reason = Reason("SIP", dict(cause="200", text="Call completed elsewhere"))
+            hangup = dict(type="hangup", reason=reason)
+            self.legs_by_oid[leg_oid0x].do(hangup)
+
+        dst = None
+        
+        if need_redial:
+            dst = dict(type="redial")
+        
+        leg = self.legs_by_oid[leg_oid0]
+        forward_session = leg.session_state.party_session or leg.session_state.pending_party_session
+        backward_session = leg.session_state.ground_session
+        
+        if forward_session:
+            dst = dict(type="session_negotiator", forward_session=forward_session, backward_session=backward_session, next_dst=dst)
+        
         call_info = self.switch.make_call_info()
         dial = dict(action, type="dial", dst=dst, ctx={}, call_info=call_info)
         self.spawn(leg_oid0, dial)
@@ -407,16 +415,16 @@ class Ground(Loggable):
             raise Exception("Not a transfer action!")
             
         tid = action.pop("transfer_id")
-        t = self.transfers_by_id[tid]
+        t = self.transfers_by_id.pop(tid)
         
         if t["type"] == "attended":
             leg_oid1 = t.get("leg_oid")
             
             if not leg_oid1:
                 t["leg_oid"] = leg_oid0
+                self.transfers_by_id[tid] = t
                 return
             
-            self.transfers_by_id.pop(tid)
             self.logger.info("Attended transfer %s between legs %s and %s." % (tid, leg_oid0, leg_oid1))
         
             leg_oid0x = self.unlink_legs(leg_oid0)
@@ -428,29 +436,14 @@ class Ground(Loggable):
             self.link_legs(leg_oid0, leg_oid1)
             # TODO: correct media, and ringing state!
         elif t["type"] == "blind":
-            self.transfers_by_id.pop(tid)
             self.logger.info("Blind transfer %s from leg %s." % (tid, leg_oid0))
-            
-            leg_oid0x = self.unlink_legs(leg_oid0)
-            reason = Reason("SIP", dict(cause="200", text="Call completed elsewhere"))
-            hangup = dict(type="hangup", reason=reason)
-            self.legs_by_oid[leg_oid0x].do(hangup)
-
-            dst = dict(type="redial")
-            dst = self.session_negotiator_dst(leg_oid0, dst)
-
-            self.spawn_transfer(leg_oid0, action, dst)
+            self.spawn_transfer(leg_oid0, action, need_hangup=True, need_redial=True)
+        elif t["type"] == "pickup":
+            self.logger.info("Pickup %s from leg %s." % (tid, leg_oid0))
+            self.spawn_transfer(leg_oid0, action, need_hangup=True, need_redial=False)
         elif t["type"] == "deflect":
-            self.transfers_by_id.pop(tid)
             self.logger.info("Deflect %s from leg %s." % (tid, leg_oid0))
-
-            # No need to hang this one up, it will reject anyway.
-            self.unlink_legs(leg_oid0)
-
-            dst = None
-            dst = self.session_negotiator_dst(leg_oid0, dst)
-
-            self.spawn_transfer(leg_oid0, action, dst)
+            self.spawn_transfer(leg_oid0, action, need_hangup=False, need_redial=False)
         else:
             self.logger.error("Ignoring unknown transfer type: %s!" % t['type'])
             

@@ -19,7 +19,7 @@ from test import CallerEndpoint, CalleeEndpoint, UnreachableEndpoint, RingingEnd
 TEST_DIALIN = 1
 TEST_DIALOUT = 2
 TEST_PICKUP = 3
-TEST = TEST_DIALOUT
+TEST = TEST_PICKUP
 
 NUMBER_A_PREFIX = "2"
 NUMBER_A_SNOM_1 = "201"
