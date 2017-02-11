@@ -211,6 +211,8 @@ class CalleeEndpoint(TestEndpoint):
         self.forward(dict(type="ring", session=answer))
         
         # Force an UPDATE
+        # FIXME: this may not reach the caller, and we may never get the answer, if the
+        # call is forked, such as calling 360!
         yield from self.sleep(1)
         offer = answer.flipped()
         self.forward(dict(type="session", session=offer))

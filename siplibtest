@@ -20,7 +20,7 @@ TEST_DIALIN = 1
 TEST_DIALOUT = 2
 TEST_PICKUPIN = 3
 TEST_PICKUPOUT = 4
-TEST = TEST_PICKUPOUT
+TEST = TEST_DIALIN
 
 NUMBER_A_PREFIX = "2"
 NUMBER_A_SNOM_1 = "201"
@@ -250,7 +250,7 @@ class SwitchA(TestSwitch):
         self.add_record_account(b_aor, B_AUTHNAME, B_HA1, LocalRecord.AUTH_BY_HOP, [ hop1, hop2 ])
         
         # Allow us to authenticate requests sent to B
-        self.account_manager.add_remote_account(B_URI.resolved(), A_AUTHNAME, A_HA1)
+        self.account_manager.add_remote_account(B_URI, A_AUTHNAME, A_HA1)
 
         # Add a voicemail box to monitor
         self.subscription_manager.add_event_source("voicemail", dict(mailbox="201"))
@@ -321,11 +321,11 @@ class SwitchB(TestSwitch):
                 if dst_username == NUMBER_B_LOCAL_CALLEE:
                     self.dial(action, "callee")
                     return
-                elif dst_username == NUMBER_B_LOCAL_RECORD:  # was: 555
+                elif dst_username == NUMBER_B_LOCAL_RECORD:
                     ctx["dst_username"] = NUMBER_B_LOCAL_FORK
                     self.dial(action, "record", id="rekord")
                     return
-                elif dst_username == NUMBER_B_LOCAL_FORK:  # was: 444
+                elif dst_username == NUMBER_B_LOCAL_FORK:
                     self.dial(action, "unreachable")
                     self.dial(action, "ringing")
                     self.dial(action, "callee")
@@ -359,7 +359,7 @@ class SwitchB(TestSwitch):
         self.add_record_account(a_aor, A_AUTHNAME, A_HA1, LocalRecord.AUTH_ALWAYS)
         
         # Allow us to authenticate ourselves at A
-        self.account_manager.add_remote_account(A_URI.resolved(), B_AUTHNAME, B_HA1)
+        self.account_manager.add_remote_account(A_URI, B_AUTHNAME, B_HA1)
 
         zap.time_slot(1).plug(self.reregister_snom, addr=SNOM_WEB, line=1)
 

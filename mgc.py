@@ -6,8 +6,9 @@ import zap
 
 
 def label_from_oid(oid):
-    return "/".join(part.split("=")[1] if "=" in part else "" for part in oid.split(","))
+    #return "/".join(part.split("=")[1] if "=" in part else "" for part in oid.split(","))
     #return oid.replace("=", ":").replace(",", ";")
+    return oid.replace("switch=", "").replace("call=", "").replace("ground,context=", "").replace("leg=", "").replace("leg", "").replace(",channel=", ":").replace("=", ":").replace(",", "/")
 
 
 class MediaThing(Loggable):
