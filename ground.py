@@ -5,10 +5,6 @@ from log import Loggable
 from format import Reason
 
 
-# FIXME: currently we can't tell how many channels do we have to deal with
-GUESSED_CHANNEL_COUNT = 1
-
-
 class Ground(Loggable):
     def __init__(self, switch, mgc):
         Loggable.__init__(self)
@@ -59,6 +55,13 @@ class Ground(Loggable):
             self.leg_oids_by_anchor.pop(anchored_leg_oid)
         
         
+    def common_channel_count(self, leg_oid0, leg_oid1):
+        scc = self.legs_by_oid[leg_oid0].get_media_leg_count()
+        tcc = self.legs_by_oid[leg_oid1].get_media_leg_count()
+        
+        return max(scc, tcc)
+    
+        
     def link_legs(self, leg_oid0, leg_oid1):
         if leg_oid0 not in self.legs_by_oid:
             raise Exception("First leg does not exist: %s!" % leg_oid0)
@@ -77,7 +80,7 @@ class Ground(Loggable):
         self.targets_by_source[leg_oid1] = leg_oid0
         
         # Create new contexts if necessary
-        for ci in range(GUESSED_CHANNEL_COUNT):
+        for ci in range(self.common_channel_count(leg_oid0, leg_oid1)):
             smleg = self.find_facing_media_leg(leg_oid1, ci)
             tmleg = self.find_facing_media_leg(leg_oid0, ci)
             
@@ -95,7 +98,7 @@ class Ground(Loggable):
             raise Exception("Leg not linked: %s!" % leg_oid0)
             
         # Remove unlucky contexts
-        for ci in range(GUESSED_CHANNEL_COUNT):
+        for ci in range(self.common_channel_count(leg_oid0, leg_oid1)):
             smleg = self.find_facing_media_leg(leg_oid1, ci)
             tmleg = self.find_facing_media_leg(leg_oid0, ci)
             
@@ -118,7 +121,7 @@ class Ground(Loggable):
         # Do this explicitly, because breaking it down to two unlinks and a link
         # may unnecessarily remove and recreate contexts.
         
-        for ci in range(GUESSED_CHANNEL_COUNT):
+        for ci in range(self.common_channel_count(leg_oid0, leg_oid1)):
             # Source, Target, Previous, Next
             smleg = self.legs_by_oid[leg_oid0].get_media_leg(ci)
             tmleg = self.legs_by_oid[leg_oid1].get_media_leg(ci)
