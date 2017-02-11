@@ -56,8 +56,9 @@ class Ground(Loggable):
         
         
     def common_channel_count(self, leg_oid0, leg_oid1):
-        scc = self.legs_by_oid[leg_oid0].get_media_leg_count()
-        tcc = self.legs_by_oid[leg_oid1].get_media_leg_count()
+        scc = self.legs_by_oid[leg_oid0].get_channel_count()
+        tcc = self.legs_by_oid[leg_oid1].get_channel_count()
+        #self.logger.debug("CCC %s %s: %s, %s" % (leg_oid0, leg_oid1, scc, tcc))
         
         return max(scc, tcc)
     
@@ -390,7 +391,7 @@ class Ground(Loggable):
         
         if need_hangup:
             reason = Reason("SIP", dict(cause="200", text="Call completed elsewhere"))
-            hangup = dict(type="hangup", reason=reason)
+            hangup = dict(type="hangup", reason=[ reason ])
             self.legs_by_oid[leg_oid0x].do(hangup)
 
         dst = None
@@ -622,6 +623,12 @@ class Leg(GroundDweller):
         else:
             return True
     
+    
+    def get_channel_count(self):
+        gs = self.session_state.ground_session
+        
+        return len(gs["channels"]) if gs else 0
+        
 
     def forward(self, action):
         session = action.get("session")

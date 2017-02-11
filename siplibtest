@@ -18,8 +18,9 @@ from test import CallerEndpoint, CalleeEndpoint, UnreachableEndpoint, RingingEnd
 
 TEST_DIALIN = 1
 TEST_DIALOUT = 2
-TEST_PICKUP = 3
-TEST = TEST_PICKUP
+TEST_PICKUPIN = 3
+TEST_PICKUPOUT = 4
+TEST = TEST_PICKUPOUT
 
 NUMBER_A_PREFIX = "2"
 NUMBER_A_SNOM_1 = "201"
@@ -258,9 +259,16 @@ class SwitchA(TestSwitch):
         self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_SNOM_1))
         self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_LOCAL_RINGING_LINE))
         
-        if TEST == TEST_PICKUP:
-            zap.time_slot(3).plug(self.test_pickuping)
-
+        if TEST == TEST_PICKUPIN:
+            zap.time_slot(3).plug(self.test_caller,
+                dst_username=NUMBER_A_LOCAL_RINGING_LINE, src_username=NUMBER_DDI_CALLER, src_name="Caller")
+        
+        if TEST == TEST_PICKUPOUT:
+            zap.time_slot(3).plug(self.test_caller,
+                dst_username=NUMBER_A_SNOM_1, src_username=NUMBER_DDI_CALLER, src_name="Caller")
+            zap.time_slot(6).plug(self.test_caller,
+                dst_username="*" + NUMBER_A_SNOM_1, src_username=NUMBER_DDI_CALLER, src_name="Pickuper")
+        
 
     def make_party(self, type):
         if type == "routing":
@@ -269,12 +277,12 @@ class SwitchA(TestSwitch):
             return TestSwitch.make_party(self, type)
 
 
-    def test_pickuping(self):
-        self.logger.info("Pickup begins.")
+    def test_caller(self, dst_username, src_username, src_name):
+        self.logger.info("Calling %s from %s as %s." % (dst_username, src_username, src_name))
 
         dst = {
-            'from': Nameaddr(Uri(Addr(A_DOMAIN), NUMBER_DDI_CALLER), "Caller"),
-            'to': Nameaddr(Uri(Addr(A_DOMAIN), NUMBER_A_LOCAL_RINGING_LINE))
+            'from': Nameaddr(Uri(Addr(A_DOMAIN), src_username), src_name),
+            'to': Nameaddr(Uri(Addr(A_DOMAIN), dst_username))
         }
         
         self.start_call("caller", dst)

@@ -141,6 +141,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                 # would be too complex for now.
                 
                 msg = Sip.request(method="CANCEL")
+                msg["reason"] = action.get("reason")
                 self.iuc.out_client(msg)
                 self.change_state(self.DISCONNECTING_OUT)
                 return
@@ -220,9 +221,8 @@ class SipEndpoint(Endpoint, SessionHelper):
                 return
 
             elif type == "hangup":
-                reason = action.get("reason")
                 msg = Sip.request(method="BYE")
-                msg["reason"] = [reason] if reason else None
+                msg["reason"] = action.get("reason")
                 self.send(msg)
                 self.change_state(self.DISCONNECTING_OUT)
                 return
@@ -436,7 +436,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                                 'type': "sip",
                                 'from': response["to"],
                                 'to': contact,
-                                'reason': reason  # TODO: use this for all transfers!
+                                'reason': [ reason ]  # TODO: use this for all transfers!
                             }
 
                             action = dict(type="transfer", transfer_id=tid, src=src)

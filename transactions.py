@@ -512,14 +512,17 @@ class TransactionManager(Loggable):
                 raise Error("Related request is not given for CANCEL!")
             
             request_params = msg.related
-            branch, method = self.identify(request_params)
+            invite_branch, invite_method = self.identify(request_params)
 
-            tr = PlainClientTransaction(proxy(self), branch, method)
+            tr = PlainClientTransaction(proxy(self), invite_branch, method)
 
-            # TODO: more sophisticated CANCEL generation
             # TODO: shouldn't send CANCEL before provisional response
-            msg = Sip.request(method="CANCEL")
+            #msg = Sip.request(method="CANCEL")
             msg.uri = request_params.uri
+            msg.hop = request_params.hop
+            
+            #msg.update(request_params)  # such as the Reason header
+            
             msg["from"] = request_params["from"]
             msg["to"] = request_params["to"]
             msg["via"] = None  # ClientTransaction is a bit sensitive for this
@@ -527,6 +530,7 @@ class TransactionManager(Loggable):
             msg["cseq"] = request_params["cseq"]
             msg["max_forwards"] = request_params["max_forwards"]
             msg["content_type"] = None
+            
             msg.body = None
         elif method == "INVITE":
             tr = InviteClientTransaction(proxy(self), self.generate_branch(), method)

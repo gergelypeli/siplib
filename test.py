@@ -241,7 +241,7 @@ class CallerEndpoint(TestEndpoint):
         #address = yield from resolver.wait_resolve("index.hu")
         #self.logger.debug("Resolved index.hu asynchronously to: %s" % address)
         
-        yield from self.wait_input("Press any key to dial out!")
+        #yield from self.wait_input("Press any key to dial out!")
         
         src = {
             'type': "sip",  # FIXME: we lie here for mkctx

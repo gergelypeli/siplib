@@ -160,6 +160,7 @@ class InviteUpdateComplex(Loggable):
             return
         elif request.method == "CANCEL":
             self.logger.info("Sending CANCEL request.")
+            request.related = self.unresponded_invite
             self.unresponded_cancel = request
             self.send_message(request)
             return

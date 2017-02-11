@@ -633,7 +633,7 @@ class RedialBridge(Bridge):
                 reason = Reason("SIP", dict(cause=status.code, text=status.reason))
 
                 self.logger.info("Forwarding reject as hangup with reason %s." % (reason,))
-                action = dict(type="hangup", reason=reason)
+                action = dict(type="hangup", reason=[ reason ])
                 
             else:
                 self.play_ringback()  # just try, maybe we have the session right
