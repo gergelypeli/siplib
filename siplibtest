@@ -147,9 +147,12 @@ def mkctx(src):
             src_addr=src["from"].uri.addr,
             src_username=src["from"].uri.username,
             src_name=src["from"].name,
+            
             dst_addr=src["to"].uri.addr,
             dst_username=src["to"].uri.username,
-            dst_name=src["to"].name
+            dst_name=src["to"].name,
+            
+            alert_info=src.get("alert_info")
         )
     else:
         raise Exception("Unknown src type: %s!" % src["type"])
@@ -382,7 +385,7 @@ class SwitchB(TestSwitch):
 
         self.registrar.add_remote_record(
             Uri(Addr(A_DOMAIN), NUMBER_A_REMOTE_CALLEE),
-            registrar_uri=A_URI.resolved()
+            registrar_uri=A_URI#.resolved()
         )
         
         
