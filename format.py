@@ -320,6 +320,7 @@ Status.NOT_FOUND = Status(404, "Not Found")
 Status.REQUEST_TIMEOUT = Status(408, "Request Timeout")
 Status.EXTENSION_REQUIRED = Status(421, "Extension Required")
 Status.INTERVAL_TOO_BRIEF = Status(423, "Interval Too Brief")
+Status.BAD_INFO_PACKAGE = Status(469, "Bad Info Package")
 Status.TEMPORARILY_UNAVAILABLE = Status(480, "Temporarily Unavailable")
 Status.CALL_DOES_NOT_EXIST = Status(481, "Call Does Not Exist")  # twins
 Status.TRANSACTION_DOES_NOT_EXIST = Status(481, "Transaction Does Not Exist")  # twins

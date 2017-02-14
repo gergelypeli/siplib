@@ -485,13 +485,30 @@ class TestLine(Bridge):
             self.dial(action, **dst)
             
             
+    def is_device_li(self, li):
+        return (li == 0) if self.is_outgoing else (li > 0)
+        
+        
+    def other_li(self, li):
+        return 0 if li > 0 else max(self.legs.keys())
+        
+            
     def process_leg_transfer(self, li, action):
-        if not self.is_outgoing and li > 0:
-            self.forward_leg(0, action)
-        elif self.is_outgoing and li == 0:
-            self.forward_leg(max(self.legs.keys()), action)
+        if self.is_device_li(li):
+            self.forward_leg(self.other_li(li), action)
         else:
             Bridge.process_leg_transfer(self, li, action)
+            
+            
+    def control(self, control):
+        type = control["type"]
+        
+        if type == "record":
+            on = control["on"]
+            
+            self.logger.info("Will turn recording %s someday..." % ("on" if on else "off"))  # TODO
+        else:
+            self.logger.error("Unknown line control type: %s!" % type)
             
             
     def do_leg(self, li, action):
@@ -503,6 +520,14 @@ class TestLine(Bridge):
         elif type in ("reject", "hangup"):
             self.is_confirmed = None
             self.update_busylamp_state()
+        elif type == "control":
+            if action["target"] == "line":
+                if self.is_device_li(li):
+                    self.control(action["control"])
+                else:
+                    self.logger.warning("Ignoring line control from outside!")
+                
+                return
         
         return Bridge.do_leg(self, li, action)
         

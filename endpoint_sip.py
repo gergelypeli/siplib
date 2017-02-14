@@ -230,6 +230,10 @@ class SipEndpoint(Endpoint, SessionHelper):
             elif type == "transfer":
                 self.process_transfer(action)
                 return
+                
+            elif type == "control":
+                self.logger.warning("Ignoring control: %s." % action)
+                return
             
         raise Exception("Weird thing to do %s in state %s!" % (type, self.state))
 
@@ -482,6 +486,27 @@ class SipEndpoint(Endpoint, SessionHelper):
                 if msg.is_response:
                     self.logger.warning("Ignoring NOTIFY response!")
                     return
+
+            elif method == "INFO":
+                if msg.is_response:
+                    self.logger.warning("Ignoring INFO response!")
+                    return
+                    
+                request = msg
+                record = request.get("record")
+                
+                if record in ("on", "off"):
+                    self.logger.info("Controlling recording %s." % record)
+                    self.send(Sip.response(status=Status.OK, related=request))
+                    
+                    control = dict(type="record", on=(record == "on"))
+                    action = dict(type="control", target="line", control=control)
+                    self.forward(action)
+                    return
+                
+                self.logger.warning("Rejecting unknown INFO request!")
+                self.send(Sip.response(status=Status.BAD_INFO_PACKAGE, related=request))
+                return
 
             elif method == "BYE":
                 if msg.is_response:
