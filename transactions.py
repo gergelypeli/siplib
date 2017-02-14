@@ -3,7 +3,7 @@ import datetime
 from weakref import proxy
 from log import Loggable
 
-from format import Via, Status, make_simple_response, make_non_2xx_ack, make_cease_response, is_cease_response, Sip
+from format import Via, Status, make_simple_response, make_non_2xx_ack, make_cease_response, is_cease_response
 import zap
 
 # tr id: (branch, method)

@@ -25,11 +25,7 @@ class InviteUpdateComplex(Loggable):
         self.unresponded_update = None
         self.unresponded_cancel = None
         
-        self.is_client = None
-        self.is_queried = None
-        self.is_established = None
-        self.invite_response_sdp = None
-        self.rpr_last_rseq = None
+        self.reset(False)
 
 
     def send_message(self, msg):
@@ -62,16 +58,6 @@ class InviteUpdateComplex(Loggable):
             self.unresponded_cancel
         )
 
-    
-    def reset(self, is_client, is_queried):
-        self.logger.info("Reseting state: %s/%s." % ("client" if is_client else "server", "queried" if is_queried else "offered"))
-        
-        self.is_client = is_client
-        self.is_queried = is_queried
-        self.is_established = False
-        self.invite_response_sdp = None
-        self.rpr_last_rseq = 0
-        
 
     def retry(self):
         # Events that can trigger further processing:
@@ -104,12 +90,24 @@ class InviteUpdateComplex(Loggable):
                 self.out_session(session)
 
 
+    def reset(self, ief):
+        self.is_ever_finished = ief
+        
+        self.is_client = None
+        self.is_queried = None
+        
+        self.is_established = False
+        self.invite_response_sdp = None
+        self.rpr_last_rseq = 0
+
+
     def may_finish(self):
         if not self.is_busy():
             if self.outgoing_response_queue:
                 raise Exception("Still have queued responses, bad reset!")
-                
-            self.is_ever_finished = True
+            
+            self.logger.info("Finished.")
+            self.reset(True)
             self.retry()
         else:
             what = [
@@ -122,7 +120,17 @@ class InviteUpdateComplex(Loggable):
             ]
             self.logger.info("Can't finish yet, has %s." % ", ".join(w for w in what if w))
 
-            
+    
+    def start(self, is_client, is_queried):
+        if self.is_busy():
+            raise Exception("Can't start while busy!")
+
+        self.logger.info("Starting as %s with session %s." % ("client" if is_client else "server", "query" if is_queried else "offer"))
+        
+        self.is_client = is_client
+        self.is_queried = is_queried
+
+
     # Client
     # Outgoing INVITE, CANCEL are never queued.
     # Outgoing sdp may be queued, and retried after an incoming message.
@@ -155,7 +163,7 @@ class InviteUpdateComplex(Loggable):
             
             self.send_message(request)
             
-            self.reset(is_client=True, is_queried=session.is_query())
+            self.start(is_client=True, is_queried=session.is_query())
             self.unresponded_invite = request
             return
         elif request.method == "CANCEL":
@@ -413,7 +421,7 @@ class InviteUpdateComplex(Loggable):
             session = self.parse_sdp(sdp, False) if sdp else Session.make_query()
             self.logger.info("Got INVITE request with %s." % ("offer" if sdp else "query"))
             
-            self.reset(is_client=False, is_queried=not sdp)
+            self.start(is_client=False, is_queried=not sdp)
             self.unresponded_invite = request
             return request, session
         elif request.method == "CANCEL":

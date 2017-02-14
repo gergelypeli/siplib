@@ -74,8 +74,8 @@ class Switch(Loggable):
         return self.transport_manager.select_hop_slot(next_uri)
         
 
-    def get_remote_account(self, uri):
-        return self.account_manager.get_remote_account(uri)
+    def provide_auth(self, response):
+        return self.account_manager.provide_auth(response)
         
         
     def send_message(self, msg):

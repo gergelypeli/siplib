@@ -20,7 +20,7 @@ TEST_DIALIN = 1
 TEST_DIALOUT = 2
 TEST_PICKUPIN = 3
 TEST_PICKUPOUT = 4
-TEST = TEST_DIALIN
+TEST = TEST_DIALOUT
 
 NUMBER_A_PREFIX = "2"
 NUMBER_A_SNOM_1 = "201"
@@ -33,6 +33,7 @@ NUMBER_A_LOCAL_RINGING = "253"
 NUMBER_A_LOCAL_BLIND_TRANSFERRING = "254"
 NUMBER_A_SERVICE_VOICEMAIL = "260"
 NUMBER_A_LOCAL_RINGING_LINE = "261"  # will be pickup
+NUMBER_A_LOCAL_CALLEE_LINE = "262"  # will be orbit
 
 NUMBER_B_PREFIX = "3"
 NUMBER_B_LOCAL_CALLEE = "350"
@@ -49,12 +50,14 @@ MGW_ADDR = Addr(MGW_HOST, 20000)
 A_ADDR = Addr(HOST, 5060)
 A_URI = Uri(A_ADDR)
 A_DOMAIN = "a.switch"
+A_REALM = A_DOMAIN
 A_AUTHNAME = "A_AUTHNAME"
 A_HA1 = "A_HA1"
 
 B_ADDR = Addr(HOST, 5062)
 B_URI = Uri(B_ADDR)
 B_DOMAIN = "b.switch"
+B_REALM = B_DOMAIN
 B_AUTHNAME = "B_AUTHNAME"
 B_HA1 = "B_HA1"
 
@@ -89,7 +92,7 @@ class TestSwitch(Switch):
         
 
     def start(self, realm, local_addr, mgw_addr, media_addrs):
-        self.realm = realm
+        self.account_manager.set_local_realm(realm)
         
         local_addr.assert_resolved()
         mgw_addr.assert_resolved()
@@ -129,7 +132,7 @@ class TestSwitch(Switch):
 
     def add_record_account(self, uri, authname, ha1, policy, hops=[]):
         if not self.account_manager.get_local_account(authname):
-            self.account_manager.add_local_account(authname, ha1, self.realm)
+            self.account_manager.add_local_account(authname, ha1)
             
         record = self.registrar.add_local_record(uri, authname, policy)
         
@@ -218,6 +221,11 @@ class SwitchA(TestSwitch):
                     dial = dict(action, ctx=dict(ctx, dst_username=NUMBER_A_LOCAL_RINGING))
                     self.dial(dial, "line", addr=dst_addr, username=dst_username)
                     return
+                elif dst_username == NUMBER_A_LOCAL_CALLEE_LINE:
+                    dial = dict(action, ctx=dict(ctx, dst_username=NUMBER_A_LOCAL_CALLEE))
+                    self.dial(dial, "line", addr=dst_addr, username=dst_username)
+                    return
+                    
             elif dst_username >= "300" and dst_username < "400":
                 # Numbers for switch B
                 dst = {
@@ -253,14 +261,15 @@ class SwitchA(TestSwitch):
         self.add_record_account(b_aor, B_AUTHNAME, B_HA1, LocalRecord.AUTH_BY_HOP, [ hop1, hop2 ])
         
         # Allow us to authenticate requests sent to B
-        self.account_manager.add_remote_account(B_URI, A_AUTHNAME, A_HA1)
+        self.account_manager.add_remote_account(B_REALM, A_AUTHNAME, A_HA1)
 
         # Add a voicemail box to monitor
         self.subscription_manager.add_event_source("voicemail", dict(mailbox="201"))
         
-        # Add a line state
+        # Add line states
         self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_SNOM_1))
         self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_LOCAL_RINGING_LINE))
+        self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_LOCAL_CALLEE_LINE))
         
         if TEST == TEST_PICKUPIN:
             zap.time_slot(3).plug(self.test_caller,
@@ -362,7 +371,7 @@ class SwitchB(TestSwitch):
         self.add_record_account(a_aor, A_AUTHNAME, A_HA1, LocalRecord.AUTH_ALWAYS)
         
         # Allow us to authenticate ourselves at A
-        self.account_manager.add_remote_account(A_URI, B_AUTHNAME, B_HA1)
+        self.account_manager.add_remote_account(A_REALM, B_AUTHNAME, B_HA1)
 
         zap.time_slot(1).plug(self.reregister_snom, addr=SNOM_WEB, line=1)
 
@@ -416,13 +425,13 @@ def main():
     switch_a.set_oid(Oid().add("switch", "a"))
     switch_a.set_name("switch-a")
     media_addrs = { Addr(MEDIA_HOST, port).resolved() for port in range(30000, 30020, 2) }
-    switch_a.start(A_DOMAIN, A_ADDR.resolved(), MGW_ADDR.resolved(), media_addrs)
+    switch_a.start(A_REALM, A_ADDR.resolved(), MGW_ADDR.resolved(), media_addrs)
     
     switch_b = SwitchB()
     switch_b.set_oid(Oid().add("switch", "b"))
     switch_b.set_name("switch-b")
     media_addrs = { Addr(MEDIA_HOST, port).resolved() for port in range(40000, 40020, 2) }
-    switch_b.start(B_DOMAIN, B_ADDR.resolved(), MGW_ADDR.resolved(), media_addrs)
+    switch_b.start(B_REALM, B_ADDR.resolved(), MGW_ADDR.resolved(), media_addrs)
 
     try:
         zap.loop()

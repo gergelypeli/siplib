@@ -527,6 +527,11 @@ class SipEndpoint(Endpoint, SessionHelper):
                 if msg.is_response:
                     self.logger.debug("Got late NOTIFY response: %s" % (msg.status,))
                     return
+                    
+            elif method == "ACK":
+                # This may happen if we got a REFER before the ACK, Snom does that
+                self.logger.debug("Got late ACK request.")
+                return
                 
         if msg.is_response:
             self.logger.warning("Weird %s response in state %s!" % (method, self.state))

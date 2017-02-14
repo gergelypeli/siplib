@@ -94,9 +94,10 @@ class TestEndpoint(PlannedEndpoint):
         ml = self.leg.get_media_leg(0)
         
         if ml:
+            self.logger.info("Idle, fading in media.")
             ml.play(self.media_filename, self.media_format, volume=0.1, fade=3)
         else:
-            self.logger.error("No media leg was created!")
+            self.logger.info("Idle, no media to fade in.")
 
         while True:
             action = yield from self.wait_action()
@@ -119,9 +120,14 @@ class TestEndpoint(PlannedEndpoint):
             else:
                 self.logger.critical("Don't know what to do with %s, continuing..." % type)
         
-        if self.leg.media_legs:
-            self.leg.media_legs[0].play(volume=0, fade=3)
+        ml = self.leg.get_media_leg(0)
+        
+        if ml:
+            self.logger.info("Fading out media.")
+            ml.play(volume=0, fade=3)
             yield from self.sleep(3)
+        else:
+            self.logger.info("No media to fade out.")
             
         if type != "hangup":
             self.forward(dict(type="hangup"))
@@ -153,12 +159,15 @@ class RingingEndpoint(TestEndpoint):
     def plan(self):
         self.logger.debug("Ringing endpoint created.")
         
-        yield from self.wait_this_action("dial")
-        self.logger.debug("Got dial, now ringing forever.")
+        action = yield from self.wait_this_action("dial")
+        offer = action.get("session")
+        self.logger.debug("Got dial with offer:\n%s" % repr(offer))
 
-        self.forward(dict(type="ring"))
+        answer = self.update_session(offer)
+        self.forward(dict(type="ring", session=answer))
+        self.logger.debug("Now ringing forever.")
 
-        yield from self.wait_this_action("hangup")
+        yield from self.idle()
         self.logger.debug("And now the caller hung up.")
 
 
@@ -204,25 +213,30 @@ class CalleeEndpoint(TestEndpoint):
         
         action = yield from self.wait_this_action("dial")
         offer = action.get("session")
-        self.logger.debug("Got offer:\n%s" % repr(offer))
+        self.logger.debug("Got dial with offer:\n%s" % repr(offer))
         
         yield from self.sleep(1)
         answer = self.update_session(offer)
         self.forward(dict(type="ring", session=answer))
+        self.logger.debug("Sent ringing.")
         
         # Force an UPDATE
         # FIXME: this may not reach the caller, and we may never get the answer, if the
         # call is forked, such as calling 360!
-        yield from self.sleep(1)
-        offer = answer.flipped()
-        self.forward(dict(type="session", session=offer))
+        # Also it works quite badly if a call was transferred here, and a session negotiator
+        # is in action, sending here an offer.
+        # So only use this for basic calls.
+        #yield from self.sleep(1)
+        #offer = answer.flipped()
+        #self.forward(dict(type="session", session=offer))
 
-        action = yield from self.wait_this_action("session")
-        answer = action.get("session")
-        self.logger.debug("Got answer:\n%s" % repr(answer))
+        #action = yield from self.wait_this_action("session")
+        #answer = action.get("session")
+        #self.logger.debug("Got answer:\n%s" % repr(answer))
 
         yield from self.sleep(1)
         self.forward(dict(type="accept"))
+        self.logger.debug("Sent accept.")
 
         yield from self.idle()
         

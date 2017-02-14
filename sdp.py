@@ -488,6 +488,11 @@ class Session(dict):
             raise Exception("Invalid Session is_answer!")
 
 
+    def copy(self):
+        # Without overloading it would return a plain dict
+        return deepcopy(self)
+        
+
     def flipped(self):
         if self.is_query():
             raise Exception("A session query can't be flipped!")

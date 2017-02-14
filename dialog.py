@@ -283,8 +283,7 @@ class Dialog(Loggable):
         elif status.code == 401:
             # Let's try authentication! TODO: 407, too!
             request = response.related
-            account = self.dialog_manager.get_remote_account(request.uri)
-            auth = account.provide_auth(response) if account else None
+            auth = self.dialog_manager.provide_auth(response)
                 
             if auth:
                 # Retrying this request is a bit tricky, because our owner must
@@ -338,8 +337,8 @@ class DialogManager(Loggable):
         self.dialogs_by_local_tag = WeakValueDictionary()
 
         
-    def get_remote_account(self, uri):
-        return self.switch.get_remote_account(uri)
+    def provide_auth(self, response):
+        return self.switch.provide_auth(response)
         
         
     def transmit(self, msg):

@@ -41,7 +41,7 @@ class Authority(Loggable):
             raise Exception("Don't know this quality of protection: %s!" % qop)
         
 
-    def check_digest(self, method, auth, realm, ha1):
+    def check_digest(self, method, auth, ha1):
         if not auth:
             self.logger.debug("No Authorization header!")
             return False
@@ -50,9 +50,9 @@ class Authority(Loggable):
             self.logger.debug("No ha1!")
             return False
 
-        if auth.realm != realm:
-            self.logger.debug("Wrong realm!")
-            return False
+        #if auth.realm != realm:
+        #    self.logger.debug("Wrong realm!")
+        #    return False
         
         # FIXME: what shall we require? The RURI can be anything due to forwarding.
         # And can be different than the To header, too.
@@ -95,30 +95,35 @@ class Account(Authority):
 
 
 class LocalAccount(Account):
-    def __init__(self, manager, authname, ha1, realm):
+    def __init__(self, manager, authname, ha1):
         Authority.__init__(self, authname, ha1)
-        
-        self.realm = realm
-        
+
+        self.manager = manager
+
 
     def check_auth(self, request):
         method = request.method
         auth = request.get("authorization")
+        realm = self.manager.get_local_realm()
         
         if not auth:
             self.logger.debug("No credentials in request.")
             return False
 
+        if auth.realm != realm:
+            self.logger.warning("Wrong realm in request: %s!" % auth.realm)
+            return False
+
         if auth.nonce not in self.nonces:
-            self.logger.debug("Stale nonce in credentials, client should retry.")
+            self.logger.warning("Stale nonce in credentials, client should retry.")
             return False
         
         if auth.username != self.authname:
-            self.logger.debug("Wrong authname in request '%s'!" % (auth.username,))
+            self.logger.warning("Wrong authname in request: %s!" % (auth.username,))
             return False
         
-        if not self.check_digest(method, auth, self.realm, self.ha1):
-            self.logger.debug("Incorrect digest in request!")
+        if not self.check_digest(method, auth, self.ha1):
+            self.logger.warning("Incorrect digest in request!")
             return False
 
         self.logger.debug("Request authorized for '%s'." % (self.authname,))
@@ -130,8 +135,9 @@ class LocalAccount(Account):
         stale = auth.nonce not in self.nonce if auth else False  # client should retry
         nonce = self.generate_nonce()
         self.nonces.add(nonce)  # TODO: must clean these up
+        realm = self.manager.get_local_realm()
         
-        www_auth = WwwAuth(self.realm, nonce, stale=stale, qop=[ "auth" ])
+        www_auth = WwwAuth(realm, nonce, stale=stale, qop=[ "auth" ])
         return { 'www_authenticate': www_auth }
 
 
@@ -179,16 +185,25 @@ class AccountManager(Loggable):
     def __init__(self):
         Loggable.__init__(self)
 
+        self.local_realm = None
         self.local_accounts_by_authname = {}
-        self.remote_accounts_by_uri = {}
+        self.remote_accounts_by_realm = {}
 
 
-    def add_local_account(self, authname, ha1, realm):
+    def set_local_realm(self, realm):
+        self.local_realm = realm
+        
+        
+    def get_local_realm(self):
+        return self.local_realm
+        
+
+    def add_local_account(self, authname, ha1):
         if authname in self.local_accounts_by_authname:
             raise Exception("Local account already exists: %s!" % (authname,))
             
-        self.logger.info("Adding local account %s@%s." % (authname, realm))
-        account = LocalAccount(proxy(self), authname, ha1, realm)
+        self.logger.info("Adding local account %s." % (authname,))
+        account = LocalAccount(proxy(self), authname, ha1)
         account.set_oid(self.oid.add("local", authname))
         self.local_accounts_by_authname[authname] = account
         
@@ -199,26 +214,28 @@ class AccountManager(Loggable):
         return self.local_accounts_by_authname.get(authname)
         
 
-    def add_remote_account(self, uri, authname, ha1):
-        #uri.assert_resolved()
-        
-        if uri in self.remote_accounts_by_uri:
-            raise Exception("Remote account for %s already exists: %s!" % (uri, authname))
+    def add_remote_account(self, realm, authname, ha1):
+        if realm in self.remote_accounts_by_realm:
+            raise Exception("Remote account for %s already exists: %s!" % (realm, authname))
             
-        self.logger.info("Adding remote account for %s: %s" % (uri, authname,))
+        self.logger.info("Adding remote account for %s: %s" % (realm, authname,))
         account = RemoteAccount(proxy(self), authname, ha1)
-        account.set_oid(self.oid.add("remote", str(uri)))
-        self.remote_accounts_by_uri[uri] = account
+        account.set_oid(self.oid.add("remote", realm))
+        self.remote_accounts_by_realm[realm] = account
         
         return proxy(account)
 
 
-    def get_remote_account(self, request_uri):
-        #request_uri.assert_resolved()
+    def provide_auth(self, response):
+        www_auth = response.get("www_authenticate")
         
-        for uri in self.remote_accounts_by_uri:
-            if uri.contains(request_uri):
-                return self.remote_accounts_by_uri[uri]
-
-        self.logger.warning("Couldn't find a remote account for %s!" % (request_uri,))
+        if not www_auth:
+            raise Exception("No WWW-Authenticate to provide auth for!")
+            
+        account = self.remote_accounts_by_realm.get(www_auth.realm)
+        
+        if account:
+            return account.provide_auth(response)
+            
+        self.logger.warning("Couldn't find a remote account for %s!" % (www_auth.realm,))
         return None

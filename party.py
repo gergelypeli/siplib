@@ -226,7 +226,7 @@ class Bridge(Party):
             
         self.is_accepted = True
         self.is_ringing = False  # make reringing possible
-        self.logger.warning("Accepting.")
+        self.logger.info("Accepting incoming leg.")
         self.forward_leg(0, action)
             
 
@@ -234,7 +234,7 @@ class Bridge(Party):
         if self.is_accepted:
             raise Exception("Incoming leg already accepted!")
             
-        self.logger.warning("Rejecting with status %s" % (status,))
+        self.logger.warning("Rejecting incoming leg with status %s" % (status,))
         self.forward_leg(0, dict(type="reject", status=status))
         self.remove_leg(0)
             
@@ -243,7 +243,7 @@ class Bridge(Party):
         if self.is_anchored:
             raise Exception("An outgoing leg already anchored!")
             
-        self.logger.debug("Anchored to outgoing leg %d." % li)
+        self.logger.debug("Anchoring to outgoing leg %d." % li)
         self.hangup_outgoing_legs(except_li=li)
         
         self.ground.legs_anchored(self.legs[0].oid, self.legs[li].oid)
@@ -646,10 +646,17 @@ class SessionNegotiatorBridge(Bridge):
     
     
     def identify(self, dst):
-        self.forward_session = dst["forward_session"]
+        self.forward_session = dst["forward_session"].copy()
         self.backward_session = dst.get("backward_session")
         self.next_dst = dst["next_dst"]
         self.is_backward = None
+        
+        # We must give a chance to parties put on hold to come off the hold.
+        # Otherwise if the transferred party was put on hold before the transfer,
+        # it will be in recvonly forever.
+        for c in self.forward_session["channels"]:
+            c["send"] = True
+            c["recv"] = True
         
         return None
         

@@ -204,8 +204,7 @@ class RemoteRecord(Loggable):
         if status.code == 401:
             # Let's try authentication! TODO: 407, too!
             request = response.related
-            account = self.registrar.get_remote_account(request.uri)
-            auth = account.provide_auth(response) if account else None
+            auth = self.registrar.provide_auth(response)
                 
             if auth:
                 request.update(auth)
@@ -324,8 +323,8 @@ class Registrar(Loggable):
         return record.authenticate_request(hop)
 
         
-    def get_remote_account(self, uri):
-        return self.switch.get_remote_account(uri)
+    def provide_auth(self, response):
+        return self.switch.provide_auth(response)
         
 
     def add_remote_record(self, record_uri, registrar_uri, registrar_hop=None):

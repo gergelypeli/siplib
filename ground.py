@@ -618,7 +618,9 @@ class Leg(GroundDweller):
             return False
         elif result in (SessionState.REJECT_COLLIDING, SessionState.REJECT_DUPLICATE):
             self.logger.error("Rejecting ground session (%s)!" % result)
-            self.forward(dict(type="session", session=Session.make_reject()))
+            # Mustn't use self.forward, as that would filter this rejection as
+            # one coming from the Party itself.
+            self.ground.forward(self.oid, dict(type="session", session=Session.make_reject()))
             return False
         else:
             return True
