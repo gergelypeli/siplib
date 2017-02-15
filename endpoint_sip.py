@@ -73,7 +73,7 @@ class SipEndpoint(Endpoint, SessionHelper):
         Endpoint.may_finish(self)
 
 
-    def media_leg_notified(self, type, params, mli):
+    def media_thing_notified(self, type, params, mti):
         self.forward(dict(params, type=type))
         
         
@@ -215,8 +215,8 @@ class SipEndpoint(Endpoint, SessionHelper):
                 return
         
             elif type == "tone":
-                if self.leg.media_legs and action.get("name"):
-                    self.leg.media_legs[0].notify("tone", dict(name=action["name"]))
+                if self.media_things and action.get("name"):
+                    self.media_things[0].notify("tone", dict(name=action["name"]))
                     
                 return
 

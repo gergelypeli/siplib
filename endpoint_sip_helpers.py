@@ -16,7 +16,7 @@ class SessionHelper:
         #self.sdp_parser = SdpParser()
 
 
-    def media_leg_notified(self, type, params, mli):
+    def media_thing_notified(self, type, params, mti):
         raise NotImplementedError()
                 
 
@@ -104,27 +104,28 @@ class SessionHelper:
             raise Exception("Channel count mismatch!")
             
         channel_count = len(local_channels)
-        media_leg_count = self.leg.get_media_leg_count()
+        media_thing_count = len(self.media_things)
 
         # Create
-        for i in range(media_leg_count, channel_count):
-            self.logger.debug("Making media leg for channel %d" % i)
+        for i in range(media_thing_count, channel_count):
+            self.logger.debug("Making media thing for channel %d" % i)
             am = self.allocated_media[i]
             
-            ml = self.make_media_leg("net")
-            ml.set_mgw(am.mgw_sid)
-            self.leg.add_media_leg(ml)
-            ml.event_slot.plug(self.media_leg_notified, mli=i)
+            mt = self.add_media_thing("rtp", am.mgw_sid)
+            
+            self.leg.add_media_leg(mt.get_leg(0))
+            mt.event_slot.plug(self.media_thing_notified, mti=i)
             
         # Delete (currently can only happen on shutdown, not on session exchange)
-        for i in reversed(range(channel_count, media_leg_count)):
+        for i in reversed(range(channel_count, media_thing_count)):
             self.leg.remove_media_leg()
+            self.remove_media_thing()
             
         # Modify
         for i in range(channel_count):
             lc = local_channels[i]
             rc = remote_channels[i]
-            ml = self.leg.get_media_leg(i)
+            mt = self.media_things[i]
             am = self.allocated_media[i]
             
             params = {
@@ -140,11 +141,11 @@ class SessionHelper:
                     diff[key] = value
             
             if not diff:
-                self.logger.debug("No need to modify media leg %d." % i)
+                self.logger.debug("No need to modify media thing %d." % i)
             else:
-                self.logger.debug("Modifying media leg %d: %s" % (i, diff))
+                self.logger.debug("Modifying media thing %d: %s" % (i, diff))
                 am.cached_params.update(diff)
-                ml.modify(diff)
+                mt.modify(diff)
             
             
     def add_remote_info(self, remote_session):

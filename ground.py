@@ -14,22 +14,13 @@ class Ground(Loggable):
         
         self.legs_by_oid = WeakValueDictionary()
         self.targets_by_source = {}  # TODO: rename!
-        self.media_contexts_by_mlid = {}
         self.context_count = 0
         self.parties_by_oid = {}
         self.leg_oids_by_anchor = {}
         self.transfers_by_id = {}
         self.transfer_count = 0
-        #self.blind_transfer_ids_by_leg_oid = {}
         
         
-    def generate_context_oid(self):
-        context_oid = self.oid.add("context", self.context_count)
-        self.context_count += 1
-        
-        return context_oid
-
-    
     def add_leg(self, leg):
         leg_oid = leg.oid
         if not leg_oid:
@@ -86,8 +77,8 @@ class Ground(Loggable):
             tmleg = self.find_facing_media_leg(leg_oid0, ci)
             
             if smleg and tmleg:
-                self.logger.info("Media legs became facing after linking, must add context.")
-                self.add_context(smleg, tmleg)
+                self.logger.info("Media legs became facing after linking, must link.")
+                self.link_media_legs(smleg, tmleg)
     
     
     def unlink_legs(self, leg_oid0):
@@ -104,8 +95,8 @@ class Ground(Loggable):
             tmleg = self.find_facing_media_leg(leg_oid0, ci)
             
             if smleg and tmleg:
-                self.logger.info("Media legs became separated after unlinking, must remove context.")
-                self.remove_context(smleg, tmleg)
+                self.logger.info("Media legs became separated after unlinking, must unlink.")
+                self.unlink_media_legs(smleg, tmleg)
             
         self.targets_by_source.pop(leg_oid0)
         self.targets_by_source.pop(leg_oid1)
@@ -137,15 +128,15 @@ class Ground(Loggable):
             
             # Remove previous context if necessary
             if pmleg and smleg:
-                self.remove_context(pmleg, smleg)
+                self.unlink_media_legs(pmleg, smleg)
                 
             # Remove next context if necessary
             if tmleg and nmleg:
-                self.remove_context(tmleg, nmleg)
+                self.unlink_media_legs(tmleg, nmleg)
             
             # Create collapsed context if necessary
             if pmleg and nmleg:
-                self.add_context(pmleg, nmleg)
+                self.link_media_legs(pmleg, nmleg)
         
         prev_leg_oid = self.targets_by_source.pop(leg_oid0, None)
         next_leg_oid = self.targets_by_source.pop(leg_oid1, None)
@@ -271,39 +262,22 @@ class Ground(Loggable):
         return self.find_facing_media_leg(lid, ci)
             
             
-    def remove_context(self, smleg, tmleg):
-        smc = self.media_contexts_by_mlid.pop(smleg.oid)
-        tmc = self.media_contexts_by_mlid.pop(tmleg.oid)
-        
-        if smc != tmc:
-            raise Exception("Media legs were unexpectedly not in the same context!")
-            
-        self.logger.info("Removing context %s" % smc.oid)
-        smc.delete()
+    def unlink_media_legs(self, smleg, tmleg):
+        self.logger.info("Unlinking media leg %s:%d to %s:%d" % (smleg.label, smleg.li, tmleg.label, tmleg.li))
 
-            
-    def add_context(self, smleg, tmleg):
-        self.logger.info("Must link media leg %s to %s" % (smleg.oid, tmleg.oid))
-
-        # Make sure the media legs are already realized
-        smleg.create()
-        tmleg.create()
-        
-        if smleg.sid != tmleg.sid:
+        if smleg.mgw_sid != tmleg.mgw_sid:
             raise Exception("Sid mismatch!")  # FIXME: this will happen eventually
 
-        mgw_sid = smleg.sid
+        self.mgc.unlink_media_legs(smleg, tmleg)
 
-        mcid = self.generate_context_oid()
-        self.logger.info("Creating context %s" % mcid)
-    
-        mc = self.mgc.make_media_leg("context")  # FIXME!
-        mc.set_oid(mcid)
-        mc.set_mgw(mgw_sid)
-        mc.modify({ 'legs': [ smleg.label, tmleg.label ] })
-        
-        self.media_contexts_by_mlid[smleg.oid] = mc
-        self.media_contexts_by_mlid[tmleg.oid] = mc
+            
+    def link_media_legs(self, smleg, tmleg):
+        self.logger.info("Linking media leg %s:%d to %s:%d" % (smleg.label, smleg.li, tmleg.label, tmleg.li))
+
+        if smleg.mgw_sid != tmleg.mgw_sid:
+            raise Exception("Sid mismatch!")  # FIXME: this will happen eventually
+
+        self.mgc.link_media_legs(smleg, tmleg)
         
         
     def media_leg_appeared(self, slid, ci):
@@ -312,15 +286,15 @@ class Ground(Loggable):
         rmleg = self.find_similar_media_leg(slid, ci)
 
         if not tmleg:
-            self.logger.debug("Appeared media leg has no facing pair, no context to add.")
+            self.logger.debug("Appeared media leg has no facing pair, nothing to link.")
             return
         
         if rmleg:
-            self.logger.debug("Appeared media leg shadows a similar leg, must remove context.")
-            self.remove_context(rmleg, tmleg)
+            self.logger.debug("Appeared media leg shadows a similar leg, must unlink.")
+            self.unlink_media_legs(rmleg, tmleg)
 
-        self.logger.info("Appeared media leg has a facing pair, must add context.")
-        self.add_context(smleg, tmleg)
+        self.logger.info("Appeared media leg has a facing pair, must link.")
+        self.link_media_legs(smleg, tmleg)
         
         
     def media_leg_disappearing(self, slid, ci):
@@ -329,15 +303,15 @@ class Ground(Loggable):
         rmleg = self.find_similar_media_leg(slid, ci)
 
         if not tmleg:
-            self.logger.debug("Disappearing media leg had no facing pair, no context to remove.")
+            self.logger.debug("Disappearing media leg had no facing pair, nothing to unlink.")
             return
         
-        self.logger.info("Disappearing media leg had a facing pair, must remove context.")
-        self.remove_context(smleg, tmleg)
+        self.logger.info("Disappearing media leg had a facing pair, must unlink.")
+        self.unlink_media_legs(smleg, tmleg)
         
         if rmleg:
-            self.logger.debug("Disappearing media leg shadowed a similar leg, must add context.")
-            self.add_context(rmleg, tmleg)
+            self.logger.debug("Disappearing media leg shadowed a similar leg, must link.")
+            self.link_media_legs(rmleg, tmleg)
         
 
     def make_leg(self, party, li):
@@ -465,8 +439,8 @@ class Ground(Loggable):
         self.mgc.deallocate_media_address(addr)
     
     
-    def make_media_leg(self, type):
-        return self.mgc.make_media_leg(type)
+    def make_media_thing(self, type):
+        return self.mgc.make_media_thing(type)
 
 
 
@@ -660,7 +634,7 @@ class Leg(GroundDweller):
         self.logger.debug("Adding media leg %s." % ci)
 
         self.media_legs.append(media_leg)
-        media_leg.set_oid(self.oid.add("channel", ci))
+        #media_leg.set_oid(self.oid.add("channel", ci))
         
         # By this the media leg must be added, and set up, so in case Ground
         # wants to immediately put it in a context, it will work.
@@ -675,8 +649,8 @@ class Leg(GroundDweller):
         
         # Must call this when everything is still in place
         self.ground.media_leg_disappearing(self.oid, ci)
-        old = self.media_legs.pop()
-        old.delete()
+        self.media_legs.pop()
+        #old.delete()
         
         return ci
         

@@ -11,6 +11,7 @@ class Party(GroundDweller):
         GroundDweller.__init__(self)
         
         self.finished_slot = zap.Slot()
+        self.media_things = []
 
 
     def set_call_info(self, call_info):
@@ -29,8 +30,20 @@ class Party(GroundDweller):
         return self.ground.make_leg(proxy(self), li)
         
         
-    def make_media_leg(self, type):
-        return self.ground.make_media_leg(type)
+    def add_media_thing(self, type, mgw_sid):
+        i = len(self.media_things)
+        thing = self.ground.make_media_thing(type)
+        
+        thing.set_oid(self.oid.add("media", i))
+        thing.set_mgw(mgw_sid)
+        thing.create()
+        
+        self.media_things.append(thing)
+        return thing
+        
+        
+    def remove_media_thing(self):
+        self.media_things.pop()
         
         
     def start(self):
@@ -503,7 +516,7 @@ class RecordingBridge(Bridge):
         
         
     def hack_media(self, li, answer):
-        old = self.legs[0].get_media_leg_count()
+        old = len(self.media_things)
         new = len(answer["channels"])
         
         for i in range(old, new):
@@ -512,22 +525,13 @@ class RecordingBridge(Bridge):
             mgw_affinity = answer_channel.get("mgw_affinity")
             mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
 
-            this = self.make_media_leg("pass")
-            that = self.make_media_leg("pass")
-
-            # Pairing must happen before setting it, because realizing needs it
-            this.pair(proxy(that))
-            that.pair(proxy(this))
+            thing = self.add_media_thing("record", mgw_sid)
             
-            this.set_mgw(mgw_sid)
-            that.set_mgw(mgw_sid)
-            
-            self.legs[0].add_media_leg(this)
-            self.legs[1].add_media_leg(that)
+            self.legs[0].add_media_leg(thing.get_leg(0))
+            self.legs[1].add_media_leg(thing.get_leg(1))
             
             format = ("L16", 8000, 1, None)
-            this.modify(dict(filename="recorded.wav", format=format, record=True))
-            that.modify({})
+            thing.modify(dict(filename="recorded.wav", format=format, record=True))
             
         if len(answer["channels"]) >= 1:
             c = answer["channels"][0]
@@ -567,14 +571,14 @@ class RedialBridge(Bridge):
         
         
     def play_ringback(self):
-        media_leg = self.legs[0].get_media_leg(0)
+        media_thing = self.media_things[0] if self.media_things else None
         ss = self.legs[1].session_state
 
         # We may not get the answer until the call is accepted
         session = ss.get_party_session() or ss.pending_party_session
     
-        if not media_leg and session:
-            self.logger.info("Creating media leg for artificial ringback tone.")
+        if not media_thing and session:
+            self.logger.info("Creating media thing for artificial ringback tone.")
             channel = session["channels"][0]
             ctype = channel["type"]
             mgw_affinity = channel.get("mgw_affinity")
@@ -582,32 +586,32 @@ class RedialBridge(Bridge):
             mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
             channel["mgw_affinity"] = mgw_sid
             
-            media_leg = self.make_media_leg("player")
-            media_leg.set_mgw(mgw_sid)
-            self.legs[0].add_media_leg(media_leg)
+            media_thing = self.add_media_thing("player", mgw_sid)
+
+            self.legs[0].add_media_leg(media_thing.get_leg(0))
         
-        if media_leg and self.is_ringing and not self.is_playing:
+        if media_thing and self.is_ringing and not self.is_playing:
             self.is_playing = True
             self.logger.info("Playing artificial ringback tone.")
             format = ("PCMA", 8000, 1, None)  # FIXME
-            media_leg.play("ringtone.wav", format, volume=0.1)
+            media_thing.play("ringtone.wav", format, volume=0.1)
         
         
     def stop_ringback(self):
-        media_leg = self.legs[0].get_media_leg(0)
+        media_thing = self.media_things[0] if self.media_things else None
 
         if self.is_playing:
             self.logger.info("Stopping artificial ringback tone.")
             self.is_playing = False
 
-        if media_leg:
+        if media_thing:
             self.legs[0].remove_media_leg()
+            self.remove_media_thing()
             
         
     def do_leg(self, li, action):
         self.logger.info("Redial do_leg %d: %s" % (li, action))
         
-        #media_leg = self.legs[0].get_media_leg(0)
         
         if li > 0:
             type = action["type"]

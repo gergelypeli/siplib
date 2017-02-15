@@ -42,15 +42,15 @@ class TestEndpoint(PlannedEndpoint):
         return action
         
         
-    def add_media_leg(self, channel):
+    def add_media(self, channel):
         ctype = channel["type"]
         mgw_affinity = channel.get("mgw_affinity")
         mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
 
         channel["mgw_affinity"] = mgw_sid
-        media_leg = self.make_media_leg("player")
-        media_leg.set_mgw(mgw_sid)
-        self.leg.add_media_leg(media_leg)
+        media_thing = self.add_media_thing("player", mgw_sid)
+        
+        self.leg.add_media_leg(media_thing.get_leg(0))
     
 
     def update_session(self, session):
@@ -73,15 +73,15 @@ class TestEndpoint(PlannedEndpoint):
                 c["formats"] = [ f for f in c["formats"] if f["encoding"] in (encoding, "telephone-event") ]
                 c["send"], c["recv"] = c["recv"], c["send"]
 
-            if not self.leg.media_legs:
-                self.add_media_leg(answer["channels"][0])
+            if not self.media_things:
+                self.add_media(answer["channels"][0])
         
             return answer
         elif session.is_accept():
             self.logger.info("TestEndpoint received a session accept.")
             
-            if not self.leg.media_legs:
-                self.add_media_leg(session["channels"][0])
+            if not self.media_things:
+                self.add_media(session["channels"][0])
                 
             return None
         elif session.is_reject():
@@ -91,11 +91,11 @@ class TestEndpoint(PlannedEndpoint):
         
         
     def idle(self):
-        ml = self.leg.get_media_leg(0)
+        mt = self.media_things[0] if self.media_things else None
         
-        if ml:
+        if mt:
             self.logger.info("Idle, fading in media.")
-            ml.play(self.media_filename, self.media_format, volume=0.1, fade=3)
+            mt.play(self.media_filename, self.media_format, volume=0.1, fade=3)
         else:
             self.logger.info("Idle, no media to fade in.")
 
@@ -120,11 +120,11 @@ class TestEndpoint(PlannedEndpoint):
             else:
                 self.logger.critical("Don't know what to do with %s, continuing..." % type)
         
-        ml = self.leg.get_media_leg(0)
+        mt = self.media_things[0] if self.media_things else None
         
-        if ml:
+        if mt:
             self.logger.info("Fading out media.")
-            ml.play(volume=0, fade=3)
+            mt.play(volume=0, fade=3)
             yield from self.sleep(3)
         else:
             self.logger.info("No media to fade out.")

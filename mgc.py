@@ -1,4 +1,5 @@
 from weakref import proxy, ref
+from collections import namedtuple
 
 from msgp import MsgpPeer
 from log import Loggable
@@ -8,13 +9,18 @@ import zap
 def label_from_oid(oid):
     #return "/".join(part.split("=")[1] if "=" in part else "" for part in oid.split(","))
     #return oid.replace("=", ":").replace(",", ";")
-    return oid.replace("switch=", "").replace("call=", "").replace("ground,context=", "").replace("leg=", "").replace("leg", "").replace(",channel=", ":").replace("=", ":").replace(",", "/")
+    return oid.replace("switch=", "").replace("call=", "").replace("media=", "").replace("=", ":").replace(",", "/")
+
+
+MediaLeg = namedtuple("MediaLeg", [ "mgw_sid", "label", "li" ])
 
 
 class MediaThing(Loggable):
-    def __init__(self):
+    def __init__(self, type):
         Loggable.__init__(self)
         
+        self.type = type
+
         self.mgc = None
         self.sid = None
         self.is_created = False
@@ -34,6 +40,10 @@ class MediaThing(Loggable):
         
         self.label = label_from_oid(self.oid)
         self.mgc.register_thing(self.label, self)
+
+
+    def get_leg(self, li):
+        return MediaLeg(self.sid, self.label, li)
         
 
     def send_request(self, ttag, params, drop_response=False):
@@ -58,61 +68,44 @@ class MediaThing(Loggable):
             self.logger.error("Oops, MGW message %s/%s failed!" % source)
 
 
-class MediaLeg(MediaThing):
-    def __init__(self, type):
-        MediaThing.__init__(self)
-        
-        self.type = type
+    def create(self):
+        if not self.is_created:
+            self.is_created = True
+            params = dict(type=self.type)
+            self.send_request("create_thing", params)
 
 
     def modify(self, params):
         if not self.is_created:
-            self.is_created = True
-            params = dict(params, type=self.type)
-            self.send_request("create_leg", params)
-        else:
-            self.send_request("modify_leg", params)
-        
-        
-    def create(self):
-        if not self.is_created:
-            self.modify({})
+            raise Exception("Media thing not yet created!")
+
+        self.send_request("modify_thing", params)
 
 
     def delete(self):
         if self.is_created:
             self.is_created = False  # Call uses this to ignore such MediaLeg-s
             params = {}
-            self.send_request("delete_leg", params, drop_response=True)
+            self.send_request("delete_thing", params, drop_response=True)
 
 
     def notify(self, target, params):
         self.send_request(target, params)
             
 
-class PassMediaLeg(MediaLeg):
+class RecordMediaThing(MediaThing):
     def __init__(self):
-        MediaLeg.__init__(self, "pass")
-        
-        self.other = None
-        
-        
-    def pair(self, other):
-        self.other = other
-        
-        
-    def modify(self, params):
-        MediaLeg.modify(self, dict(params, other=self.other.label))
+        MediaThing.__init__(self, "record")
         
 
-class EchoMediaLeg(MediaLeg):
+class EchoMediaThing(MediaThing):
     def __init__(self):
-        MediaLeg.__init__(self, "echo")
+        MediaThing.__init__(self, "echo")
 
 
-class PlayerMediaLeg(MediaLeg):
+class PlayerMediaThing(MediaThing):
     def __init__(self):
-        MediaLeg.__init__(self, "player")
+        MediaThing.__init__(self, "player")
         
 
     def play(self, filename=None, format=None, volume=1, fade=0):  # TODO: rename to refresh?
@@ -128,19 +121,12 @@ class PlayerMediaLeg(MediaLeg):
         self.modify(params)
 
 
-class NetMediaLeg(MediaLeg):
+class RtpMediaThing(MediaThing):
     def __init__(self):
-        MediaLeg.__init__(self, "net")
+        MediaThing.__init__(self, "rtp")
 
         self.event_slot = zap.EventSlot()
-        #self.committed = {}
 
-
-    #def update(self, **kwargs):  # TODO: rename to refresh?
-    #    changes = { k: v for k, v in kwargs.items() if v != self.committed.get(k) }
-    #    self.committed.update(changes)
-    #    self.modify(changes)
-        
     
     def process_request(self, target, params, source):
         if target == "tone":
@@ -148,32 +134,9 @@ class NetMediaLeg(MediaLeg):
             self.send_response(source, "OK")
             self.event_slot.zap("tone", params)
         else:
-            MediaLeg.process_request(self, target, params, source)
-            
+            MediaThing.process_request(self, target, params, source)
         
         
-class MediaContext(MediaThing):
-    def modify(self, params):
-        if not self.is_created:
-            self.is_created = True
-            params = dict(params, type="proxy")
-            self.send_request("create_context", params)
-        else:
-            self.send_request("modify_context", params)
-    
-    
-    def create(self):
-        if not self.is_created:
-            self.modify({})
-            
-
-    def delete(self):
-        if self.is_created:
-            self.is_created = False
-            self.logger.debug("Deleting context")
-            self.send_request("delete_context", {}, drop_response=True)
-
-
 class Controller(Loggable):
     def __init__(self):
         Loggable.__init__(self)
@@ -182,7 +145,7 @@ class Controller(Loggable):
         
         # Store weak references, and only remove the nullified ones
         # after getting a drop_response response from the MGW.
-        self.wthings_by_label = {}  # WeakValueDictionary()
+        self.wthings_by_label = {}
         
         self.msgp = MsgpPeer(None)
         self.msgp.request_slot.plug(self.process_request)
@@ -248,7 +211,7 @@ class Controller(Loggable):
         label, drop_response = origin
 
         if not label:
-            self.logger.error("Response from MGW without label, can't process!")
+            self.logger.info("Response from MGW without label, ignoring.")
         else:
             self.logger.debug("Response to thing %s" % label)
             wthing = self.wthings_by_label.get(label)
@@ -293,24 +256,40 @@ class Controller(Loggable):
         raise NotImplementedError()
 
     
-    def make_media_leg(self, type):
+    def make_media_thing(self, type):
         # TODO: maybe this function shouldn't be in Controller at all.
-        ml = None
+        mt = None
         
-        if type == "pass":
-            ml = PassMediaLeg()
+        if type == "record":
+            mt = RecordMediaThing()
         elif type == "echo":
-            ml = EchoMediaLeg()
+            mt = EchoMediaThing()
         elif type == "player":
-            ml = PlayerMediaLeg()
-        elif type == "net":
-            ml = NetMediaLeg()
-        elif type == "context":  # FIXME!
-            ml = MediaContext()
+            mt = PlayerMediaThing()
+        elif type == "rtp":
+            mt = RtpMediaThing()
         else:
             raise Exception("No such media leg type: %s!" % type)
 
-        ml.set_mgc(proxy(self))
+        mt.set_mgc(proxy(self))
 
-        self.logger.info("Made media leg of type %s" % type)
-        return ml
+        self.logger.info("Made media thing of type %s" % type)
+        return mt
+
+
+    def link_media_legs(self, ml0, ml1):
+        if ml0.mgw_sid != ml1.mgw_sid:
+            raise Exception("Can't link media legs on different MGWs!")  # TODO
+            
+        target = (ml0.mgw_sid, "link_slots")
+        params = dict(slots=[ (ml0.label, ml0.li), (ml1.label, ml1.li) ])
+        self.msgp.send_request(target, params, origin=(None, None))
+
+
+    def unlink_media_legs(self, ml0, ml1):
+        if ml0.mgw_sid != ml1.mgw_sid:
+            raise Exception("Can't unlink media legs on different MGWs!")  # TODO
+            
+        target = (ml0.mgw_sid, "unlink_slots")
+        params = dict(slots=[ (ml0.label, ml0.li), (ml1.label, ml1.li) ])
+        self.msgp.send_request(target, params, origin=(None, None))

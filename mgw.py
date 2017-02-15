@@ -1,5 +1,5 @@
 import socket
-from weakref import ref, proxy, WeakValueDictionary
+from weakref import proxy
 
 from rtp import read_wav, write_wav, RtpPlayer, RtpRecorder, RtpBuilder, RtpParser, DtmfExtractor, DtmfInjector, Format
 from msgp import MsgpPeer
@@ -10,15 +10,20 @@ class Error(Exception): pass
 
 
 class Thing(Loggable):
-    def __init__(self, label, owner_sid):
+    def __init__(self, label, owner_sid, type):
         Loggable.__init__(self)
 
         self.label = label
         self.owner_sid = owner_sid
+        self.type = type
         self.mgw = None
+
+
+    def __del__(self):
+        self.logger.debug("Deleted %s" % self.type)
         
         
-    def set_mgw(self, mgw):
+    def set_mgw(self, mgw):  # TODO: move to init
         self.mgw = mgw
 
 
@@ -34,77 +39,41 @@ class Thing(Loggable):
     def notify(self, type, params):
         pass
 
-    
-class Leg(Thing):
-    def __init__(self, label, owner_sid, type):
-        Thing.__init__(self, label, owner_sid)
+
+    def forward(self, li, packet):
+        self.mgw.forward(self.label, li, packet)
         
-        self.type = type
-        self.forward_slot = zap.EventSlot()
-        self.has_complained = False
-        #self.logger.debug("Created %s leg" % self.type)
-        
-        
-    def __del__(self):
-        self.logger.debug("Deleted %s leg" % self.type)
-
-
-    def recv_packet(self, packet):
-        if self.forward_slot.plugs:  # FIXME: there should be a better way
-            if self.has_complained:
-                self.logger.info("Now has a context to forward media to.")
-                self.has_complained = False
-                
-            self.forward_slot.zap(packet)
-        else:
-            if not self.has_complained:
-                self.logger.warning("No context to forward media to!")
-                self.has_complained = True
-
-
-    def send_packet(self, packet):
-        raise NotImplementedError()
-
-
-class PassLeg(Leg):
-    pass_legs_by_label = WeakValueDictionary()
     
-    
+class RecordThing(Thing):
     def __init__(self, label, owner_sid):
-        Leg.__init__(self, label, owner_sid, "pass")
+        Thing.__init__(self, label, owner_sid, "record")
         
-        self.other_label = None
         self.filename = None
         self.is_recording = False
         self.has_recorded = False
         self.format = None
-        self.recv_recorder = None
-        self.send_recorder = None
+        self.fore_recorder = None
+        self.back_recorder = None
         
         # A file will be written only if recording was turned on, even if there
         # are no samples recorded.
-        
-        self.pass_legs_by_label[label] = self
 
 
     def __del__(self):
         self.flush()
-        Leg.__del__(self)
+        Thing.__del__(self)
 
 
     def flush(self):
         if self.has_recorded:
-            samples_recved = self.recv_recorder.get()
-            samples_sent = self.send_recorder.get()
-            write_wav(self.filename, samples_recved, samples_sent)
+            samples_fore = self.fore_recorder.get()
+            samples_back = self.back_recorder.get()
+            write_wav(self.filename, samples_fore, samples_back)
 
 
     def modify(self, params):
-        Leg.modify(self, params)
+        Thing.modify(self, params)
         
-        if "other" in params:
-            self.other_label = params["other"]
-            
         if "format" in params:
             self.format = Format(*params["format"])
             
@@ -112,10 +81,10 @@ class PassLeg(Leg):
             self.flush()
                 
             self.filename = params["filename"]
-            self.recv_recorder = RtpRecorder(self.format)
-            self.recv_recorder.set_oid(self.oid.add("recv"))
-            self.send_recorder = RtpRecorder(self.format)
-            self.send_recorder.set_oid(self.oid.add("send"))
+            self.fore_recorder = RtpRecorder(self.format)
+            self.fore_recorder.set_oid(self.oid.add("fore"))
+            self.back_recorder = RtpRecorder(self.format)
+            self.back_recorder.set_oid(self.oid.add("back"))
             
             self.is_recording = False
             self.has_recorded = False
@@ -128,26 +97,20 @@ class PassLeg(Leg):
                 self.logger.error("Can't save recording without a filename!")
 
 
-    def recv_packet(self, packet):
+    def process(self, li, packet):
         if self.is_recording:
-            self.recv_recorder.record_packet(packet)
-
-        Leg.recv_packet(self, packet)
+            if li == 0:
+                self.fore_recorder.record_packet(packet)
+            else:
+                self.back_recorder.record_packet(packet)
+                
+        lj = 1 - li
+        self.forward(lj, packet)
         
 
-    def send_packet(self, packet):
-        if self.is_recording:
-            self.send_recorder.record_packet(packet)
-            
-        other_leg = self.pass_legs_by_label.get(self.other_label)
-        if other_leg:
-            other_leg.recv_packet(packet)
-        
-        
-
-class NetLeg(Leg):
+class RtpThing(Thing):
     def __init__(self, label, owner_sid):
-        Leg.__init__(self, label, owner_sid, "net")
+        Thing.__init__(self, label, owner_sid, "rtp")
         
         self.local_addr = None
         self.remote_addr = None
@@ -170,17 +133,15 @@ class NetLeg(Leg):
             
         
     def set_oid(self, oid):
-        Leg.set_oid(self, oid)
+        Thing.set_oid(self, oid)
         
         self.dtmf_extractor.set_oid(self.oid.add("dtmf-ex"))
         self.dtmf_injector.set_oid(self.oid.add("dtmf-in"))
         
         
     def modify(self, params):
-        Leg.modify(self, params)
+        Thing.modify(self, params)
 
-        #print("Setting leg: %s" % (params,))
-        
         if "send_formats" in params:
             payload_types_by_format = { Format(*v): int(k) for k, v in params["send_formats"].items() }
             self.rtp_builder.set_payload_types_by_format(payload_types_by_format)
@@ -188,8 +149,6 @@ class NetLeg(Leg):
             for format in payload_types_by_format:
                 if format.encoding == "telephone-event":
                     self.dtmf_injector.set_format(format)
-            
-        #print("send_formats: %s" % (self.send_pts_by_format,))
             
         if "recv_formats" in params:
             formats_by_payload_type = { int(k): Format(*v) for k, v in params["recv_formats"].items() }
@@ -236,7 +195,7 @@ class NetLeg(Leg):
         if packet is None:
             self.logger.debug("Ignoring received unknown payload type!")
         elif not self.dtmf_extractor.process(packet):
-            self.recv_packet(packet)
+            self.forward(0, packet)
     
     
     def dtmf_detected(self, name):
@@ -248,24 +207,20 @@ class NetLeg(Leg):
     #    self.logger.debug("Seems like he MGC %sacknowledged our DTMF!" % ("" if msgid[1] else "NOT "))
         
         
-    def send_checked(self, packet):
-        udp = self.rtp_builder.build(packet)
-        
-        if udp is None:
-            self.logger.debug("Ignoring sent unknown payload format %s" % (packet.format,))
-            return
-
-        if not self.remote_addr or not self.remote_addr[1]:
-            return
-            
-        #self.logger.info("Sending RTP packet to %s" % (self.remote_addr,))
-        # packet should be a bytearray here
-        self.socket.sendto(udp, self.remote_addr)
-    
-    
-    def send_packet(self, packet):
+    def process(self, li, packet):
         for p in self.dtmf_injector.process(packet):
-            self.send_checked(p)
+            udp = self.rtp_builder.build(p)
+        
+            if udp is None:
+                self.logger.debug("Ignoring sent unknown payload format %s" % (p.format,))
+                return
+
+            if not self.remote_addr or not self.remote_addr[1]:
+                return
+            
+            #self.logger.info("Sending RTP packet to %s" % (self.remote_addr,))
+            # packet should be a bytearray here
+            self.socket.sendto(udp, self.remote_addr)
 
 
     def notify(self, type, params):
@@ -273,29 +228,29 @@ class NetLeg(Leg):
             name = params.get("name")
             self.dtmf_injector.inject(name)
         else:
-            Leg.notify(self, type, params)
+            Thing.notify(self, type, params)
         
 
-class EchoLeg(Leg):
+class EchoThing(Thing):
     def __init__(self, label, owner_sid):
-        Leg.__init__(self, label, owner_sid, "echo")
+        Thing.__init__(self, label, owner_sid, "echo")
         
         self.buffer = []
 
 
-    def send_packet(self, packet):
+    def process(self, li, packet):
         # We don't care about payload types
         #self.logger.debug("Echoing %s packet on %s" % (format, self.label))
         self.buffer.append(packet)
         
         if len(self.buffer) > 10:
             p = self.buffer.pop(0)
-            self.recv_packet(p)
+            self.forward(0, p)
 
 
-class PlayerLeg(Leg):
+class PlayerThing(Thing):
     def __init__(self, label, owner_sid):
-        Leg.__init__(self, label, owner_sid, "player")
+        Thing.__init__(self, label, owner_sid, "player")
         
         self.rtp_player = None
         self.format = None
@@ -304,8 +259,8 @@ class PlayerLeg(Leg):
 
 
     def modify(self, params):
-        self.logger.debug("Player leg modified: %s" % params)
-        Leg.modify(self, params)
+        self.logger.debug("Player thing modified: %s" % params)
+        Thing.modify(self, params)
 
         # This is temporary, don't remember it across calls
         fade = 0
@@ -327,55 +282,16 @@ class PlayerLeg(Leg):
             samples = read_wav(params["filename"])
             
             self.rtp_player = RtpPlayer(self.format, samples, self.volume, fade)
-            self.rtp_player.packet_slot.plug(self.recv_packet)
+            self.rtp_player.packet_slot.plug(self.forward_packet)
 
 
-    def recv_packet(self, packet):
+    def forward_packet(self, packet):
         #self.logger.info("Generated packet from %s." % self.filename)
-        Leg.recv_packet(self, packet)
+        self.forward(0, packet)
         
 
-    def send_packet(self, packet):
+    def process(self, li, packet):
         pass
-
-
-class Context(Thing):
-    def __init__(self, label, owner_sid, manager):
-        Thing.__init__(self, label, owner_sid)
-
-        self.manager = manager
-        self.legs = []
-        self.forward_plugs = []
-        #self.logger.debug("Created context")
-        
-        
-    def __del__(self):
-        self.logger.debug("Deleted context")
-        
-        
-    def modify(self, params):
-        leg_labels = params["legs"]
-
-        for plug in self.forward_plugs:
-            plug.unplug()
-
-        self.legs = [ self.manager.get_leg(label) for label in leg_labels ]
-        self.forward_plugs = []
-        
-        for i, leg in enumerate(self.legs):
-            self.forward_plugs.append(leg.forward_slot.plug(self.forward, li=i))
-
-
-    def forward(self, packet, li):
-        lj = (1 if li == 0 else 0)
-        
-        try:
-            leg = self.legs[lj]
-        except IndexError:
-            raise Error("No outgoing leg!")
-
-        #self.logger.debug("Media forward from %s to %s" % (self.legs[li].label, self.legs[lj].label))
-        leg.send_packet(packet)
 
 
 class MediaGateway(Loggable):
@@ -383,8 +299,9 @@ class MediaGateway(Loggable):
         Loggable.__init__(self)
         mgw_addr.assert_resolved()
 
-        self.contexts_by_label = {}
-        self.legs_by_label = {}
+        self.things_by_label = {}
+        self.links = {}
+        
         self.msgp = MsgpPeer(mgw_addr)
         self.msgp.request_slot.plug(self.process_request)
         self.msgp.response_slot.plug(self.process_response)
@@ -399,137 +316,109 @@ class MediaGateway(Loggable):
         self.msgp.set_name(name)
         
         
-    def get_leg(self, label):
-        return self.legs_by_label[label]
-
-
     def send_request(self, target, params, origin=None):
         self.msgp.send_request(target, params, origin=origin)
         
-
-    # Things
-    
-    def add_thing(self, things, thing):
-        if thing.label in things:
-            raise Error("Duplicate %s!" % thing.__class__)
         
-        things[thing.label] = thing
+    def forward(self, label, li, packet):
+        this = (label, li)
+        that = self.links.get(this)
+        
+        if that:
+            label, li = that
+            self.things_by_label[label].process(li, packet)
+            
+
+    def create_thing(self, label, owner_sid, type):
+        if type == "record":
+            thing = RecordThing(label, owner_sid)
+        elif type == "rtp":
+            thing = RtpThing(label, owner_sid)
+        elif type == "echo":
+            thing = EchoThing(label, owner_sid)
+        elif type == "player":
+            thing = PlayerThing(label, owner_sid)
+        else:
+            raise Error("Invalid thing type '%s'!" % type)
+
+        thing.set_oid(self.oid.add("thing", label))
+        self.logger.info("Created thing %s" % label)
+
+        if label in self.things_by_label:
+            raise Error("Duplicate %s!" % type)
+        
+        self.things_by_label[label] = thing
         thing.set_mgw(proxy(self))
         
         return thing
         
         
-    def modify_thing(self, things, label, params):
-        thing = things[label]
-        thing.modify(params)
+    def modify_thing(self, label, params):
+        self.things_by_label[label].modify(params)
+        self.logger.info("Modified thing %s: %s" % (label, params))
         
         
-    def delete_thing(self, things, label):
-        wthing = ref(things.pop(label))
+    def delete_thing(self, label):
+        self.things_by_label.pop(label)
+        self.logger.info("Deleted thing %s" % label)
+
+
+    def take_thing(self, label, owner_sid):
+        self.things_by_label[label].owner_sid = owner_sid
         
-        if wthing():
-            # This is to ensure contexts are removed before removing legs.
-            self.logger.error("Deleted thing %s remained alive!" % label)
-
-
-    def take_thing(self, things, label, owner_sid):
-        thing = things[label]
-        thing.owner_sid = owner_sid
-
-
-    def notify_thing(self, things, label, type, params):
-        thing = things[label]
-        thing.notify(type, params)
-    
-    
-    # Contexts
-
-    def create_context(self, label, owner_sid, type):
-        if type == "proxy":
-            context = Context(label, owner_sid, proxy(self))
-        else:
-            raise Error("Invalid context type %s!" % type)
+        
+    def notify_thing(self, label, type, params):
+        self.things_by_label[label].notify(type, params)
+        
+        
+    def link_slots(self, this, that):
+        if this in self.links or that in self.links:
+            raise Error("Things already linked!")
             
-        context.set_oid(self.oid.add("context", label))
-        self.logger.info("Created context %s" % label)
-        return self.add_thing(self.contexts_by_label, context)
+        if this[0] not in self.things_by_label:
+            raise Error("Linked thing does not exist: %s!" % this[0])
 
-
-    def modify_context(self, label, params):
-        self.modify_thing(self.contexts_by_label, label, params)
-
-
-    def delete_context(self, label):
-        self.delete_thing(self.contexts_by_label, label)
-        self.logger.info("Deleted context %s" % label)
-
-
-    def take_context(self, label, owner_sid):
-        self.take_thing(self.contexts_by_label, label, owner_sid)
+        if that[0] not in self.things_by_label:
+            raise Error("Linked thing does not exist: %s!" % that[0])
+            
+        self.links[this] = that
+        self.links[that] = this
         
         
-    # Legs
-
-    def create_leg(self, label, owner_sid, type):
-        if type == "pass":
-            leg = PassLeg(label, owner_sid)
-        elif type == "net":
-            leg = NetLeg(label, owner_sid)
-        elif type == "echo":
-            leg = EchoLeg(label, owner_sid)
-        elif type == "player":
-            leg = PlayerLeg(label, owner_sid)
-        else:
-            raise Error("Invalid leg type '%s'!" % type)
-
-        leg.set_oid(self.oid.add("leg", label))
-        self.logger.info("Created leg %s" % label)
-        return self.add_thing(self.legs_by_label, leg)
-        
-        
-    def modify_leg(self, label, params):
-        self.modify_thing(self.legs_by_label, label, params)
-        self.logger.info("Modified leg %s: %s" % (label, params))
-        
-        
-    def delete_leg(self, label):
-        self.delete_thing(self.legs_by_label, label)
-        self.logger.info("Deleted leg %s" % label)
-
-
-    def take_leg(self, label, owner_sid):
-        self.take_thing(self.legs_by_label, label, owner_sid)
-        
-        
-    def notify_leg(self, label, type, params):
-        self.notify_thing(self.legs_by_label, label, type, params)
+    def unlink_slots(self, this, that):
+        if self.links[this] != that or self.links[that] != this:
+            raise Error("Things not linked together!")
+            
+        self.links.pop(this)
+        self.links.pop(that)
         
         
     def process_request(self, target, params, source):
         try:
             owner_sid, seq = source
-            label = params["label"]
             
-            if target == "create_context":
-                self.create_context(label, owner_sid, params["type"])
-                self.modify_context(label, params)  # fake modification
-            elif target == "modify_context":
-                self.modify_context(label, params)
-            elif target == "delete_context":
-                self.delete_context(label)
-            elif target == "take_context":
-                self.take_context(label, owner_sid)
-            elif target == "create_leg":
-                self.create_leg(label, owner_sid, params["type"])
-                self.modify_leg(label, params)  # fake modification
-            elif target == "modify_leg":
-                self.modify_leg(label, params)
-            elif target == "delete_leg":
-                self.delete_leg(label)
-            elif target == "take_leg":
-                self.take_leg(label, owner_sid)
+            if target == "create_thing":
+                label = params["label"]
+                self.create_thing(label, owner_sid, params["type"])
+                self.modify_thing(label, params)  # fake modification
+            elif target == "modify_thing":
+                label = params["label"]
+                self.modify_thing(label, params)
+            elif target == "delete_thing":
+                label = params["label"]
+                self.delete_thing(label)
+            elif target == "take_thing":
+                label = params["label"]
+                self.take_thing(label, owner_sid)
             elif target == "tone":
-                self.notify_leg(label, "tone", params)
+                label = params["label"]
+                self.notify_thing(label, "tone", params)
+            elif target == "link_slots":
+                slots = params["slots"]
+                self.link_slots(tuple(slots[0]), tuple(slots[1]))
+            elif target == "unlink_slots":
+                slots = params["slots"]
+                self.unlink_slots(tuple(slots[0]), tuple(slots[1]))
             else:
                 raise Error("Invalid target %s!" % target)
         except Exception as e:
@@ -538,7 +427,7 @@ class MediaGateway(Loggable):
         else:
             self.msgp.send_response(source, "ok")
             
-            if not self.legs_by_label and not self.contexts_by_label:
+            if not self.things_by_label:
                 self.logger.info("Back to clean state.")
 
 
