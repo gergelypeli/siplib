@@ -634,7 +634,7 @@ class RedialBridge(Bridge):
                 self.stop_ringback()
                 
                 status = action.get("status") or Status.SERVER_INTERNAL_ERROR
-                reason = Reason("SIP", dict(cause=status.code, text=status.reason))
+                reason = Reason("SIP", dict(cause=str(status.code), text=status.reason))
 
                 self.logger.info("Forwarding reject as hangup with reason %s." % (reason,))
                 action = dict(type="hangup", reason=[ reason ])

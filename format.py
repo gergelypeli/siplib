@@ -628,6 +628,14 @@ class Uri(namedtuple("Uri", "addr username scheme params headers")):
                     
                     if not parser.can_grab_separator("&"):
                         break
+        else:
+            # TODO: A good question is if the URI was not enclosed in angle brackets, had no
+            # parameters, but does headers, should they be parsed? According to the
+            # RFC this is invalid, but the Snom may do so unless configured otherwise.
+            # So we may parse headers if no params were present just to be nice.
+            # Or reject it completely. But just ignoring them is bad.
+            if parser.startswith("?"):
+                raise Exception("URI with headers not enclosed in angle brackets!")
         
         return cls(addr, username, scheme, params, headers)
 

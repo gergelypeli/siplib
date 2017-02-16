@@ -234,7 +234,7 @@ class CalleeEndpoint(TestEndpoint):
         #answer = action.get("session")
         #self.logger.debug("Got answer:\n%s" % repr(answer))
 
-        yield from self.sleep(1)
+        yield from self.sleep(3)
         self.forward(dict(type="accept"))
         self.logger.debug("Sent accept.")
 

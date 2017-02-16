@@ -252,6 +252,12 @@ class SipEndpoint(Endpoint, SessionHelper):
             self.send(Sip.response(status=Status.BAD_REQUEST), request)
             return
             
+        # The Snom may omit the angle brackets around the URI even if it contains a
+        # question mark, despite section 20:
+        #   If the URI contains a comma, question mark or semicolon, the URI MUST be
+        #   enclosed in angle brackets (< and >).
+        # This helps: V8: Advanced - SIP/RTP (Tab) - SIP(Section):Refer-To Brackets
+            
         replaces = refer_to.uri.headers.get("replaces")
         if not replaces:
             self.logger.info("Blind transfer to %s." % (refer_to,))
@@ -434,7 +440,7 @@ class SipEndpoint(Endpoint, SessionHelper):
 
                             diversion = response.get("diversion")
                             reason_string = diversion.params.get("reason") if diversion else status.reason
-                            reason = Reason("SIP", dict(cause=status.code, text=reason_string))
+                            reason = Reason("SIP", dict(cause=str(status.code), text=reason_string))
 
                             src = {
                                 'type': "sip",

@@ -47,8 +47,8 @@ class Ground(Loggable):
         
         
     def common_channel_count(self, leg_oid0, leg_oid1):
-        scc = self.legs_by_oid[leg_oid0].get_channel_count()
-        tcc = self.legs_by_oid[leg_oid1].get_channel_count()
+        scc = self.legs_by_oid[leg_oid0].get_potential_channel_count()
+        tcc = self.legs_by_oid[leg_oid1].get_potential_channel_count()
         #self.logger.debug("CCC %s %s: %s, %s" % (leg_oid0, leg_oid1, scc, tcc))
         
         return max(scc, tcc)
@@ -181,12 +181,24 @@ class Ground(Loggable):
             raise Exception("Missing call_info from dial action!")
         
         type = dst.pop("type") if dst else "routing"
-        self.logger.info("Spawning a %s from leg %s." % (type, leg_oid))
         
-        party = self.make_party(type, dst, call_info)
-        party_leg = party.start()
-        self.link_legs(leg_oid, party_leg.oid)
-        party_leg.do(action)
+        if type == "grab":
+            party_leg_oid = dst["leg_oid"]
+            self.logger.info("Grabbing %s from leg %s." % (party_leg_oid, leg_oid))
+            
+            party_leg = self.legs_by_oid[party_leg_oid]
+            self.link_legs(leg_oid, party_leg.oid)
+            
+            session = action.get("session")
+            if session:
+                party_leg.do(dict(type="session", session=session))
+        else:
+            self.logger.info("Spawning a %s from leg %s." % (type, leg_oid))
+        
+            party = self.make_party(type, dst, call_info)
+            party_leg = party.start()
+            self.link_legs(leg_oid, party_leg.oid)
+            party_leg.do(action)
         
         
     def forward(self, leg_oid, action):
@@ -200,14 +212,7 @@ class Ground(Loggable):
         elif action["type"] == "dial":
             self.spawn(leg_oid, action)
             return
-        #elif action["type"] == "session":
-        #    tid = self.blind_transfer_ids_by_leg_oid.pop(leg_oid, None)
-            
-        #    if tid:
-        #        self.transfers_by_id[tid]["action"]["session"] = action["session"]
-        #        self.blind_transfer(tid)
-        #        return
-            
+
         self.logger.error("Couldn't forward %s from %s!" % (action["type"], leg_oid))
 
 
@@ -221,8 +226,25 @@ class Ground(Loggable):
         self.leg_oids_by_anchor[leg_oid0] = leg_oid1
         self.leg_oids_by_anchor[leg_oid1] = leg_oid0
 
+        for ci in range(self.common_channel_count(leg_oid0, leg_oid1)):
+            smleg = self.find_backing_media_leg(leg_oid1, ci)
+            tmleg = self.find_backing_media_leg(leg_oid0, ci)
+            
+            if smleg and tmleg:
+                self.logger.info("Media legs became facing after anchoring, must link.")
+                self.link_media_legs(smleg, tmleg)
+
+
 
     def legs_unanchored(self, leg_oid0, leg_oid1):
+        for ci in range(self.common_channel_count(leg_oid0, leg_oid1)):
+            smleg = self.find_backing_media_leg(leg_oid1, ci)
+            tmleg = self.find_backing_media_leg(leg_oid0, ci)
+            
+            if smleg and tmleg:
+                self.logger.info("Media legs became separated after unanchoring, must unlink.")
+                self.unlink_media_legs(smleg, tmleg)
+
         x = self.leg_oids_by_anchor.pop(leg_oid0, None)
         if x != leg_oid1:
             raise Exception("Leg %s was not anchored to %s!" % (leg_oid0, leg_oid1))
@@ -244,10 +266,10 @@ class Ground(Loggable):
         if pml:
             return pml
             
-        return self.find_similar_media_leg(plid, ci)
+        return self.find_backing_media_leg(plid, ci)
         
         
-    def find_similar_media_leg(self, plid, ci):
+    def find_backing_media_leg(self, plid, ci):
         # Same facing channel, may shadow us
         lid = self.leg_oids_by_anchor.get(plid)
         if not lid:
@@ -283,7 +305,7 @@ class Ground(Loggable):
     def media_leg_appeared(self, slid, ci):
         smleg = self.legs_by_oid[slid].get_media_leg(ci)
         tmleg = self.find_facing_media_leg(slid, ci)
-        rmleg = self.find_similar_media_leg(slid, ci)
+        rmleg = self.find_backing_media_leg(slid, ci)
 
         if not tmleg:
             self.logger.debug("Appeared media leg has no facing pair, nothing to link.")
@@ -300,7 +322,7 @@ class Ground(Loggable):
     def media_leg_disappearing(self, slid, ci):
         smleg = self.legs_by_oid[slid].get_media_leg(ci)
         tmleg = self.find_facing_media_leg(slid, ci)
-        rmleg = self.find_similar_media_leg(slid, ci)
+        rmleg = self.find_backing_media_leg(slid, ci)
 
         if not tmleg:
             self.logger.debug("Disappearing media leg had no facing pair, nothing to unlink.")
@@ -360,29 +382,13 @@ class Ground(Loggable):
         return tid
 
 
-    def spawn_transfer(self, leg_oid0, action, need_hangup, need_redial):
-        leg_oid0x = self.unlink_legs(leg_oid0)
-        
-        if need_hangup:
-            reason = Reason("SIP", dict(cause="200", text="Call completed elsewhere"))
-            hangup = dict(type="hangup", reason=[ reason ])
-            self.legs_by_oid[leg_oid0x].do(hangup)
+    def hangup_transferring_leg(self, leg_oid):
+        leg_oidx = self.unlink_legs(leg_oid)
 
-        dst = None
+        reason = Reason("SIP", dict(cause="200", reason="Call was transferred"))
+        hangup = dict(type="hangup", reason=[ reason ])
         
-        if need_redial:
-            dst = dict(type="redial")
-        
-        leg = self.legs_by_oid[leg_oid0]
-        forward_session = leg.session_state.party_session or leg.session_state.pending_party_session
-        backward_session = leg.session_state.ground_session
-        
-        if forward_session:
-            dst = dict(type="session_negotiator", forward_session=forward_session, backward_session=backward_session, next_dst=dst)
-        
-        call_info = self.switch.make_call_info()
-        dial = dict(action, type="dial", dst=dst, ctx={}, call_info=call_info)
-        self.spawn(leg_oid0, dial)
+        self.legs_by_oid[leg_oidx].do(hangup)
 
 
     def transfer_leg(self, leg_oid0, action):
@@ -391,6 +397,8 @@ class Ground(Loggable):
             
         tid = action.pop("transfer_id")
         t = self.transfers_by_id.pop(tid)
+        
+        dst = None
         
         if t["type"] == "attended":
             leg_oid1 = t.get("leg_oid")
@@ -402,25 +410,36 @@ class Ground(Loggable):
             
             self.logger.info("Attended transfer %s between legs %s and %s." % (tid, leg_oid0, leg_oid1))
         
-            leg_oid0x = self.unlink_legs(leg_oid0)
-            self.legs_by_oid[leg_oid0x].do(dict(type="hangup"))
+            self.hangup_transferring_leg(leg_oid1)
         
-            leg_oid1x = self.unlink_legs(leg_oid1)
-            self.legs_by_oid[leg_oid1x].do(dict(type="hangup"))
-        
-            self.link_legs(leg_oid0, leg_oid1)
-            # TODO: correct media, and ringing state!
+            dst = dict(type="grab", leg_oid=leg_oid1)
         elif t["type"] == "blind":
             self.logger.info("Blind transfer %s from leg %s." % (tid, leg_oid0))
-            self.spawn_transfer(leg_oid0, action, need_hangup=True, need_redial=True)
+            dst = dict(type="redial")
         elif t["type"] == "pickup":
             self.logger.info("Pickup %s from leg %s." % (tid, leg_oid0))
-            self.spawn_transfer(leg_oid0, action, need_hangup=True, need_redial=False)
+            dst = None
         elif t["type"] == "deflect":
             self.logger.info("Deflect %s from leg %s." % (tid, leg_oid0))
-            self.spawn_transfer(leg_oid0, action, need_hangup=False, need_redial=False)
+            dst = None
         else:
             self.logger.error("Ignoring unknown transfer type: %s!" % t['type'])
+            return
+
+        self.hangup_transferring_leg(leg_oid0)
+
+        leg = self.legs_by_oid[leg_oid0]
+        forward_session = leg.session_state.party_session or leg.session_state.pending_party_session
+        backward_session = leg.session_state.ground_session
+        
+        if forward_session:
+            # TODO; if there is a pending forward offer, we need to know that, so we send and
+            # answer backwards. Maybe the empty backward session is a good sign for this?
+            dst = dict(type="session_negotiator", forward_session=forward_session, backward_session=backward_session, next_dst=dst)
+        
+        call_info = self.switch.make_call_info()
+        dial = dict(action, type="dial", dst=dst, ctx={}, call_info=call_info)
+        self.spawn(leg_oid0, dial)
             
 
     def select_hop_slot(self, next_uri):
@@ -600,10 +619,10 @@ class Leg(GroundDweller):
             return True
     
     
-    def get_channel_count(self):
-        gs = self.session_state.ground_session
-        
-        return len(gs["channels"]) if gs else 0
+    def get_potential_channel_count(self):
+        ss = self.session_state
+        sessions = (ss.ground_session, ss.pending_ground_session, ss.party_session, ss.pending_party_session)
+        return max(len(s["channels"]) if s else 0 for s in sessions)
         
 
     def forward(self, action):
