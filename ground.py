@@ -41,6 +41,7 @@ class Ground(Loggable):
             self.targets_by_source.pop(linked_leg_oid)
             
         # And clean up the anchor infos, too
+        # TODO: maybe the Party should do this explicitly
         anchored_leg_oid = self.leg_oids_by_anchor.pop(leg_oid, None)
         if anchored_leg_oid:
             self.leg_oids_by_anchor.pop(anchored_leg_oid)
@@ -105,13 +106,20 @@ class Ground(Loggable):
 
 
     def collapse_legs(self, leg_oid0, leg_oid1, queue0=None, queue1=None):
-        # It is possible that some legs are already unlinked, it happens with
+        # It is possible that legs on one side are already unlinked, it happens with
         # transfers. So in that case there will be no relinking.
         
         self.logger.info("Collapsing legs.")
         
         # Do this explicitly, because breaking it down to two unlinks and a link
         # may unnecessarily remove and recreate contexts.
+        # Note that the inner legs must be anchored at this point. So if there
+        # are no media legs on the collapsed legs, then any outside media
+        # leg will continue to face iff they face now.
+
+        # Remove the anchor in the middle explicitly, as both legs will disappear
+        if self.leg_oids_by_anchor.pop(leg_oid0) != leg_oid1 or self.leg_oids_by_anchor.pop(leg_oid1) != leg_oid0:
+            raise Exception("Leg %s was not anchored to %s!" % (leg_oid0, leg_oid1))
         
         for ci in range(self.common_channel_count(leg_oid0, leg_oid1)):
             # Source, Target, Previous, Next

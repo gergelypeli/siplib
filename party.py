@@ -278,13 +278,13 @@ class Bridge(Party):
         self.ground.legs_unanchored(self.legs[0].oid, self.legs[oli].oid)
 
 
-    def collapse_unanchored_legs(self, queue0, queue1):
+    def collapse_anchored_legs(self, queue0, queue1):
         # Let other Party-s still use media once we're no longer present.
-        if self.is_anchored:
-            raise Exception("Legs still anchored!")
+        if not self.is_anchored:
+            raise Exception("Legs to collapse are not anchored!")
         
         if len(self.legs) != 2:
-            raise Exception("Not two legs were unanchored!")
+            raise Exception("Not two legs were anchored!")
         
         oli = max(self.legs.keys())
         self.ground.collapse_legs(self.legs[0].oid, self.legs[oli].oid, queue0, queue1)
@@ -358,8 +358,8 @@ class Bridge(Party):
                         self.anchor_outgoing_leg(oli)
             elif type == "hangup":
                 if self.is_anchored:
-                    self.unanchor_legs()
-                    self.collapse_unanchored_legs([], [ action ])
+                    #self.unanchor_legs()
+                    self.collapse_anchored_legs([], [ action ])
                 else:
                     self.hangup_outgoing_legs()
                     self.remove_leg(0)
@@ -381,8 +381,8 @@ class Bridge(Party):
                 # cleanup rejects with 500 always.
                 
                 if self.is_anchored:
-                    self.unanchor_legs()
-                    self.collapse_unanchored_legs([ action ], [])
+                    #self.unanchor_legs()
+                    self.collapse_anchored_legs([ action ], [])
                 else:
                     self.remove_leg(li)
 
@@ -399,8 +399,8 @@ class Bridge(Party):
                 self.accept_incoming_leg(action)  # must use this to set flags properly
             elif type == "hangup":
                 if self.is_anchored:
-                    self.unanchor_legs()
-                    self.collapse_unanchored_legs([ action ], [])
+                    #self.unanchor_legs()
+                    self.collapse_anchored_legs([ action ], [])
                 else:
                     self.remove_leg(li)
                     # Somebody was lazy here, dialed out, even if an accept came in it
@@ -446,13 +446,14 @@ class Routing(Bridge):
 
         
     def anchor_outgoing_leg(self, li):
-        # We overload this method completely. Skip the anchoring thing in Bridge,
-        # because we collapse instead of unanchoring. And the queued actions will
-        # only be sent once we're out of the game.
+        actions = self.queued_leg_actions[li]
+        self.queued_leg_actions[li] = []
         
-        self.logger.debug("Routing anchored to outgoing leg %d." % li)
-        self.hangup_outgoing_legs(except_li=li)
-        self.collapse_unanchored_legs(self.queued_leg_actions[li], [])
+        Bridge.anchor_outgoing_leg(self, li)
+        
+        #self.logger.debug("Routing anchored to outgoing leg %d." % li)
+        #self.hangup_outgoing_legs(except_li=li)
+        self.collapse_anchored_legs(actions, [])
         
         # After having no legs, may_finish will terminate us as soon as it can
 
@@ -626,8 +627,8 @@ class RedialBridge(Bridge):
                 self.stop_ringback()
                 
                 self.logger.info("Not forwarding accept action, collapsing instead.")
-                self.unanchor_legs()
-                self.collapse_unanchored_legs([], [])
+                #self.unanchor_legs()
+                self.collapse_anchored_legs([], [])
                 return
 
             elif type == "reject":
@@ -705,9 +706,9 @@ class SessionNegotiatorBridge(Bridge):
                     if self.is_backward:
                         if self.simply(session) == self.simply(self.forward_session):
                             self.logger.info("Got the same forward answer, completing.")
-                            self.unanchor_legs()
+                            #self.unanchor_legs()
                             actions = [ action ] if type != "session" else []
-                            self.collapse_unanchored_legs([], actions)
+                            self.collapse_anchored_legs([], actions)
                             return
                         else:
                             self.logger.info("Got different forward answer, reoffering.")
@@ -724,9 +725,9 @@ class SessionNegotiatorBridge(Bridge):
                     else:
                         if self.simply(session) == self.simply(self.backward_session):
                             self.logger.info("Got the same backward answer, completing.")
-                            self.unanchor_legs()
+                            #self.unanchor_legs()
                             actions = [ action ] if type != "session" else []
-                            self.collapse_unanchored_legs(actions, [])
+                            self.collapse_anchored_legs(actions, [])
                             return
                         else:
                             self.logger.info("Got different backward answer, reoffering.")
