@@ -28,22 +28,24 @@ class Party(GroundDweller):
             
     def make_leg(self, li):
         return self.ground.make_leg(proxy(self), li)
-        
-        
-    def add_media_thing(self, type, mgw_sid):
-        i = len(self.media_things)
+
+
+    def make_media_thing(self, type, mgw_sid):
         thing = self.ground.make_media_thing(type)
-        
-        thing.set_oid(self.oid.add("media", i))
         thing.set_mgw(mgw_sid)
-        thing.create()
         
-        self.media_things.append(thing)
         return thing
+            
         
-        
-    def remove_media_thing(self):
-        self.media_things.pop()
+    def set_media_thing(self, ci, thing):
+        if thing:
+            thing.set_oid(self.oid.add("media", ci))
+            thing.create()
+            
+        while ci >= len(self.media_things):
+            self.media_things.append(None)
+            
+        self.media_things[ci] = thing
         
         
     def start(self):
@@ -526,10 +528,10 @@ class RecordingBridge(Bridge):
             mgw_affinity = answer_channel.get("mgw_affinity")
             mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
 
-            thing = self.add_media_thing("record", mgw_sid)
-            
-            self.legs[0].add_media_leg(thing.get_leg(0))
-            self.legs[1].add_media_leg(thing.get_leg(1))
+            thing = self.make_media_thing("record", mgw_sid)
+            self.set_media_thing(i, thing)
+            self.legs[0].set_media_leg(i, thing.get_leg(0))
+            self.legs[1].set_media_leg(i, thing.get_leg(1))
             
             format = ("L16", 8000, 1, None)
             thing.modify(dict(filename="recorded.wav", format=format, record=True))
@@ -587,9 +589,9 @@ class RedialBridge(Bridge):
             mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
             channel["mgw_affinity"] = mgw_sid
             
-            media_thing = self.add_media_thing("player", mgw_sid)
-
-            self.legs[0].add_media_leg(media_thing.get_leg(0))
+            media_thing = self.make_media_thing("player", mgw_sid)
+            self.set_media_thing(0, media_thing)
+            self.legs[0].set_media_leg(0, media_thing.get_leg(0))
         
         if media_thing and self.is_ringing and not self.is_playing:
             self.is_playing = True
@@ -606,8 +608,8 @@ class RedialBridge(Bridge):
             self.is_playing = False
 
         if media_thing:
-            self.legs[0].remove_media_leg()
-            self.remove_media_thing()
+            self.legs[0].set_media_leg(0, None)
+            self.set_media_thing(0, None)
             
         
     def do_leg(self, li, action):

@@ -111,15 +111,15 @@ class SessionHelper:
             self.logger.debug("Making media thing for channel %d" % i)
             am = self.allocated_media[i]
             
-            mt = self.add_media_thing("rtp", am.mgw_sid)
-            
-            self.leg.add_media_leg(mt.get_leg(0))
+            mt = self.make_media_thing("rtp", am.mgw_sid)
+            self.set_media_thing(i, mt)
+            self.leg.set_media_leg(i, mt.get_leg(0))
             mt.event_slot.plug(self.media_thing_notified, mti=i)
             
         # Delete (currently can only happen on shutdown, not on session exchange)
         for i in reversed(range(channel_count, media_thing_count)):
-            self.leg.remove_media_leg()
-            self.remove_media_thing()
+            self.leg.set_media_leg(i, None)
+            self.set_media_thing(i, None)
             
         # Modify
         for i in range(channel_count):

@@ -48,9 +48,10 @@ class TestEndpoint(PlannedEndpoint):
         mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
 
         channel["mgw_affinity"] = mgw_sid
-        media_thing = self.add_media_thing("player", mgw_sid)
+        media_thing = self.make_media_thing("player", mgw_sid)
+        self.set_media_thing(0, media_thing)
         
-        self.leg.add_media_leg(media_thing.get_leg(0))
+        self.leg.set_media_leg(0, media_thing.get_leg(0))
     
 
     def update_session(self, session):

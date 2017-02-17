@@ -649,37 +649,25 @@ class Leg(GroundDweller):
         
         
     def may_finish(self):
-        while self.media_legs:
-            self.remove_media_leg()
+        for i in range(len(self.media_legs)):
+            self.set_media_leg(i, None)
 
         self.logger.debug("Leg is finished.")
         self.ground.remove_leg(self.oid)
 
 
-    def add_media_leg(self, media_leg):
-        ci = len(self.media_legs)
-        self.logger.debug("Adding media leg %s." % ci)
-
-        self.media_legs.append(media_leg)
-        #media_leg.set_oid(self.oid.add("channel", ci))
-        
-        # By this the media leg must be added, and set up, so in case Ground
-        # wants to immediately put it in a context, it will work.
-        self.ground.media_leg_appeared(self.oid, ci)
-        
-        return ci
-
-
-    def remove_media_leg(self):
-        ci = len(self.media_legs) - 1
-        self.logger.debug("Deleting media leg %s." % ci)
-        
-        # Must call this when everything is still in place
-        self.ground.media_leg_disappearing(self.oid, ci)
-        self.media_legs.pop()
-        #old.delete()
-        
-        return ci
+    def set_media_leg(self, ci, media_leg):
+        if media_leg:
+            self.logger.debug("Adding media leg %s." % ci)
+            while ci >= len(self.media_legs):
+                self.media_legs.append(None)
+                
+            self.media_legs[ci] = media_leg
+            self.ground.media_leg_appeared(self.oid, ci)
+        else:
+            self.logger.debug("Deleting media leg %s." % ci)
+            self.ground.media_leg_disappearing(self.oid, ci)
+            self.media_legs[ci] = None
         
 
     def get_media_leg(self, ci):
