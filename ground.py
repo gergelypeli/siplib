@@ -16,7 +16,6 @@ class Ground(Loggable):
         self.targets_by_source = {}  # TODO: rename!
         self.context_count = 0
         self.parties_by_oid = {}
-        self.leg_oids_by_anchor = {}
         self.transfers_by_id = {}
         self.transfer_count = 0
         
@@ -40,13 +39,7 @@ class Ground(Loggable):
         if linked_leg_oid:
             self.targets_by_source.pop(linked_leg_oid)
             
-        # And clean up the anchor infos, too
-        # TODO: maybe the Party should do this explicitly
-        anchored_leg_oid = self.leg_oids_by_anchor.pop(leg_oid, None)
-        if anchored_leg_oid:
-            self.leg_oids_by_anchor.pop(anchored_leg_oid)
-        
-        
+
     def common_channel_count(self, leg_oid0, leg_oid1):
         scc = self.legs_by_oid[leg_oid0].get_potential_channel_count()
         tcc = self.legs_by_oid[leg_oid1].get_potential_channel_count()
@@ -117,14 +110,16 @@ class Ground(Loggable):
         # are no media legs on the collapsed legs, then any outside media
         # leg will continue to face iff they face now.
 
-        # Remove the anchor in the middle explicitly, as both legs will disappear
-        if self.leg_oids_by_anchor.pop(leg_oid0) != leg_oid1 or self.leg_oids_by_anchor.pop(leg_oid1) != leg_oid0:
+        leg0 = self.legs_by_oid[leg_oid0]
+        leg1 = self.legs_by_oid[leg_oid1]
+
+        if leg0.get_anchored_leg_oid() != leg_oid1 or leg1.get_anchored_leg_oid() != leg_oid0:
             raise Exception("Leg %s was not anchored to %s!" % (leg_oid0, leg_oid1))
         
         for ci in range(self.common_channel_count(leg_oid0, leg_oid1)):
             # Source, Target, Previous, Next
-            smleg = self.legs_by_oid[leg_oid0].get_media_leg(ci)
-            tmleg = self.legs_by_oid[leg_oid1].get_media_leg(ci)
+            smleg = leg0.get_media_leg(ci)
+            tmleg = leg1.get_media_leg(ci)
             
             if not smleg and not tmleg:
                 self.logger.info("Channel %d is unaffected." % ci)
@@ -225,15 +220,6 @@ class Ground(Loggable):
 
 
     def legs_anchored(self, leg_oid0, leg_oid1):
-        if leg_oid0 in self.leg_oids_by_anchor:
-            raise Exception("Leg already anchored: %s" % leg_oid0)
-            
-        if leg_oid1 in self.leg_oids_by_anchor:
-            raise Exception("Leg already anchored: %s" % leg_oid1)
-            
-        self.leg_oids_by_anchor[leg_oid0] = leg_oid1
-        self.leg_oids_by_anchor[leg_oid1] = leg_oid0
-
         for ci in range(self.common_channel_count(leg_oid0, leg_oid1)):
             smleg = self.find_backing_media_leg(leg_oid1, ci)
             tmleg = self.find_backing_media_leg(leg_oid0, ci)
@@ -241,7 +227,6 @@ class Ground(Loggable):
             if smleg and tmleg:
                 self.logger.info("Media legs became facing after anchoring, must link.")
                 self.link_media_legs(smleg, tmleg)
-
 
 
     def legs_unanchored(self, leg_oid0, leg_oid1):
@@ -253,14 +238,6 @@ class Ground(Loggable):
                 self.logger.info("Media legs became separated after unanchoring, must unlink.")
                 self.unlink_media_legs(smleg, tmleg)
 
-        x = self.leg_oids_by_anchor.pop(leg_oid0, None)
-        if x != leg_oid1:
-            raise Exception("Leg %s was not anchored to %s!" % (leg_oid0, leg_oid1))
-
-        y = self.leg_oids_by_anchor.pop(leg_oid1, None)
-        if y != leg_oid0:
-            raise Exception("Leg %s was not anchored to %s!" % (leg_oid1, leg_oid0))
-        
         
     def find_facing_media_leg(self, lid, ci):
         # Opposite facing channel, may be our pair
@@ -279,10 +256,10 @@ class Ground(Loggable):
         
     def find_backing_media_leg(self, plid, ci):
         # Same facing channel, may shadow us
-        lid = self.leg_oids_by_anchor.get(plid)
+        lid = self.legs_by_oid[plid].get_anchored_leg_oid()
         if not lid:
             return None
-                
+
         leg = self.legs_by_oid[lid]
         ml = leg.get_media_leg(ci)
             
@@ -595,6 +572,15 @@ class Leg(GroundDweller):
         
         self.media_legs = []
         self.session_state = SessionState()
+        self.anchored_leg_oid = None
+        
+        
+    def set_anchored_leg_oid(self, oid):
+        self.anchored_leg_oid = oid
+        
+        
+    def get_anchored_leg_oid(self):
+        return self.anchored_leg_oid
 
 
     def process_party_session(self, session):
@@ -649,8 +635,9 @@ class Leg(GroundDweller):
         
         
     def may_finish(self):
-        for i in range(len(self.media_legs)):
-            self.set_media_leg(i, None)
+        # TODO: shall we remove media things forcibly?
+        #for i in range(len(self.media_legs)):
+        #    self.set_media_leg(i, None)
 
         self.logger.debug("Leg is finished.")
         self.ground.remove_leg(self.oid)

@@ -11,7 +11,8 @@ class Party(GroundDweller):
         GroundDweller.__init__(self)
         
         self.finished_slot = zap.Slot()
-        self.media_things = []
+        self.media_thing_dicts = []
+        self.media_link_dicts = []
 
 
     def set_call_info(self, call_info):
@@ -37,15 +38,72 @@ class Party(GroundDweller):
         return thing
             
         
-    def set_media_thing(self, ci, thing):
-        if thing:
-            thing.set_oid(self.oid.add("media", ci))
-            thing.create()
+    def add_media_thing(self, ci, name, thing):
+        while ci >= len(self.media_thing_dicts):
+            self.media_thing_dicts.append({})
+            self.media_link_dicts.append({})
+
+        d = self.media_thing_dicts[ci]
+        thing.set_oid(self.oid.add("media", "%d:%s" % (ci, name)))
+        thing.create()
             
-        while ci >= len(self.media_things):
-            self.media_things.append(None)
+        d[name] = thing
+
+
+    def remove_media_thing(self, ci, name):
+        d = self.media_thing_dicts[ci]
+        d.pop(name)
+
+
+    def get_media_thing(self, ci, name):
+        if ci >= len(self.media_thing_dicts):
+            return None
             
-        self.media_things[ci] = thing
+        d = self.media_thing_dicts[ci]
+        
+        return d.get(name)
+
+        
+    def link_media_things(self, ci, name0, li0, name1, li1):
+        d = self.media_thing_dicts[ci]
+        l = self.media_link_dicts[ci]
+        
+        slot0 = (name0, li0)
+        slot1 = (name1, li1)
+        
+        if slot0 in l or slot1 in l:
+            raise Exception("Media things already linked!")
+            
+        l[slot0] = slot1
+        l[slot1] = slot0
+        
+        # Legacy update
+        if not name0 and name1:
+            self.get_leg(li0).set_media_leg(ci, d[name1].get_leg(li1))
+
+        if not name1 and name0:
+            self.get_leg(li1).set_media_leg(ci, d[name0].get_leg(li0))
+
+
+    def unlink_media_things(self, ci, name0, li0, name1, li1):
+        #d = self.media_thing_dicts[ci]
+        l = self.media_link_dicts[ci]
+        
+        slot0 = (name0, li0)
+        slot1 = (name1, li1)
+        
+        if l[slot0] != slot1 or l[slot1] != slot0:
+            raise Exception("Media things not linked!")
+            
+        l.pop(slot0)
+        l.pop(slot1)
+        
+        # Legacy update
+        if not name0 and name1:
+            self.get_leg(li0).set_media_leg(ci, None)
+
+        if not name1 and name0:
+            self.get_leg(li1).set_media_leg(ci, None)
         
         
     def start(self):
@@ -91,6 +149,13 @@ class Endpoint(Party):
         
         Party.may_finish(self)
 
+
+    def get_leg(self, li):
+        if li == 0:
+            return self.leg
+        else:
+            raise Exception("Endpoint only has one leg!")
+            
 
     def do(self, action):
         raise NotImplementedError()
@@ -200,6 +265,10 @@ class Bridge(Party):
         leg.may_finish()
 
 
+    def get_leg(self, li):
+        return self.legs[li]
+        
+
     def queue_leg_action(self, li, action):
         self.logger.debug("Queueing %s from leg %s." % (action["type"], li))
         self.queued_leg_actions[li].append(action)
@@ -261,9 +330,15 @@ class Bridge(Party):
         self.logger.debug("Anchoring to outgoing leg %d." % li)
         self.hangup_outgoing_legs(except_li=li)
         
-        self.ground.legs_anchored(self.legs[0].oid, self.legs[li].oid)
+        oid0 = self.legs[0].oid
+        oid1 = self.legs[li].oid
+        
+        self.legs[0].set_anchored_leg_oid(oid1)
+        self.legs[li].set_anchored_leg_oid(oid0)
+        self.ground.legs_anchored(oid0, oid1)
+        
         self.is_anchored = True
-
+        
         for action in self.queued_leg_actions[li]:
             self.forward_leg(0, action)
 
@@ -276,8 +351,14 @@ class Bridge(Party):
             raise Exception("Not two legs are anchored!")
         
         self.is_anchored = False
-        oli = max(self.legs.keys())
-        self.ground.legs_unanchored(self.legs[0].oid, self.legs[oli].oid)
+        li = max(self.legs.keys())
+        
+        oid0 = self.legs[0].oid
+        oid1 = self.legs[li].oid
+        
+        self.ground.legs_unanchored(oid0, oid1)
+        self.legs[0].set_anchored_leg_oid(None)
+        self.legs[li].set_anchored_leg_oid(None)
 
 
     def collapse_anchored_legs(self, queue0, queue1):
@@ -519,7 +600,7 @@ class RecordingBridge(Bridge):
         
         
     def hack_media(self, li, answer):
-        old = len(self.media_things)
+        old = len(self.media_thing_dicts)
         new = len(answer["channels"])
         
         for i in range(old, new):
@@ -529,9 +610,12 @@ class RecordingBridge(Bridge):
             mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
 
             thing = self.make_media_thing("record", mgw_sid)
-            self.set_media_thing(i, thing)
-            self.legs[0].set_media_leg(i, thing.get_leg(0))
-            self.legs[1].set_media_leg(i, thing.get_leg(1))
+            self.add_media_thing(i, "rec", thing)
+            self.link_media_things(i, None, 0, "rec", 0)
+            self.link_media_things(i, None, 1, "rec", 1)
+            #self.set_media_thing(i, thing)
+            #self.legs[0].set_media_leg(i, thing.get_leg(0))
+            #self.legs[1].set_media_leg(i, thing.get_leg(1))
             
             format = ("L16", 8000, 1, None)
             thing.modify(dict(filename="recorded.wav", format=format, record=True))
@@ -574,7 +658,7 @@ class RedialBridge(Bridge):
         
         
     def play_ringback(self):
-        media_thing = self.media_things[0] if self.media_things else None
+        media_thing = self.get_media_thing(0, "ring")
         ss = self.legs[1].session_state
 
         # We may not get the answer until the call is accepted
@@ -590,8 +674,10 @@ class RedialBridge(Bridge):
             channel["mgw_affinity"] = mgw_sid
             
             media_thing = self.make_media_thing("player", mgw_sid)
-            self.set_media_thing(0, media_thing)
-            self.legs[0].set_media_leg(0, media_thing.get_leg(0))
+            self.add_media_thing(0, "ring", media_thing)
+            self.link_media_things(0, None, 0, "ring", 0)
+            #self.set_media_thing(0, media_thing)
+            #self.legs[0].set_media_leg(0, media_thing.get_leg(0))
         
         if media_thing and self.is_ringing and not self.is_playing:
             self.is_playing = True
@@ -601,15 +687,17 @@ class RedialBridge(Bridge):
         
         
     def stop_ringback(self):
-        media_thing = self.media_things[0] if self.media_things else None
+        media_thing = self.get_media_thing(0, "ring")
 
         if self.is_playing:
             self.logger.info("Stopping artificial ringback tone.")
             self.is_playing = False
 
         if media_thing:
-            self.legs[0].set_media_leg(0, None)
-            self.set_media_thing(0, None)
+            #self.legs[0].set_media_leg(0, None)
+            self.unlink_media_things(0, None, 0, "ring", 0)
+            self.remove_media_thing(0, "ring")
+            #self.set_media_thing(0, None)
             
         
     def do_leg(self, li, action):

@@ -104,7 +104,7 @@ class SessionHelper:
             raise Exception("Channel count mismatch!")
             
         channel_count = len(local_channels)
-        media_thing_count = len(self.media_things)
+        media_thing_count = len(self.media_thing_dicts)
 
         # Create
         for i in range(media_thing_count, channel_count):
@@ -112,20 +112,23 @@ class SessionHelper:
             am = self.allocated_media[i]
             
             mt = self.make_media_thing("rtp", am.mgw_sid)
-            self.set_media_thing(i, mt)
-            self.leg.set_media_leg(i, mt.get_leg(0))
+            self.add_media_thing(i, "net", mt)
+            self.link_media_things(i, None, 0, "net", 0)
+            #self.set_media_thing(i, mt)
+            #self.leg.set_media_leg(i, mt.get_leg(0))
             mt.event_slot.plug(self.media_thing_notified, mti=i)
             
         # Delete (currently can only happen on shutdown, not on session exchange)
         for i in reversed(range(channel_count, media_thing_count)):
-            self.leg.set_media_leg(i, None)
-            self.set_media_thing(i, None)
+            #self.leg.set_media_leg(i, None)
+            self.unlink_media_things(i, None, 0, "net", 0)
+            self.remove_media_thing(i, "net")
             
         # Modify
         for i in range(channel_count):
             lc = local_channels[i]
             rc = remote_channels[i]
-            mt = self.media_things[i]
+            mt = self.get_media_thing(i, "net")
             am = self.allocated_media[i]
             
             params = {

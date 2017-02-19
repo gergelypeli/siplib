@@ -215,8 +215,9 @@ class SipEndpoint(Endpoint, SessionHelper):
                 return
         
             elif type == "tone":
-                if self.media_things and action.get("name"):
-                    self.media_things[0].notify("tone", dict(name=action["name"]))
+                mt = self.get_media_thing(0, "net")
+                if mt and action.get("name"):
+                    mt.notify("tone", dict(name=action["name"]))
                     
                 return
 

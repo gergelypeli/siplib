@@ -49,9 +49,9 @@ class TestEndpoint(PlannedEndpoint):
 
         channel["mgw_affinity"] = mgw_sid
         media_thing = self.make_media_thing("player", mgw_sid)
-        self.set_media_thing(0, media_thing)
-        
-        self.leg.set_media_leg(0, media_thing.get_leg(0))
+        self.add_media_thing(0, "gen", media_thing)
+        self.link_media_things(0, None, 0, "gen", 0)
+        #self.leg.set_media_leg(0, media_thing.get_leg(0))
     
 
     def update_session(self, session):
@@ -74,14 +74,14 @@ class TestEndpoint(PlannedEndpoint):
                 c["formats"] = [ f for f in c["formats"] if f["encoding"] in (encoding, "telephone-event") ]
                 c["send"], c["recv"] = c["recv"], c["send"]
 
-            if not self.media_things:
+            if not self.media_thing_dicts:
                 self.add_media(answer["channels"][0])
         
             return answer
         elif session.is_accept():
             self.logger.info("TestEndpoint received a session accept.")
             
-            if not self.media_things:
+            if not self.media_thing_dicts:
                 self.add_media(session["channels"][0])
                 
             return None
@@ -92,7 +92,7 @@ class TestEndpoint(PlannedEndpoint):
         
         
     def idle(self):
-        mt = self.media_things[0] if self.media_things else None
+        mt = self.get_media_thing(0, "gen")
         
         if mt:
             self.logger.info("Idle, fading in media.")
@@ -121,7 +121,7 @@ class TestEndpoint(PlannedEndpoint):
             else:
                 self.logger.critical("Don't know what to do with %s, continuing..." % type)
         
-        mt = self.media_things[0] if self.media_things else None
+        mt = self.get_media_thing(0, "gen")
         
         if mt:
             self.logger.info("Fading out media.")
