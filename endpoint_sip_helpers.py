@@ -29,12 +29,8 @@ class SessionHelper:
         
         # Allocate
         for i in range(allocated_count, channel_count):
-            local_channel = local_channels[i]
-            ctype = local_channel["type"]
-            mgw_affinity = local_channel.get("mgw_affinity")
-            self.logger.debug("Allocating local media address for channel %d (%s@%s)" % (i, ctype, mgw_affinity))
-            
-            mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
+            #self.logger.debug("Allocating local media address for channel %d (%s@%s)" % (i, ctype, mgw_affinity))
+            mgw_sid = self.select_gateway_sid(local_channels[i])
             local_addr = self.ground.allocate_media_address(mgw_sid)
             
             allocated_media = AllocatedMedia(mgw_sid, local_addr, {})

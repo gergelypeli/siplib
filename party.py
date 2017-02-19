@@ -35,6 +35,16 @@ class Party(GroundDweller):
         return self.ground.make_leg(proxy(self), li)
 
 
+    def select_gateway_sid(self, channel):
+        ctype = channel["type"]
+        mgw_affinity = channel.get("mgw_affinity")
+        mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
+
+        channel.setdefault("mgw_affinity", mgw_sid)
+        
+        return mgw_sid
+        
+
     def make_media_thing(self, type, mgw_sid):
         thing = self.ground.make_media_thing(type)
         thing.set_mgw(mgw_sid)
@@ -47,7 +57,7 @@ class Party(GroundDweller):
             self.media_channels.append(MediaChannel({}, {}, {}))
 
         c = self.media_channels[ci]
-        thing.set_oid(self.oid.add("media", "%d:%s" % (ci, name)))
+        thing.set_oid(self.oid.add("media", str(ci)).add(name))
         thing.create()
             
         c.things[name] = thing
@@ -114,6 +124,20 @@ class Party(GroundDweller):
         
     def get_anchored_leg(self, li):
         return None
+
+
+    def remove_leg(self, li):
+        for i, c in enumerate(self.media_channels):
+            slot0 = (None, li)
+            slot1 = c.links.get(slot0)
+            
+            if slot1:
+                name0, li0 = slot0
+                name1, li1 = slot1
+                
+                self.unlink_media_things(i, name0, li0, name1, li1)
+        
+        self.legs.pop(li).may_finish()
         
         
     def start(self):
@@ -130,6 +154,20 @@ class Party(GroundDweller):
         
 
     def may_finish(self):
+        for i, c in enumerate(self.media_channels):
+            while c.links:
+                slot0 = next(iter(c.links))
+                slot1 = c.links[slot0]
+                
+                name0, li0 = slot0
+                name1, li1 = slot1
+                
+                self.unlink_media_things(i, name0, li0, name1, li1)
+                
+            while c.things:
+                name = next(iter(c.things))
+                self.remove_media_thing(i, name)
+            
         # FIXME: hm, it's currently possible that we get here multiple times,
         # can't we do something about it?
         if self.finished_slot:
@@ -151,7 +189,7 @@ class Endpoint(Party):
         
             
     def may_finish(self):
-        self.legs.pop(0).may_finish()
+        self.remove_leg(0)
         
         Party.may_finish(self)
 
@@ -255,11 +293,6 @@ class Bridge(Party):
         self.queued_leg_actions[li] = []
         
         return li
-
-
-    def remove_leg(self, li):
-        leg = self.legs.pop(li)
-        leg.may_finish()
 
 
     def queue_leg_action(self, li, action):
@@ -601,10 +634,7 @@ class RecordingBridge(Bridge):
         new = len(answer["channels"])
         
         for i in range(old, new):
-            answer_channel = answer["channels"][i]
-            ctype = answer_channel["type"]
-            mgw_affinity = answer_channel.get("mgw_affinity")
-            mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
+            mgw_sid = self.select_gateway_sid(answer["channels"][i])
 
             thing = self.make_media_thing("record", mgw_sid)
             self.add_media_thing(i, "rec", thing)
@@ -660,12 +690,7 @@ class RedialBridge(Bridge):
     
         if not media_thing and session:
             self.logger.info("Creating media thing for artificial ringback tone.")
-            channel = session["channels"][0]
-            ctype = channel["type"]
-            mgw_affinity = channel.get("mgw_affinity")
-
-            mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
-            channel["mgw_affinity"] = mgw_sid
+            mgw_sid = self.select_gateway_sid(session["channels"][0])
             
             media_thing = self.make_media_thing("player", mgw_sid)
             self.add_media_thing(0, "ring", media_thing)

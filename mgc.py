@@ -27,6 +27,10 @@ class MediaThing(Loggable):
         self.label = None
 
 
+    def __del__(self):
+        self.delete()
+
+
     def set_mgw(self, sid):
         self.sid = sid
 
@@ -84,7 +88,7 @@ class MediaThing(Loggable):
 
     def delete(self):
         if self.is_created:
-            self.is_created = False  # Call uses this to ignore such MediaLeg-s
+            self.is_created = False
             params = {}
             self.send_request("delete_thing", params, drop_response=True)
 

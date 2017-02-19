@@ -1,4 +1,5 @@
 from weakref import proxy, WeakSet
+import datetime
 
 from format import Uri, Nameaddr, Status, AbsoluteUri, CallInfo
 from party import PlannedEndpoint, Bridge
@@ -43,11 +44,8 @@ class TestEndpoint(PlannedEndpoint):
         
         
     def add_media(self, channel):
-        ctype = channel["type"]
-        mgw_affinity = channel.get("mgw_affinity")
-        mgw_sid = self.ground.select_gateway_sid(ctype, mgw_affinity)
-
-        channel["mgw_affinity"] = mgw_sid
+        mgw_sid = self.select_gateway_sid(channel)
+        
         media_thing = self.make_media_thing("player", mgw_sid)
         self.add_media_thing(0, "gen", media_thing)
         self.link_media_things(0, None, 0, "gen", 0)
@@ -418,6 +416,9 @@ class TestController(Controller):
         
         
 class TestLine(Bridge):
+    #REC_TEMPLATE = "rec_%Y-%m-%d_%H:%M:%S.wav"
+    REC_TEMPLATE = "rec_%H:%M:%S.wav"
+
     def __init__(self, manager):
         Bridge.__init__(self)
         
@@ -505,8 +506,24 @@ class TestLine(Bridge):
         
         if type == "record":
             on = control["on"]
+            self.logger.info("Turning recording %s..." % ("on" if on else "off"))
             
-            self.logger.info("Will turn recording %s someday..." % ("on" if on else "off"))  # TODO
+            if on:
+                s = self.legs[0].session_state.ground_session
+                mgw_sid = self.select_gateway_sid(s["channels"][0])
+
+                thing = self.make_media_thing("record", mgw_sid)
+                self.add_media_thing(0, "rec", thing)
+                self.link_media_things(0, None, 0, "rec", 0)
+                self.link_media_things(0, None, 1, "rec", 1)
+            
+                format = ("L16", 8000, 1, None)
+                filename = datetime.datetime.now().strftime(self.REC_TEMPLATE)
+                thing.modify(dict(filename=filename, format=format, record=True))
+            else:
+                self.unlink_media_things(0, None, 0, "rec", 0)
+                self.unlink_media_things(0, None, 1, "rec", 1)
+                self.remove_media_thing(0, "rec")
         else:
             self.logger.error("Unknown line control type: %s!" % type)
             
