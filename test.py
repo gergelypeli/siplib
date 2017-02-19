@@ -74,14 +74,14 @@ class TestEndpoint(PlannedEndpoint):
                 c["formats"] = [ f for f in c["formats"] if f["encoding"] in (encoding, "telephone-event") ]
                 c["send"], c["recv"] = c["recv"], c["send"]
 
-            if not self.media_thing_dicts:
+            if not self.media_channels:
                 self.add_media(answer["channels"][0])
         
             return answer
         elif session.is_accept():
             self.logger.info("TestEndpoint received a session accept.")
             
-            if not self.media_thing_dicts:
+            if not self.media_channels:
                 self.add_media(session["channels"][0])
                 
             return None

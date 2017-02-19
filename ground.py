@@ -113,7 +113,7 @@ class Ground(Loggable):
         leg0 = self.legs_by_oid[leg_oid0]
         leg1 = self.legs_by_oid[leg_oid1]
 
-        if leg0.get_anchored_leg_oid() != leg_oid1 or leg1.get_anchored_leg_oid() != leg_oid0:
+        if leg0.get_anchored_leg().oid != leg_oid1 or leg1.get_anchored_leg().oid != leg_oid0:
             raise Exception("Leg %s was not anchored to %s!" % (leg_oid0, leg_oid1))
         
         for ci in range(self.common_channel_count(leg_oid0, leg_oid1)):
@@ -225,8 +225,10 @@ class Ground(Loggable):
             tmleg = self.find_backing_media_leg(leg_oid0, ci)
             
             if smleg and tmleg:
-                self.logger.info("Media legs became facing after anchoring, must link.")
+                self.logger.info("Channel %d media legs became facing after anchoring, must link." % ci)
                 self.link_media_legs(smleg, tmleg)
+            else:
+                self.logger.info("Channel %d is unaffected by anchoring." % ci)
 
 
     def legs_unanchored(self, leg_oid0, leg_oid1):
@@ -235,38 +237,41 @@ class Ground(Loggable):
             tmleg = self.find_backing_media_leg(leg_oid0, ci)
             
             if smleg and tmleg:
-                self.logger.info("Media legs became separated after unanchoring, must unlink.")
+                self.logger.info("Channel %d media legs became separated after unanchoring, must unlink." % ci)
                 self.unlink_media_legs(smleg, tmleg)
+            else:
+                self.logger.info("Channel %d is unaffected by unanchoring." % ci)
 
         
     def find_facing_media_leg(self, lid, ci):
         # Opposite facing channel, may be our pair
         plid = self.targets_by_source.get(lid)
         if not plid:
-            return None
+            return None  # not linked, can't have facing leg
                 
         pleg = self.legs_by_oid[plid]
         pml = pleg.get_media_leg(ci)
             
         if pml:
-            return pml
+            return pml  # media exists in linked leg, this is the facing one
             
-        return self.find_backing_media_leg(plid, ci)
+        return self.find_backing_media_leg(plid, ci)  # go on
         
         
     def find_backing_media_leg(self, plid, ci):
         # Same facing channel, may shadow us
-        lid = self.legs_by_oid[plid].get_anchored_leg_oid()
-        if not lid:
-            return None
+        
+        leg = self.legs_by_oid[plid].get_anchored_leg()
+        if not leg:
+            return None  # not anchored, can't have backing leg
 
-        leg = self.legs_by_oid[lid]
+        lid = leg.oid
         ml = leg.get_media_leg(ci)
             
         if ml:
-            return None
+            return None  # media exists in anchored leg, it shadows us
             
-        return self.find_facing_media_leg(lid, ci)
+        return self.find_facing_media_leg(lid, ci)  # go on
             
             
     def unlink_media_legs(self, smleg, tmleg):
@@ -570,17 +575,15 @@ class Leg(GroundDweller):
         self.owner = owner
         self.number = number
         
-        self.media_legs = []
         self.session_state = SessionState()
-        self.anchored_leg_oid = None
+
         
+    def get_media_leg(self, ci):
+        return self.owner.get_media_leg(self.number, ci)
+
         
-    def set_anchored_leg_oid(self, oid):
-        self.anchored_leg_oid = oid
-        
-        
-    def get_anchored_leg_oid(self):
-        return self.anchored_leg_oid
+    def get_anchored_leg(self):
+        return self.owner.get_anchored_leg(self.number)
 
 
     def process_party_session(self, session):
@@ -635,34 +638,8 @@ class Leg(GroundDweller):
         
         
     def may_finish(self):
-        # TODO: shall we remove media things forcibly?
-        #for i in range(len(self.media_legs)):
-        #    self.set_media_leg(i, None)
-
         self.logger.debug("Leg is finished.")
         self.ground.remove_leg(self.oid)
-
-
-    def set_media_leg(self, ci, media_leg):
-        if media_leg:
-            self.logger.debug("Adding media leg %s." % ci)
-            while ci >= len(self.media_legs):
-                self.media_legs.append(None)
-                
-            self.media_legs[ci] = media_leg
-            self.ground.media_leg_appeared(self.oid, ci)
-        else:
-            self.logger.debug("Deleting media leg %s." % ci)
-            self.ground.media_leg_disappearing(self.oid, ci)
-            self.media_legs[ci] = None
-        
-
-    def get_media_leg(self, ci):
-        return self.media_legs[ci] if ci < len(self.media_legs) else None
-
-
-    def get_media_leg_count(self):
-        return len(self.media_legs)
 
 
     def do(self, action):
