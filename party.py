@@ -15,6 +15,7 @@ class Party(GroundDweller):
         GroundDweller.__init__(self)
         
         self.finished_slot = zap.Slot()
+        self.legs = {}
         self.media_channels = []
 
 
@@ -77,11 +78,11 @@ class Party(GroundDweller):
         
         if not name0:
             c.legs[li0] = c.things[name1].get_leg(li1)
-            self.ground.media_leg_appeared(self.get_leg(li0).oid, ci)
+            self.ground.media_leg_appeared(self.legs[li0].oid, ci)
 
         if not name1:
             c.legs[li1] = c.things[name0].get_leg(li0)
-            self.ground.media_leg_appeared(self.get_leg(li1).oid, ci)
+            self.ground.media_leg_appeared(self.legs[li1].oid, ci)
 
 
     def unlink_media_things(self, ci, name0, li0, name1, li1):
@@ -97,11 +98,11 @@ class Party(GroundDweller):
         c.links.pop(slot1)
         
         if not name0:
-            self.ground.media_leg_disappearing(self.get_leg(li0).oid, ci)
+            self.ground.media_leg_disappearing(self.legs[li0].oid, ci)
             c.legs.pop(li0)
 
         if not name1:
-            self.ground.media_leg_disappearing(self.get_leg(li1).oid, ci)
+            self.ground.media_leg_disappearing(self.legs[li1].oid, ci)
             c.legs.pop(li1)
         
         
@@ -116,7 +117,12 @@ class Party(GroundDweller):
         
         
     def start(self):
-        raise NotImplementedError()
+        if self.legs:
+            raise Exception("Already started!")
+
+        self.legs[0] = self.make_leg(0)
+        
+        return self.legs[0]
 
 
     def abort(self):
@@ -143,28 +149,12 @@ class Endpoint(Party):
     def __init__(self):
         Party.__init__(self)
         
-        self.leg = None
-        
             
-    def start(self):
-        self.leg = self.make_leg(0)
-        
-        return self.leg
-
-    
     def may_finish(self):
-        self.leg.may_finish()
-        self.leg = None
+        self.legs.pop(0).may_finish()
         
         Party.may_finish(self)
 
-
-    def get_leg(self, li):
-        if li == 0:
-            return self.leg
-        else:
-            raise Exception("Endpoint only has one leg!")
-            
 
     def do(self, action):
         raise NotImplementedError()
@@ -175,7 +165,7 @@ class Endpoint(Party):
 
 
     def forward(self, action):
-        self.leg.forward(action)
+        self.legs[0].forward(action)
 
 
     def dial(self, src, session=None):
@@ -191,7 +181,7 @@ class Endpoint(Party):
 
         
     def process_transfer(self, action):
-        self.ground.transfer_leg(self.leg.oid, action)
+        self.ground.transfer_leg(self.legs[0].oid, action)
         
 
 class PlannedEndpoint(zap.Planned, Endpoint):
@@ -241,7 +231,6 @@ class Bridge(Party):
         Party.__init__(self)
         
         self.leg_count = 0
-        self.legs = {}
         self.queued_leg_actions = {}
 
         self.is_ringing = False  # if a ring action was sent to the incoming leg
@@ -250,12 +239,11 @@ class Bridge(Party):
         
             
     def start(self):
-        if self.legs:
-            raise Exception("Already started!")
-            
-        li = self.add_leg()
+        leg = Party.start(self)
         
-        return self.legs[li]
+        self.leg_count = 1
+        
+        return leg
 
     
     def add_leg(self):
@@ -273,10 +261,6 @@ class Bridge(Party):
         leg = self.legs.pop(li)
         leg.may_finish()
 
-
-    def get_leg(self, li):
-        return self.legs[li]
-        
 
     def queue_leg_action(self, li, action):
         self.logger.debug("Queueing %s from leg %s." % (action["type"], li))

@@ -156,22 +156,7 @@ class SessionHelper:
 
 
     def process_remote_session(self, remote_session):
-        #if sdp is None and is_answer is None:
-        #    return None  # no session to process
-            
-        #remote_session = self.sdp_parser.parse(sdp, is_answer)
-        #result = self.leg.session_state.set_party_session(remote_session)
-        
-        #if result in (SessionState.IGNORE_UNEXPECTED, SessionState.IGNORE_RESOLVED, SessionState.IGNORE_STALE):
-        #    self.logger.info("Won't process incoming session: %s." % result)
-        #    return #None
-        #elif result in (SessionState.REJECT_DUPLICATE, SessionState.REJECT_COLLIDING):
-        #    self.logger.error("Can't process incoming session: %s!" % result)
-        #    # TODO: let the offerer know if it was just a collision
-        #    # FIXME: and now what?
-        #    return #None
-        
-        local_session = self.leg.session_state.pending_ground_session  # get_ground_session()
+        local_session = self.legs[0].session_state.pending_ground_session  # get_ground_session()
         
         if remote_session.is_offer():
             self.add_remote_info(remote_session)
@@ -181,33 +166,10 @@ class SessionHelper:
             self.deallocate_local_media(local_session)
         elif remote_session.is_reject():
             self.deallocate_local_media(local_session)
-
-        #return remote_session
             
     
     def process_local_session(self, local_session):
-        # Results:
-        #   None, None  - nothing to do
-        #   sdp, False  - offer
-        #   sdp, True   - accept
-        #   None, False - query
-        #   None, True  - reject
-        #if not local_session:
-        #    return None, None
-            
-        #result = self.leg.session_state.set_ground_session(local_session)
-        
-        #if result in (SessionState.IGNORE_UNEXPECTED, SessionState.IGNORE_RESOLVED, SessionState.IGNORE_STALE):
-        #    self.logger.info("Won't send outgoing session: %s." % result)
-        #    return# None, None
-        #elif result in (SessionState.REJECT_DUPLICATE, SessionState.REJECT_COLLIDING):
-        #    self.logger.warning("Can't send outgoing session: %s!" % result)
-        #    # TODO: let the offerer know if it was just a collision
-        #    action = dict(type="session", session=Session.make_reject())
-        #    self.forward(action)
-        #    return# None, None
-        
-        remote_session = self.leg.session_state.get_party_session()
+        remote_session = self.legs[0].session_state.get_party_session()
         
         if local_session.is_offer():
             self.allocate_local_media(local_session)
@@ -220,20 +182,12 @@ class SessionHelper:
         elif local_session.is_reject():
             pass
 
-        #sdp = self.sdp_builder.build(local_session)
-        #is_answer = local_session.is_accept() or local_session.is_reject()
-        
-        #return sdp, is_answer
-
 
     def clear_local_media(self):
         self.logger.info("Clearing local media")
         
         fake_offer = Session.make_offer(channels=[])
         fake_accept = Session.make_accept(channels=[])
-        
-        #self.leg.session_state.set_party_session(fake_offer)
-        #self.leg.session_state.set_ground_session(fake_accept)
         
         self.realize_local_media(fake_accept, fake_offer)
         self.deallocate_local_media(fake_accept)

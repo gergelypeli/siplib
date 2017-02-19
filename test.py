@@ -51,7 +51,6 @@ class TestEndpoint(PlannedEndpoint):
         media_thing = self.make_media_thing("player", mgw_sid)
         self.add_media_thing(0, "gen", media_thing)
         self.link_media_things(0, None, 0, "gen", 0)
-        #self.leg.set_media_leg(0, media_thing.get_leg(0))
     
 
     def update_session(self, session):
