@@ -334,12 +334,11 @@ class HttpLikeMessage:
 class HttpLikeStream(Loggable):
     """
     Handles sending and receiving HTTP-style messages over an asynchronous socket.
-    Reports events to its user as:
-        process - called after receiving full messages
-        disconnect - called on network errors
-        exhausted - called when the input direction is closed by the peer
-        flushed - called when the output buffer gets empty
     """
+    
+    PING = b"\r\n\r\n"
+    PONG = b"\r\n"
+    SEPARATOR = b"\r\n\r\n"
 
     def __init__(self, socket, keepalive_interval=None, message_class=HttpLikeMessage):
         Loggable.__init__(self)
@@ -348,28 +347,29 @@ class HttpLikeStream(Loggable):
         self.message_class = message_class
 
         self.outgoing_buffer = b""
-        #self.outgoing_queue = []
         self.incoming_buffer = b""
         self.incoming_message = None
+        self.just_got_pong = False
         
         self.process_slot = zap.EventSlot()
-        self.disconnect_slot = zap.Slot()
-        self.exhausted_slot = zap.Slot()
-        self.flushed_slot = zap.Slot()
 
         self.read_plug = zap.read_slot(self.socket).plug(self.readable)
         self.write_plug = None
+        self.timeout_plug = None
         
         if keepalive_interval:
-            self.time_plug = zap.time_slot(keepalive_interval, repeat=True).plug(self.keepalive)
+            self.keepalive_plug = zap.time_slot(keepalive_interval, repeat=True).plug(self.keepalive)
 
 
     def keepalive(self):
-        if not self.outgoing_buffer:
-            # Send empty lines now and then
-            self.outgoing_buffer = b"\r\n"
-            self.write_plug = zap.write_slot(self.socket).plug(self.writable)
+        self.outgoing_buffer += self.PING
+        self.writable()
+        self.timeout_plug = zap.time_slot(keepalive_interval / 2).plug(self.timeout)
 
+
+    def timeout(self):
+        self.process_slot.zap(None)
+        
 
     def writable(self):
         """Called when the socket becomes writable."""
@@ -379,7 +379,7 @@ class HttpLikeStream(Loggable):
             except IOError as e:
                 self.logger.error("Socket error while sending: %s" % e)
                 self.write_plug.unplug()
-                self.disconnect_slot.zap()
+                self.process_slot.zap(None)
                 return
 
             self.outgoing_buffer = self.outgoing_buffer[sent:]
@@ -387,8 +387,6 @@ class HttpLikeStream(Loggable):
         if not self.outgoing_buffer:
             if self.write_plug:
                 self.write_plug.unplug()
-                
-            self.flushed_slot.zap()
         else:
             if not self.write_plug:
                 self.write_plug = zap.write_slot(self.socket).plug(self.writable)
@@ -399,11 +397,24 @@ class HttpLikeStream(Loggable):
         if not self.incoming_message:
             # No header processed yet, look for the next one
 
-            while self.incoming_buffer.startswith(b"\r\n"):
-                # Found a keepalive empty line, get rid of it
-                self.incoming_buffer = self.incoming_buffer[2:]
+            while self.incoming_buffer.startswith(self.PONG):
+                # Regardless of state, it can always be a real PONG, so cancel the timeout
+                if self.timeout_plug:
+                    self.timeout_plug.unplug()
+                    self.timeout_plug = None
 
-            header, separator, rest = self.incoming_buffer.partition(b"\r\n\r\n")
+                if not self.just_got_pong:
+                    # This may actually be the first half of a PING
+                    self.just_got_pong = True
+                else:
+                    # Two consecutive PONG is a PING, we should respond to that
+                    self.just_got_pong = False
+                    self.incoming_buffer = self.incoming_buffer[4:]
+                
+                    self.outgoing_buffer += self.PONG
+                    self.writable()
+
+            header, separator, rest = self.incoming_buffer.partition(self.SEPARATOR)
 
             if separator:
                 # Found a header, find the message length
@@ -424,6 +435,7 @@ class HttpLikeStream(Loggable):
                 message = self.incoming_message
                 message.body = body
                 self.incoming_message = None
+                self.just_got_pong = False
 
                 return message
 
@@ -433,7 +445,6 @@ class HttpLikeStream(Loggable):
 
     def readable(self):
         """Called when the socket becomes readable."""
-        exhausted = False
         disconnected = False
 
         while True:
@@ -452,7 +463,6 @@ class HttpLikeStream(Loggable):
 
             if not recved:
                 self.read_plug.unplug()
-                exhausted = True
                 break
 
             self.incoming_buffer += recved
@@ -468,11 +478,8 @@ class HttpLikeStream(Loggable):
             else:
                 break
 
-        if exhausted:
-            self.exhausted_slot.zap()
-
         if disconnected:
-            self.disconnect_slot.zap()
+            self.process_slot.zap(None)
 
 
     def put_message(self, message):
