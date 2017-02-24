@@ -128,7 +128,7 @@ class TestEndpoint(PlannedEndpoint):
             self.logger.info("No media to fade out.")
             
         if type != "hangup":
-            self.forward(dict(type="hangup"))
+            self.forward(dict(type="hangup", cause=Cause.WRONG_CALL_STATE))
 
 
 class UnreachableEndpoint(TestEndpoint):

@@ -317,7 +317,8 @@ class Bridge(Party):
         for li, leg in list(self.legs.items()):
             if li not in (0, except_li):
                 self.logger.debug("Hanging up outgoing leg %s" % li)
-                leg.forward(dict(type="hangup"))
+                cause = Cause.NORMAL_CLEARING
+                leg.forward(dict(type="hangup", cause=cause))
                 self.remove_leg(li)
 
 
@@ -345,7 +346,8 @@ class Bridge(Party):
             raise Exception("Incoming leg already accepted!")
             
         self.logger.warning("Rejecting incoming leg with status %s" % (status,))
-        self.forward_leg(0, dict(type="reject", status=status))
+        cause = None  # TODO: maybe
+        self.forward_leg(0, dict(type="reject", status=status, cause=cause))
         self.remove_leg(0)
             
 
@@ -418,8 +420,9 @@ class Bridge(Party):
                 self.logger.error("Routing ended without outgoing legs!")
                 
                 if self.is_accepted:
-                    # We once sent an accept, so now we can forward the hangup
-                    self.forward_leg(0, dict(type="hangup"))
+                    # We once sent an accept, so now we can send a hangup
+                    cause = Cause.NO_ROUTE_DESTINATION
+                    self.forward_leg(0, dict(type="hangup", cause=cause))
                     self.remove_leg(0)
                 else:
                     # Havent accepted yet, so send a reject instead
@@ -739,11 +742,10 @@ class RedialBridge(Bridge):
             elif type == "reject":
                 self.stop_ringback()
                 
-                status = action.get("status") or Status.SERVER_INTERNAL_ERROR
-                reason = Reason("SIP", dict(cause=str(status.code), text=status.reason))
-
-                self.logger.info("Forwarding reject as hangup with reason %s." % (reason,))
-                action = dict(type="hangup", reason=[ reason ])
+                status = action.get("status")
+                cause = action.get("cause")
+                self.logger.info("Forwarding reject as hangup with cause %s." % (cause,))
+                action = dict(type="hangup", status=status, cause=cause)
                 
             else:
                 self.play_ringback()  # just try, maybe we have the session right

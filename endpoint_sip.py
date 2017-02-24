@@ -77,6 +77,31 @@ class SipEndpoint(Endpoint, SessionHelper):
         self.forward(dict(params, type=type))
         
         
+    def make_reasons(self, status, cause):
+        reasons = []
+        
+        if status:
+            reasons.append(Reason("SIP", dict(cause=str(status.code), text=status.reason)))
+            
+        if cause:
+            reasons.append(Reason("Q.850", dict(cause=str(cause.code), text=cause.reason)))
+            
+        return reasons
+        
+        
+    def take_reasons(self, reasons):
+        status, cause = None, None
+
+        if reasons:
+            for reason in reasons:
+                if reason.protocol == "SIP":
+                    status = Status(int(reason.params.get("cause", "500")), reason.params.get("text"))
+                elif reason.protocol == "Q.850":
+                    cause = Cause(int(reason.params.get("cause", "0")), reason.params.get("text"))
+
+        return status, cause
+
+        
     def hop_selected(self, hop, action):
         self.dst["hop"] = hop
         self.logger.debug("Retrying dial with resolved hop")
@@ -141,7 +166,7 @@ class SipEndpoint(Endpoint, SessionHelper):
                 # would be too complex for now.
                 
                 msg = Sip.request(method="CANCEL")
-                msg["reason"] = action.get("reason")
+                msg["reason"] = self.make_reasons(action.get("status"), action.get("cause"))
                 self.iuc.out_client(msg)
                 self.change_state(self.DISCONNECTING_OUT)
                 return
@@ -190,7 +215,8 @@ class SipEndpoint(Endpoint, SessionHelper):
                 status = action["status"] or Status.SERVER_INTERNAL_ERROR
             else:
                 raise Exception("Unknown action type: %s!" % type)
-                
+
+            # TODO: may also add a Reason header with the cause if any
             msg = Sip.response(status=status)
             self.iuc.out_server(msg)
             
@@ -223,7 +249,7 @@ class SipEndpoint(Endpoint, SessionHelper):
 
             elif type == "hangup":
                 msg = Sip.request(method="BYE")
-                msg["reason"] = action.get("reason")
+                msg["reason"] = self.make_reasons(action.get("status"), action.get("cause"))
                 self.send(msg)
                 self.change_state(self.DISCONNECTING_OUT)
                 return
@@ -366,7 +392,8 @@ class SipEndpoint(Endpoint, SessionHelper):
                     
                 elif method == "CANCEL":
                     self.change_state(self.DOWN)
-                    action = dict(type="hangup")
+                    status, cause = self.take_reasons(request.get("reason"))
+                    action = dict(type="hangup", status=status, cause=cause)
                     self.forward(action)
                     self.may_finish()
                     
@@ -453,7 +480,8 @@ class SipEndpoint(Endpoint, SessionHelper):
                             action = dict(type="transfer", transfer_id=tid, src=src)
                             self.forward(action)
 
-                        action = dict(type="reject", status=status)
+                        cause = None  # Eventually check Reason header
+                        action = dict(type="reject", status=status, cause=cause)
                         self.forward(action)
                         self.may_finish()
                         
@@ -523,7 +551,8 @@ class SipEndpoint(Endpoint, SessionHelper):
                 request = msg
                 self.send(Sip.response(status=Status.OK, related=request))
                 self.change_state(self.DOWN)
-                action = dict(type="hangup")
+                status, cause = self.take_reasons(request.get("reason"))
+                action = dict(type="hangup", status=status, cause=cause)
                 self.forward(action)
                 self.may_finish()
                 return

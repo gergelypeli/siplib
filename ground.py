@@ -375,8 +375,9 @@ class Ground(Loggable):
     def hangup_transferring_leg(self, leg_oid):
         leg_oidx = self.unlink_legs(leg_oid)
 
-        reason = Reason("SIP", dict(cause="200", reason="Call was transferred"))
-        hangup = dict(type="hangup", reason=[ reason ])
+        status = Status(200, "Call was transferred")
+        cause = Cause.NORMAL_CLEARING
+        hangup = dict(type="hangup", status=status, cause=cause)
         
         self.legs_by_oid[leg_oidx].do(hangup)
 

@@ -343,6 +343,37 @@ Status.DOES_NOT_EXIST_ANYWHERE = Status(604, "Does Not Exist Anywhere")
 Status.NOT_ACCEPTABLE = Status(606, "Not Acceptable")
 
 
+Cause = namedtuple("Cause", [ "code", "reason" ])
+
+Cause.UNSPECIFIED = Cause(0, "Unspecified")
+Cause.UNALLOCATED_NUMBER = Cause(1, "Unallocated number")
+Cause.NO_ROUTE_TRANSIT_NET = Cause(2, "No route to specified transit network")
+Cause.NO_ROUTE_DESTINATION = Cause(3, "No route to destination")
+Cause.NORMAL_CLEARING = Cause(16, "Normal call clearing")
+Cause.USER_BUSY = Cause(17, "User busy")
+Cause.NO_USER_RESPONSE = Cause(18, "No user responding")
+Cause.NO_ANSWER = Cause(19, "No answer from the user")
+Cause.SUBSCRIBER_ABSENT = Cause(20, "Subscriber absent")
+Cause.CALL_REJECTED = Cause(21, "Call rejected")
+Cause.NUMBER_CHANGED = Cause(22, "Number changed")
+Cause.REDIRECTION_TO_NEW_DESTINATION = Cause(23, "Redirection to new destination")
+Cause.DESTINATION_OUT_OF_ORDER = Cause(27, "Destination out of order")
+Cause.INVALID_NUMBER_FORMAT = Cause(28, "Address incomplete")
+Cause.FACILITY_REJECTED = Cause(29, "Facility rejected")
+Cause.NORMAL_UNSPECIFIED = Cause(31, "Normal")
+Cause.NORMAL_CIRCUIT_CONGESTION = Cause(34, "No circuit/channel available")
+Cause.NETWORK_OUT_OF_ORDER = Cause(38, "Network out of order")
+Cause.NORMAL_TEMPORARY_FAILURE = Cause(41, "Temporary failure")
+Cause.SWITCH_CONGESTION = Cause(42, "Switching equipment congestion")
+Cause.RESOURCE_UNAVAILABLE = Cause(47, "Resource unavailable")
+Cause.INCOMING_CALLS_BARRED_WITHIN_CUG = Cause(55, "Incoming calls barred within CUG")
+Cause.BEARERCAPABILITY_NOTAUTH = Cause(57, "Bearer capability not authorized")
+Cause.BEARERCAPABILITY_NOTAVAIL = Cause(58, "Bearer capability not presently available")
+Cause.BEARERCAPABILITY_NOTIMPL = Cause(65, "Bearer capability not implemented")
+Cause.FACILITY_NOT_IMPLEMENTED = Cause(69, "Requested facility not implemented")
+Cause.WRONG_CALL_STATE = Cause(101, "Wrong call state")
+
+
 class Rack(namedtuple("Rack", [ "rseq", "cseq", "method" ])):
     def print(self):
         return "%d %d %s" % (self.rseq, self.cseq, self.method)
