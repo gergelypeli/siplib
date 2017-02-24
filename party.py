@@ -2,7 +2,7 @@ from weakref import proxy
 from collections import namedtuple
 
 from ground import GroundDweller
-from format import Status, Reason
+from format import Status, Cause
 from sdp import Session
 import zap
 

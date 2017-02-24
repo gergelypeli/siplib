@@ -2,7 +2,7 @@ from weakref import proxy, WeakValueDictionary
 
 from sdp import Session
 from log import Loggable
-from format import Reason
+from format import Status, Cause
 
 
 class Ground(Loggable):

@@ -1,7 +1,7 @@
 import socket
 
-from async_net import TcpReconnector, TcpListener, HttpLikeStream
-from format import Hop, Addr, parse_structured_message, print_structured_message, SipLikeMessage
+from async_net import TcpReconnector, TcpListener, HttpLikeStream, HttpLikeMessage
+from format import Hop, Addr, parse_structured_message, print_structured_message
 from log import Loggable
 import zap
 import resolver
@@ -54,8 +54,8 @@ class UdpTransport(Transport):
         packet, raddr = self.socket.recvfrom(65535)
         
         header, separator, rest = packet.partition(b"\r\n\r\n")
-        message = SipLikeMessage.parse(header)
-        message.body = rest[:message.body]
+        message, content_length = HttpLikeMessage.parse(header)
+        message.body = rest[:content_length]
 
         self.recved_slot.zap(message, Addr(*raddr))
 
@@ -232,9 +232,11 @@ class TransportManager(Loggable):
             hop = hop._replace(remote_addr=raddr)
             
         self.logger.debug("Receiving via %s\n%s" % (hop, indented(message.print())))
-        
-        #sip = packet.decode()
-        params = parse_structured_message(message)
-        params.hop = hop
-        
-        self.process_slot.zap(params)
+
+        try:
+            params = parse_structured_message(message)
+        except Exception as e:
+            self.logger.error("Invalid incoming message: %s" % e)
+        else:
+            params.hop = hop
+            self.process_slot.zap(params)

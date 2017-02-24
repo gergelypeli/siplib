@@ -1,11 +1,8 @@
-from collections import namedtuple, OrderedDict
+from collections import namedtuple
 import urllib.parse
 import socket
 
 from async_net import HttpLikeMessage
-
-# TODO: use attributes instead for these
-#META_HEADER_FIELDS = [ "is_response", "method", "uri", "status", "body", "hop", "user_request", "authname" ]
 
 
 class FormatError(Exception):
@@ -799,10 +796,6 @@ class Reason(namedtuple("Reason", [ "protocol", "params" ])):
         return cls(protocol, params)
 
 
-class SipLikeMessage(HttpLikeMessage):
-    LIST_HEADER_FIELDS = [ "via", "route", "record_route", "contact" ]
-    
-    
 class Sip(dict):
     def __init__(self, is_response=None, method=None, uri=None, status=None, body=None, hop=None, related=None):
         dict.__init__(self)
@@ -852,7 +845,7 @@ def print_structured_message(msg):
     else:
         raise FormatError("Invalid structured message!")
 
-    headers = OrderedDict()
+    headers = []
     mandatory_fields = [ "from", "to", "via", "call_id", "cseq" ]  # order these nicely
     last_fields = [ f for f in [ "content_type" ] if f in msg ]
     other_fields = [ f for f in msg if f not in mandatory_fields + last_fields ]
@@ -870,10 +863,14 @@ def print_structured_message(msg):
             y = x.print()
         elif field in ("rseq", "expires", "max_forwards"):
             y = "%d" % x
-        elif field in ("contact", "route"):
-            y = [ f.print() for f in x ]
+        elif field in ("contact", "route", "record_route"):
+            for na in x:
+                headers.append((field, na.print()))
+            continue
         elif field in ("via",):
-            y = [ f.print() for f in x ]
+            for v in x:
+                headers.append((field, v.print()))
+            continue
         elif field in ("supported", "require", "allow"):
             y = ", ".join(sorted(x))  # TODO: sorted here?
         elif field in ("refer_to", "referred_by"):
@@ -884,16 +881,14 @@ def print_structured_message(msg):
             y = ", ".join(f.print() for f in x)
         elif field in ("reason",):
             y = ", ".join(f.print() for f in x)
-        else:  #elif field not in META_HEADER_FIELDS:
+        else:
             y = x
-        #else:
-        #    continue
             
-        headers[field] = y
+        headers.append((field, y))
 
     body = msg.body or b""
 
-    return SipLikeMessage(initial_line, headers, body)
+    return HttpLikeMessage(initial_line, headers, body)
 
 
 def parse_comma_separated(Item, header):
@@ -906,9 +901,8 @@ def parse_comma_separated(Item, header):
     return items
 
 
-def parse_structured_message(slm):
-    #msg = Sip()
-    parser = Parser(slm.initial_line)
+def parse_structured_message(hlm):
+    parser = Parser(hlm.initial_line)
 
     token = parser.grab_token()
     
@@ -945,15 +939,19 @@ def parse_structured_message(slm):
         
         msg = Sip.request(method=method, uri=uri, related=None)  # TODO: yepp...
 
-    for field, x in slm.headers.items():
+    for field in [ "via", "route", "record_route", "contact" ]:
+        msg[field] = []
+
+    for field, x in hlm.headers:
         # TODO: refactor a bit!
         if field in ("from", "to", "refer_to", "referred_by", "diversion"):
             y = Nameaddr.parse(Parser(x))
-        elif field in ("contact", "route"):
-            y = []
-            
-            for h in x:
-                y.extend(parse_comma_separated(Nameaddr, h))
+        elif field in ("contact", "route", "record_route"):
+            msg[field].extend(parse_comma_separated(Nameaddr, x))
+            continue
+        elif field == "via":
+            msg[field].extend(parse_comma_separated(Via, x))
+            continue
         elif field in ("www_authenticate"):
             y = WwwAuth.parse(Parser(x))
         elif field in ("authorization"):
@@ -975,8 +973,6 @@ def parse_structured_message(slm):
             y = int(x)  # TODO
         elif field == "rack":
             y = Rack.parse(Parser(x))
-        elif field == "via":
-            y = [ Via.parse(Parser(h)) for h in x ]
         elif field in ("supported", "require", "allow"):
             y = set( i.strip() for i in x.split(",") )  # TODO
         elif field in ("target_dialog", "replaces"):
@@ -985,14 +981,12 @@ def parse_structured_message(slm):
             y = parse_comma_separated(CallInfo, x)
         elif field in ("reason",):
             y = parse_comma_separated(Reason, x)
-        else:  #if field not in META_HEADER_FIELDS:
+        else:
             y = x
-        #else:
-        #    continue
             
         msg[field] = y
 
-    msg.body = slm.body
+    msg.body = hlm.body
 
     return msg
 

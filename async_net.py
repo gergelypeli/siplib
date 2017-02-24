@@ -244,25 +244,20 @@ class TcpReconnector(Reconnector):
         return s
 
 
-def parse_http_like_header(header, list_header_fields):
-    lines = header.decode().split("\r\n")
-    initial_line = None
-    headers = { field: [] for field in list_header_fields }  # TODO: auth related?
-    last_field = None
+def parse_http_like_header(blob):
+    lines = blob.decode().split("\r\n")
+    headers = []
 
     for line in lines:
-        if initial_line is None:
-            initial_line = line
+        if not headers:
+            headers.append((None, line))
             continue
             
         if line and line[0].isspace():
-            if not last_field:
+            if not headers[-1][0]:
                 raise Exception("First header is a continuation!")
                 
-            if last_field in list_header_fields:
-                headers[last_field][-1] += line
-            else:
-                headers[last_field] += line
+            headers[-1][1] += line
         else:
             field, colon, value = line.partition(":")
             if not colon:
@@ -271,40 +266,24 @@ def parse_http_like_header(header, list_header_fields):
             field = field.strip().replace("-", "_").lower()
             value = value.strip()
 
-            if field not in headers:
-                headers[field] = value
-            elif field in list_header_fields:
-                headers[field].append(value)
-            else:
-                raise Exception("Duplicate header received: %s" % field)
+            headers.append((field, value))
 
-    content_length = headers.pop("content_length", "0")
+    return headers
+
+
+def print_http_like_header(headers):
+    lines = []
     
-    try:
-        content_length = int(content_length.strip())
-    except ValueError:
-        raise Exception("Invalid content length received: %s!" % content_length)
-    
-    return initial_line, headers, content_length
+    for field, value in headers:
+        if not lines:
+            lines.append(value)
+            continue
+            
+        if len(field) > 1:
+            field = field.replace("_", "-").title()
 
+        lines.append("%s: %s" % (field, value))
 
-def print_http_like_header(initial_line, headers, content_length):
-    lines = [ initial_line ]
-    
-    for field, value in headers.items():
-        field = field.replace("_", "-").title()
-
-        if isinstance(value, list):
-            # Some header types cannot be joined into a comma separated list,
-            # such as the authorization ones, since they contain a comma themselves.
-            # So output separate headers always.
-            lines.extend(["%s: %s" % (field, v) for v in value])
-        else:
-            lines.append("%s: %s" % (field, value))
-
-    # Mandatory for TCP
-    lines.append("Content-Length: %d" % content_length)
-        
     lines.append("")
     lines.append("")
     
@@ -312,8 +291,6 @@ def print_http_like_header(initial_line, headers, content_length):
 
 
 class HttpLikeMessage:
-    LIST_HEADER_FIELDS = []
-    
     def __init__(self, initial_line=None, headers=None, body=None):
         self.initial_line = initial_line
         self.headers = headers
@@ -322,13 +299,25 @@ class HttpLikeMessage:
         
     @classmethod
     def parse(cls, header):
-        i, h, b = parse_http_like_header(header, cls.LIST_HEADER_FIELDS)
-        return cls(i, h, b)
+        initial_line = None
+        headers = []
+        content_length = 0
+        
+        for field, value in parse_http_like_header(header):
+            if not field:
+                initial_line = value
+            elif field.lower() in ("content_length", "l"):
+                content_length = int(value)
+            else:
+                headers.append((field, value))
+                
+        return cls(initial_line, headers, None), content_length
 
 
     def print(self):
-        return print_http_like_header(self.initial_line, self.headers, len(self.body)) + (self.body or b"")
-        
+        headers = [ (None, self.initial_line) ] + self.headers + [ ("content_length", str(len(self.body))) ]
+        return print_http_like_header(headers) + (self.body or b"")
+
 
 # Copy pasted from Connection not to use Message
 class HttpLikeStream(Loggable):
@@ -339,16 +328,17 @@ class HttpLikeStream(Loggable):
     PING = b"\r\n\r\n"
     PONG = b"\r\n"
     SEPARATOR = b"\r\n\r\n"
+    TIMEOUT = 10
 
-    def __init__(self, socket, keepalive_interval=None, message_class=HttpLikeMessage):
+    def __init__(self, socket, keepalive_interval=None):
         Loggable.__init__(self)
         
         self.socket = socket
-        self.message_class = message_class
 
         self.outgoing_buffer = b""
         self.incoming_buffer = b""
         self.incoming_message = None
+        self.incoming_content_length = None
         self.just_got_pong = False
         
         self.process_slot = zap.EventSlot()
@@ -364,7 +354,7 @@ class HttpLikeStream(Loggable):
     def keepalive(self):
         self.outgoing_buffer += self.PING
         self.writable()
-        self.timeout_plug = zap.time_slot(keepalive_interval / 2).plug(self.timeout)
+        self.timeout_plug = zap.time_slot(self.TIMEOUT).plug(self.timeout)
 
 
     def timeout(self):
@@ -420,21 +410,21 @@ class HttpLikeStream(Loggable):
                 # Found a header, find the message length
                 self.incoming_buffer = rest
                 #self.logger.info("Incoming message with header %r" % header)
-                self.incoming_message = self.message_class.parse(header)
+                self.incoming_message, self.incoming_content_length = HttpLikeMessage.parse(header)
 
         if self.incoming_message:
             # If have a header, get the body
-            content_length = self.incoming_message.body
-
-            if len(self.incoming_buffer) >= content_length:
+            
+            if len(self.incoming_buffer) >= self.incoming_content_length:
                 # Already read the whole body, return the complete message
 
-                body = self.incoming_buffer[:content_length]
-                self.incoming_buffer = self.incoming_buffer[content_length:]
+                body = self.incoming_buffer[:self.incoming_content_length]
+                self.incoming_buffer = self.incoming_buffer[self.incoming_content_length:]
 
                 message = self.incoming_message
                 message.body = body
                 self.incoming_message = None
+                self.incoming_content_length = None
                 self.just_got_pong = False
 
                 return message

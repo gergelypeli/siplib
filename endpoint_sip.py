@@ -1,6 +1,6 @@
 from weakref import WeakValueDictionary, proxy
 
-from format import Status, TargetDialog, Parser, Sip, Reason
+from format import Status, TargetDialog, Parser, Sip, Reason, Cause
 from party import Endpoint
 from sdp import Session
 from endpoint_sip_helpers import SessionHelper

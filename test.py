@@ -1,7 +1,7 @@
 from weakref import proxy, WeakSet
 import datetime
 
-from format import Uri, Nameaddr, Status, AbsoluteUri, CallInfo
+from format import Uri, Nameaddr, Status, AbsoluteUri, CallInfo, Cause
 from party import PlannedEndpoint, Bridge
 from sdp import Session
 from subscript import SubscriptionManager, MessageSummaryEventSource, DialogEventSource
