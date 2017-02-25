@@ -292,6 +292,7 @@ class MsgpStream(Loggable):
 
         self.pipe = None
         self.last_sent_seq = 0
+        self.last_recved_seq = 0
 
         self.unacked_items_by_seq = collections.OrderedDict()
         self.unresponded_items_by_seq = collections.OrderedDict()
@@ -305,14 +306,25 @@ class MsgpStream(Loggable):
             self.response_slot.zap(item.origin, None, None)
 
 
-    def connect(self, pipe):
-        self.pipe = pipe
+    def get_last_recved_seq(self):
+        return self.last_recved_seq
         
-        # FIXME: on reconnects some items may have been already received by the peer
-        # but this must be decided during the handshake. Assume now that all unacked
-        # messages should be retried.
+
+    def connect(self, pipe, last_sent_seq):
+        self.pipe = pipe
+        acked_seqs = []  # Implicitly ACK-ed messages during a reconnect
+        
         for seq, item in self.unacked_items_by_seq.items():
-            self.send_item(seq, item)
+            if seq <= last_sent_seq:
+                acked_seqs.append(seq)
+            else:
+                self.send_item(seq, item)
+
+        if acked_seqs:
+            self.logger.info("Implicitly ACK-ing %d outgoing messages until %s." % (len(acked_seqs), last_sent_seq))
+            
+            for seq in acked_seqs:
+                self.pipe_acked("#%d" % seq)
 
         pipe.process_slot.plug(self.pipe_processed)
         pipe.ack_slot.plug(self.pipe_acked)
@@ -382,6 +394,11 @@ class MsgpStream(Loggable):
         else:
             raise Exception("WTF source?")
             
+        if sseq <= self.last_recved_seq:
+            return
+        else:
+            self.last_recved_seq = sseq
+            
         if target.startswith("#"):
             tseq, ttag = int(target[1:]), None
         elif target.startswith("$"):
@@ -431,6 +448,7 @@ class Handshake:
         self.accepted_remotely = None
         self.hello_acked = False
         self.bello_acked = False
+        self.last_sent_seq = None
 
 
 class MsgpDispatcher(Loggable):
@@ -460,7 +478,7 @@ class MsgpDispatcher(Loggable):
         self.handshakes_by_addr[addr] = handshake
         
         source = "@hello"
-        target = "@dude"
+        target = "@json"
         body = self.make_handshake(addr)
         self.logger.debug("Sending handshake from %s to %s as %r" % (source, target, body))
         message = (source, target, body)
@@ -494,8 +512,10 @@ class MsgpDispatcher(Loggable):
             ok = bool(name)
             body = dict(ok=ok)
             
+            s = self.streams_by_name.get(name)
             source = "@bello"
-            target = "@dude"
+            target = "#%d" % (s.get_last_recved_seq() if s else 0)
+            
             self.logger.debug("Sending handshake from %s to %s as %r" % (source, target, body))
             message = (source, target, body)
             is_piped = h.pipe.try_sending(message)
@@ -509,7 +529,10 @@ class MsgpDispatcher(Loggable):
             self.handshake_completed(addr)
         elif source == "@bello":
             ok = body["ok"]
+            tseq = int(target[1:]) if target.startswith("#") else 0
+
             h.accepted_remotely = ok
+            h.last_sent_seq = tseq
             
             self.handshake_completed(addr)
         else:
@@ -570,7 +593,7 @@ class MsgpDispatcher(Loggable):
         else:
             self.logger.info("Reconnecting stream %s" % name)
 
-        stream.connect(pipe)
+        stream.connect(pipe, h.last_sent_seq)
     
 
     # NOTE: The reason why requests and responses are processed in almost the same

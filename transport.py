@@ -65,7 +65,7 @@ class TcpTransport(Transport):
         Transport.__init__(self)
         
         socket.setblocking(False)
-        self.http_like_stream = HttpLikeStream(socket, message_class=SipLikeMessage)
+        self.http_like_stream = HttpLikeStream(socket)
         self.http_like_stream.process_slot.plug(self.process)
 
 
