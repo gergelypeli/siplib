@@ -939,7 +939,7 @@ def parse_structured_message(hlm):
         
         msg = Sip.request(method=method, uri=uri, related=None)  # TODO: yepp...
 
-    for field in [ "via", "route", "record_route", "contact" ]:
+    for field in [ "via", "route", "record_route", "contact", "call_info", "alert_info", "reason" ]:
         msg[field] = []
 
     for field, x in hlm.headers:

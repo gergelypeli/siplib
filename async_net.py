@@ -388,6 +388,8 @@ class HttpLikeStream(Loggable):
             # No header processed yet, look for the next one
 
             while self.incoming_buffer.startswith(self.PONG):
+                self.logger.debug("Recved PONG")
+                
                 # Regardless of state, it can always be a real PONG, so cancel the timeout
                 if self.timeout_plug:
                     self.timeout_plug.unplug()
@@ -403,6 +405,7 @@ class HttpLikeStream(Loggable):
                 
                     self.outgoing_buffer += self.PONG
                     self.writable()
+                    self.logger.debug("Sent PONG")
 
             header, separator, rest = self.incoming_buffer.partition(self.SEPARATOR)
 
