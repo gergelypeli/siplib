@@ -7,7 +7,7 @@ from sdp import Session
 from subscript import SubscriptionManager, MessageSummaryEventSource, DialogEventSource
 from log import Loggable
 from mgc import Controller  #, PlayerMediaLeg  #, EchoMediaLeg
-import zap
+from zap import Plug
 #import resolver
 
 
@@ -311,7 +311,7 @@ class VoicemailEventSource(MessageSummaryEventSource):
         self.mailbox = params["mailbox"]
 
         self.state = 0
-        zap.time_slot(30, True).plug(self.fake)
+        Plug(self.fake).attach_time(30, True)
         
         return self.mailbox
         

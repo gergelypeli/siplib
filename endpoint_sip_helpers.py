@@ -1,7 +1,7 @@
 from collections import namedtuple
 
+from zap import Plug
 from sdp import STATIC_PAYLOAD_TYPES, Session
-#from ground import SessionState
 
 
 AllocatedMedia = namedtuple("AllocatedMedia", "mgw_sid local_addr cached_params")
@@ -110,7 +110,7 @@ class SessionHelper:
             mt = self.make_media_thing("rtp", am.mgw_sid)
             self.add_media_thing(i, "net", mt)
             self.link_media_things(i, None, 0, "net", 0)
-            mt.event_slot.plug(self.media_thing_notified, mti=i)
+            Plug(self.media_thing_notified, mti=i).attach(mt.event_slot)
             
         # Delete (currently can only happen on shutdown, not on session exchange)
         for i in reversed(range(channel_count, media_channel_count)):

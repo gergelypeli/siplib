@@ -4,7 +4,7 @@ from weakref import proxy
 from rtp import read_wav, write_wav, RtpPlayer, RtpRecorder, RtpBuilder, RtpParser, DtmfExtractor, DtmfInjector, Format
 from msgp import MsgpPeer
 from log import Loggable
-import zap
+from zap import Plug
 
 class Error(Exception): pass
 
@@ -118,9 +118,9 @@ class RtpThing(Thing):
         self.rtp_parser = RtpParser()
         self.rtp_builder = RtpBuilder()
         self.dtmf_extractor = DtmfExtractor()
-        self.dtmf_detected_plug = self.dtmf_extractor.dtmf_detected_slot.plug(self.dtmf_detected)
+        self.dtmf_detected_plug = Plug(self.dtmf_detected).attach(self.dtmf_extractor.dtmf_detected_slot)
         self.dtmf_injector = DtmfInjector()
-        self.recved_plug = None
+        self.recved_plug = Plug(self.recved)
         
         
     def __del__(self):
@@ -128,8 +128,7 @@ class RtpThing(Thing):
         # socket object is destroyed, then the Kernel will poll POLLNVAL events from
         # this descriptor, and has to purge it from the poll set. So do this explicitly.
         
-        if self.recved_plug:
-            self.recved_plug.unplug()
+        self.recved_plug.detach()
             
         
     def set_oid(self, oid):
@@ -156,14 +155,13 @@ class RtpThing(Thing):
 
         if "local_addr" in params:
             try:
-                if self.socket:
-                    self.recved_plug.unplug()
+                self.recved_plug.detach()
                     
                 self.local_addr = tuple(params["local_addr"])
                 self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 self.socket.setblocking(False)
                 self.socket.bind(self.local_addr)
-                self.recved_plug = zap.read_slot(self.socket).plug(self.recved)
+                self.recved_plug.attach_read(self.socket)
             except Exception as e:
                 raise Error("Couldn't set up net leg: %s" % e)
             
@@ -282,7 +280,7 @@ class PlayerThing(Thing):
             samples = read_wav(params["filename"])
             
             self.rtp_player = RtpPlayer(self.format, samples, self.volume, fade)
-            self.rtp_player.packet_slot.plug(self.forward_packet)
+            Plug(self.forward_packet).attach(self.rtp_player.packet_slot)
 
 
     def forward_packet(self, packet):
@@ -303,8 +301,8 @@ class MediaGateway(Loggable):
         self.links = {}
         
         self.msgp = MsgpPeer(mgw_addr)
-        self.msgp.request_slot.plug(self.process_request)
-        self.msgp.response_slot.plug(self.process_response)
+        Plug(self.process_request).attach(self.msgp.request_slot)
+        Plug(self.process_response).attach(self.msgp.response_slot)
 
 
     def set_oid(self, oid):

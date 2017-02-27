@@ -3,7 +3,7 @@ from weakref import WeakValueDictionary
 
 from format import Uri, Nameaddr, Sip
 from log import Loggable
-import zap
+from zap import EventSlot
 
 
 MAX_FORWARDS = 20
@@ -38,7 +38,7 @@ class Dialog(Loggable):
         Loggable.__init__(self)
 
         self.dialog_manager = dialog_manager
-        self.message_slot = zap.EventSlot()
+        self.message_slot = EventSlot()
 
         self.local_tag = generate_tag()
     

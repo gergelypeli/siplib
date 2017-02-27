@@ -1,7 +1,7 @@
 import socket
 import multiprocessing
 
-import zap
+from zap import Plug, EventSlot, kernel
 from log import Loggable, Oid
 
 
@@ -11,7 +11,7 @@ class Resolver(Loggable):
         
         self.slots_by_hostname = {}
         self.parent_pipe, self.child_pipe = multiprocessing.Pipe()
-        zap.read_slot(self.parent_pipe).plug(self.finish)
+        Plug(self.finish).attach_read(self.parent_pipe)
         
         self.resolver_process = multiprocessing.Process(target=self.resolver)
         self.resolver_process.start()
@@ -48,7 +48,7 @@ class Resolver(Loggable):
             self.logger.debug("Hostname '%s' is already being resolved." % hostname)
         else:
             self.logger.debug("Hostname '%s' will be resolved." % hostname)
-            slot = zap.EventSlot()
+            slot = EventSlot()
             self.slots_by_hostname[hostname] = slot
             self.parent_pipe.send(hostname)
         
@@ -76,7 +76,7 @@ def resolve_slot(hostname):
 
 
 def wait_resolve(hostname, timeout=None):
-    slot_index, slot_args = yield zap.time_slot(timeout), resolve_slot(hostname)
+    slot_index, slot_args = yield kernel.time_slot(timeout), resolve_slot(hostname)
     
     if slot_index == 0:
         return None

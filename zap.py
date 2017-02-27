@@ -9,14 +9,14 @@ from log import Loggable, Oid
 
 
 class Plug:
-    def __init__(self, weak_method, kwargs):
-        self.slot = None
-        self.weak_method = weak_method
+    def __init__(self, method, **kwargs):
+        self.weak_method = weakref.WeakMethod(method)
         self.kwargs = kwargs
+        self.weak_slot = None
         
         
     def __del__(self):
-        self.unplug()
+        self.detach()
         
             
     def __call__(self, *args):
@@ -26,20 +26,40 @@ class Plug:
             method(*args, **self.kwargs)
 
         
-    def zap(self, *args):
+    def zapped(self, *args):
         schedule(lambda: self(*args))
 
 
-    def unplug(self):
-        try:
-            if self.slot:
-                self.slot.plug_out(self)
-        except ReferenceError:
-            pass
+    def attach(self, slot):
+        assert not self.weak_slot
+        slot.plug_in(self)
+        self.weak_slot = weakref.ref(slot)
+        return self
+        
+        
+    def attach_read(self, fd):
+        return self.attach(kernel.read_slot(fd))
+
+
+    def attach_write(self, fd):
+        return self.attach(kernel.write_slot(fd))
+
+
+    def attach_time(self, timeout, repeat=False):
+        return self.attach(kernel.time_slot(timeout, repeat))
+
+
+    def detach(self):
+        if self.weak_slot:
+            slot = self.weak_slot()
+            self.weak_slot = None
+            
+            if slot:
+                slot.plug_out(self)
 
 
 class InstaPlug(Plug):
-    def zap(self, *args):
+    def zapped(self, *args):
         self(*args)
             
 
@@ -50,11 +70,11 @@ class Slot:
         
     def __del__(self):
         for plug in set(self.plugs):
-            plug.unplug()
+            plug.detach()
         
         
     def plug_in(self, plug):  # to be called by Slot only
-        plug.slot = weakref.proxy(self)
+        #plug.slot = weakref.proxy(self)
         self.plugs.add(plug)
         self.post_plug_in()
         
@@ -62,19 +82,19 @@ class Slot:
     def plug_out(self, plug):
         self.pre_plug_out()  # to be called by Slot only
         self.plugs.remove(plug)
-        plug.slot = None
+        #plug.slot = None
     
     
-    def plug(self, method, **kwargs):
-        plug = Plug(weakref.WeakMethod(method), kwargs)
-        self.plug_in(plug)
-        return plug
+    #def plug(self, method, **kwargs):
+    #    plug = Plug(weakref.WeakMethod(method), kwargs)
+    #    self.plug_in(plug)
+    #    return plug
 
 
-    def instaplug(self, method, **kwargs):
-        plug = InstaPlug(weakref.WeakMethod(method), kwargs)
-        self.plug_in(plug)
-        return plug
+    #def instaplug(self, method, **kwargs):
+    #    plug = InstaPlug(weakref.WeakMethod(method), kwargs)
+    #    self.plug_in(plug)
+    #    return plug
 
     
     def post_plug_in(self):
@@ -89,7 +109,7 @@ class Slot:
         # Plugs may unplug themselves during zapping, so this must be done carefully
         for plug in list(self.plugs):
             if plug in self.plugs:
-                plug.zap(*args)
+                plug.zapped(*args)
 
 
 class EventSlot(Slot):
@@ -183,7 +203,8 @@ class Kernel(Loggable):
             if key[1] not in (False, True):
                 heapq.heappush(self.time_heap, key)
                 
-        return weakref.proxy(slot)
+        #return weakref.proxy(slot)
+        return slot
 
 
     def file_slot(self, socket, write):
@@ -194,7 +215,15 @@ class Kernel(Loggable):
         key = (socket.fileno(), write)
         
         return self.add_slot(key)
-        
+
+
+    def read_slot(self, socket):
+        return self.file_slot(socket, False)
+
+
+    def write_slot(self, socket):
+        return self.file_slot(socket, True)
+                
         
     def time_slot(self, delay, repeat=False):
         if delay is None:
@@ -279,7 +308,7 @@ class Kernel(Loggable):
             
             plugs = set(slot.plugs)
             for plug in plugs:
-                plug.unplug()  # also unregisters the slot when the last plug is unplugged
+                plug.detach()  # also unregisters the slot when the last plug is unplugged
                 
             self.get_earliest_key()    # also pops key
             
@@ -289,7 +318,8 @@ class Kernel(Loggable):
                 new_slot = self.add_slot(new_key)
                 
                 for plug in plugs:
-                    new_slot.plug_in(plug)  # registers new_slot if necessary
+                    plug.attach(new_slot)
+                    #new_slot.plug_in(plug)  # registers new_slot if necessary
 
         if len(self.slots_by_key) > 2 * len(self.registered_keys):
             self.logger.debug("Kernel slot maintenance")
@@ -343,7 +373,7 @@ class Plan(Loggable):
 
     def zapped(self, *args, slot_index):
         for plug in self.resume_plugs:
-            plug.unplug()
+            plug.detach()
             
         self.resume_plugs = None
         self.resume_value = (slot_index, args)
@@ -366,7 +396,9 @@ class Plan(Loggable):
                 self.logger.debug("Resuming plan by slot %d." % value[0])
                 
             slots = self.generator.send(value)
-            if not isinstance(slots, tuple): slots = (slots,)
+            
+            if not isinstance(slots, tuple):
+                slots = (slots,)
             
             self.logger.debug("Suspended plan for %d slots." % len(slots))
             # This is tricky, since we use instaplugs with EventSlots, so they can
@@ -376,11 +408,11 @@ class Plan(Loggable):
             self.resume_plugs = []
             
             for i, slot in enumerate(slots):
-                plug = slot.instaplug(self.zapped, slot_index=i)
+                plug = InstaPlug(self.zapped, slot_index=i).attach(slot)
                 
                 if self.resume_plugs is None:
                     # Seems like we were instazapped here, get out, we're already scheduled
-                    plug.unplug()
+                    plug.detach()
                     break
                     
                 self.resume_plugs.append(plug)
@@ -415,7 +447,7 @@ class Planned(Loggable):  # Oops, we may call base class methods twice
         if generator:
             self.event_plan = Plan()
             self.event_plan.set_oid(self.oid.add("plan"))
-            self.event_plan.finished_slot.plug(self.plan_finished)
+            Plug(self.plan_finished).attach(self.event_plan.finished_slot)
             self.event_plan.start(generator)
 
             self.event_slot = EventSlot()
@@ -426,11 +458,11 @@ class Planned(Loggable):  # Oops, we may call base class methods twice
 
 
     def sleep(self, timeout):
-        yield time_slot(timeout)
+        yield kernel.time_slot(timeout)
         
 
     def wait_event(self, timeout=None):  # TODO
-        slot_index, args = yield time_slot(timeout), self.event_slot
+        slot_index, args = yield kernel.time_slot(timeout), self.event_slot
         
         return args if slot_index == 1 else None
 
@@ -438,7 +470,7 @@ class Planned(Loggable):  # Oops, we may call base class methods twice
     def wait_input(self, prompt, timeout=None):
         print(prompt)
         
-        slot_index, args = yield time_slot(timeout), read_slot(sys.stdin)
+        slot_index, args = yield kernel.time_slot(timeout), kernel.read_slot(sys.stdin)
         
         return sys.stdin.readline() if slot_index == 1 else None
 
@@ -466,16 +498,16 @@ kernel = Kernel()
 kernel.set_oid(Oid("kernel"))
 
 
-def time_slot(delay, repeat=False):
-    return kernel.time_slot(delay, repeat)
+#def time_slot(delay, repeat=False):
+#    return kernel.time_slot(delay, repeat)
 
 
-def read_slot(socket):
-    return kernel.file_slot(socket, False)
+#def read_slot(socket):
+#    return kernel.file_slot(socket, False)
 
 
-def write_slot(socket):
-    return kernel.file_slot(socket, True)
+#def write_slot(socket):
+#    return kernel.file_slot(socket, True)
 
 
 # Seems like we need to keep this ordered, because sometimes we want to

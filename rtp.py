@@ -4,7 +4,7 @@ import collections
 
 import g711
 from log import Loggable
-import zap
+from zap import EventSlot, Plug
 
 
 BYTES_PER_SAMPLE = 2
@@ -143,7 +143,7 @@ class RtpPlayer(RtpProcessor):
     def __init__(self, format, data, volume=1, fade=0, ptime_ms=20):
         RtpProcessor.__init__(self)
 
-        self.packet_slot = zap.EventSlot()
+        self.packet_slot = EventSlot()
         self.timestamp = 0
         
         self.data = data  # mono 16 bit LSB LPCM
@@ -153,13 +153,14 @@ class RtpPlayer(RtpProcessor):
         self.volume = 0
         self.set_volume(volume, fade)
         
+        self.play_plug = Plug(self.play)
+        
         if data:
-            self.play_plug = zap.time_slot(self.ptime_ms / 1000, repeat=True).plug(self.play)
+            self.play_plug.attach_time(self.ptime_ms / 1000, repeat=True)
         
         
     def __del__(self):
-        if self.play_plug:
-            self.play_plug.unplug()
+        self.play_plug.detach()
 
 
     def set_volume(self, volume, fade):
@@ -189,7 +190,7 @@ class RtpPlayer(RtpProcessor):
         self.packet_slot.zap(packet)
         
         if new_offset >= len(self.data):
-            self.play_plug.unplug()
+            self.play_plug.detach()
 
 
 class RtpRecorder(RtpProcessor):
@@ -257,7 +258,7 @@ class DtmfExtractor(DtmfBase):
     def __init__(self):
         DtmfBase.__init__(self)
         
-        self.dtmf_detected_slot = zap.EventSlot()
+        self.dtmf_detected_slot = EventSlot()
         self.next_time_ms = None
         
         

@@ -12,6 +12,7 @@ from subscript import SubscriptionManager
 from account import AccountManager
 from log import Loggable
 from mgc import Controller
+from zap import Plug
 
 
 class Switch(Loggable):
@@ -49,7 +50,7 @@ class Switch(Loggable):
             proxy(self.mgc)
         )
         
-        self.transaction_manager.message_slot.plug(self.process)
+        Plug(self.process).attach(self.transaction_manager.message_slot)
 
 
     def set_oid(self, oid):

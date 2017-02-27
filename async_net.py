@@ -2,7 +2,7 @@ import socket
 import errno
 import os
 
-import zap
+from zap import EventSlot, Plug
 from log import Loggable
 
 
@@ -37,7 +37,7 @@ class Listener(Loggable):
         Loggable.__init__(self)
         
         self.type = type
-        self.accepted_slot = zap.EventSlot()
+        self.accepted_slot = EventSlot()
 
         self.socket = self.create_socket()
         self.socket.setblocking(False)
@@ -45,7 +45,7 @@ class Listener(Loggable):
         self.socket.bind(addr)
         self.socket.listen()
 
-        self.incoming_plug = zap.read_slot(self.socket).plug(self.incoming)
+        self.incoming_plug = Plug(self.incoming).attach_read(self.socket)
 
         # This is the actual address (allocated by the kernel if necessary)
         self.addr = self.socket.getsockname()
@@ -144,10 +144,10 @@ class Reconnector(Loggable):
         self.type = type
         self.addr = addr
         self.timeout = timeout
-        self.connected_slot = zap.EventSlot()
+        self.connected_slot = EventSlot()
         self.socket = None
-        self.reconnecting_plug = None  # MethodPlug(self.reconnect)
-        self.completing_plug = None  # MethodPlug(self.complete)
+        self.reconnecting_plug = Plug(self.reconnect)
+        self.completing_plug = Plug(self.complete)
         self.local_addr = (os.environ.get('VFTESTHOST', ''), 0)
 
 
@@ -160,14 +160,12 @@ class Reconnector(Loggable):
             return
 
         # If currently scheduled, then cancel that and try immediately
-        if self.reconnecting_plug:
-            self.reconnecting_plug.unplug()
-        else:
-            self.logger.info("Started %s reconnection to %s" % (self.type, self.addr))
+        self.reconnecting_plug.detach()
 
         if self.timeout:
-            self.reconnecting_plug = zap.time_slot(self.timeout, repeat=True).plug(self.reconnect)
+            self.reconnecting_plug.attach_time(self.timeout, repeat=True)
 
+        self.logger.info("Started %s reconnection to %s" % (self.type, self.addr))
         self.reconnect()
 
 
@@ -200,15 +198,13 @@ class Reconnector(Loggable):
         else:
             self.logger.debug("%s connect unexpectedly succeeded" % self.type)
 
-        self.completing_plug = zap.write_slot(self.socket).plug(self.complete)
-        #self.completing_plug = MethodPlug(self.connected).attach(zap.write_slot(self.socket))
-        #zap.write_slot(self.socket).plug(self.connected)
+        self.completing_plug.attach_write(self.socket)
 
 
     def complete(self):
         """Handle the results of a connection attempt."""
         self.logger.debug("Completing")
-        self.completing_plug.unplug()
+        self.completing_plug.detach()
 
         if self.socket.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) != 0:
             self.logger.debug("%s connection attempt to %s failed, %s retry" %
@@ -218,8 +214,7 @@ class Reconnector(Loggable):
 
         self.logger.debug("Successful %s reconnection to %s" % (self.type, self.addr))
 
-        if self.reconnecting_plug:
-            self.reconnecting_plug.unplug()
+        self.reconnecting_plug.detach()
 
         s = self.socket
         self.socket = None
@@ -341,20 +336,21 @@ class HttpLikeStream(Loggable):
         self.incoming_content_length = None
         self.just_got_pong = False
         
-        self.process_slot = zap.EventSlot()
+        self.process_slot = EventSlot()
 
-        self.read_plug = zap.read_slot(self.socket).plug(self.readable)
-        self.write_plug = None
-        self.timeout_plug = None
+        self.read_plug = Plug(self.readable).attach_read(self.socket)
+        self.write_plug = Plug(self.writable)
+        self.timeout_plug = Plug(self.timeout)
+        self.keepalive_plug = Plug(self.keepalive)
         
         if keepalive_interval:
-            self.keepalive_plug = zap.time_slot(keepalive_interval, repeat=True).plug(self.keepalive)
+            self.keepalive_plug.attach_time(keepalive_interval, repeat=True)
 
 
     def keepalive(self):
         self.outgoing_buffer += self.PING
         self.writable()
-        self.timeout_plug = zap.time_slot(self.TIMEOUT).plug(self.timeout)
+        self.timeout_plug.attach_time(self.TIMEOUT)
 
 
     def timeout(self):
@@ -368,18 +364,16 @@ class HttpLikeStream(Loggable):
                 sent = self.socket.send(self.outgoing_buffer)
             except IOError as e:
                 self.logger.error("Socket error while sending: %s" % e)
-                self.write_plug.unplug()
+                self.write_plug.detach()
                 self.process_slot.zap(None)
                 return
 
             self.outgoing_buffer = self.outgoing_buffer[sent:]
 
         if not self.outgoing_buffer:
-            if self.write_plug:
-                self.write_plug.unplug()
+            self.write_plug.detach()
         else:
-            if not self.write_plug:
-                self.write_plug = zap.write_slot(self.socket).plug(self.writable)
+            self.write_plug.attach_write(self.socket)
 
 
     def check_incoming_message(self):
@@ -391,9 +385,7 @@ class HttpLikeStream(Loggable):
                 self.logger.debug("Recved PONG")
                 
                 # Regardless of state, it can always be a real PONG, so cancel the timeout
-                if self.timeout_plug:
-                    self.timeout_plug.unplug()
-                    self.timeout_plug = None
+                self.timeout_plug.detach()
 
                 if not self.just_got_pong:
                     # This may actually be the first half of a PING
@@ -450,12 +442,12 @@ class HttpLikeStream(Loggable):
                     break
 
                 self.logger.error("Socket error while receiving: %s" % e)
-                self.read_plug.unplug()
+                self.read_plug.detach()
                 disconnected = True
                 break
 
             if not recved:
-                self.read_plug.unplug()
+                self.read_plug.detach()
                 break
 
             self.incoming_buffer += recved

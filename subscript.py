@@ -3,7 +3,7 @@ import datetime
 from format import Status, Sip
 from transactions import make_simple_response
 from log import Loggable
-import zap
+from zap import Plug
 
 
 class Subscription:
@@ -34,8 +34,11 @@ class EventSource(Loggable):
         id = self.last_subscription_id
         self.logger.info("Adding subscription %s." % id)
         
-        self.subscriptions_by_id[id] = Subscription(dialog)
-        dialog.message_slot.plug(self.process, id=id)
+        s = Subscription(dialog)
+        self.subscriptions_by_id[id] = s
+        
+        s.expiration_plug = Plug(self.expired, id=id)
+        Plug(self.process, id=id).attach(dialog.message_slot)
 
 
     def process(self, msg, id):
@@ -64,11 +67,10 @@ class EventSource(Loggable):
                     if expires > max_expires:
                         expires = max_expires
                 
-                    if subscription.expiration_plug:
-                        subscription.expiration_plug.unplug()
+                    subscription.expiration_plug.detach()
                 
                     subscription.expiration_deadline = datetime.datetime.now() + datetime.timedelta(seconds=expires)
-                    subscription.expiration_plug = zap.time_slot(expires).plug(self.expired, id=id)
+                    subscription.expiration_plug.attach_time(expires)
                 
                     res = Sip.response(status=Status.OK, related=request)
                     res["expires"] = expires
@@ -81,7 +83,7 @@ class EventSource(Loggable):
                 else:
                     if subscription.expiration_plug:
                         self.logger.info("Subscription %s cancelled." % (id,))
-                        subscription.expiration_plug.unplug()
+                        subscription.expiration_plug.detach()
                     else:
                         self.logger.info("Subscription %s polled." % (id,))
 

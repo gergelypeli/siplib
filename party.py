@@ -4,7 +4,7 @@ from collections import namedtuple
 from ground import GroundDweller
 from format import Status, Cause
 from sdp import Session
-import zap
+from zap import Slot, Plug, Planned
 
 
 MediaChannel = namedtuple("MediaChannel", [ "things", "links", "legs"])
@@ -14,7 +14,7 @@ class Party(GroundDweller):
     def __init__(self):
         GroundDweller.__init__(self)
         
-        self.finished_slot = zap.Slot()
+        self.finished_slot = Slot()
         self.legs = {}
         self.media_channels = []
 
@@ -222,9 +222,9 @@ class Endpoint(Party):
         self.ground.transfer_leg(self.legs[0].oid, action)
         
 
-class PlannedEndpoint(zap.Planned, Endpoint):
+class PlannedEndpoint(Planned, Endpoint):
     def __init__(self):
-        zap.Planned.__init__(self)
+        Planned.__init__(self)
         Endpoint.__init__(self)
 
 
@@ -574,9 +574,9 @@ class Routing(Bridge):
         # After having no legs, may_finish will terminate us as soon as it can
 
 
-class PlannedRouting(zap.Planned, Routing):
+class PlannedRouting(Planned, Routing):
     def __init__(self):
-        zap.Planned.__init__(self)
+        Planned.__init__(self)
         Routing.__init__(self)
 
 
@@ -606,7 +606,7 @@ class PlannedRouting(zap.Planned, Routing):
     def plan_finished(self, exception):
         # Take control from here
         self.logger.debug("Routing plan finished.")
-        self.event_slot.plug(self.process_leg_action)
+        Plug(self.process_leg_action).attach(self.event_slot)
         
         if exception:
             self.logger.error("Routing plan aborted with exception: %s" % exception)

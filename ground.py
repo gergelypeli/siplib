@@ -3,6 +3,7 @@ from weakref import proxy, WeakValueDictionary
 from sdp import Session
 from log import Loggable
 from format import Status, Cause
+from zap import Plug
 
 
 class Ground(Loggable):
@@ -352,7 +353,7 @@ class Ground(Loggable):
         self.parties_by_oid[oid] = party
         
         party.set_ground(proxy(self))
-        party.finished_slot.plug(self.party_finished, oid=oid)
+        Plug(self.party_finished, oid=oid).attach(party.finished_slot)
         
         return party
 

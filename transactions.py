@@ -4,7 +4,7 @@ from weakref import proxy
 from log import Loggable
 
 from format import Via, Status, make_simple_response, make_non_2xx_ack, make_cease_response, is_cease_response
-import zap
+from zap import Plug, EventSlot
 
 # tr id: (branch, method)
 
@@ -78,8 +78,9 @@ class Transaction:
         self.state = self.STARTING
 
         self.retransmit_interval = None
-        self.retransmit_plug = None
-        self.expiration_plug = None
+        self.retransmit_plug = Plug(self.retransmit)
+        self.expiration_plug = Plug(self.transmission_timed_out)
+        self.finish_plug = Plug(self.finish)
 
 
     def finish(self):
@@ -109,13 +110,8 @@ class Transaction:
 
         self.state = state
         
-        if self.retransmit_plug:
-            self.retransmit_plug.unplug()
-            self.retransmit_plug = None
-            
-        if self.expiration_plug:
-            self.expiration_plug.unplug()
-            self.expiration_plug = None
+        self.retransmit_plug.detach()
+        self.expiration_plug.detach()
             
         if self.state == self.WAITING:
             # Waiting for something indefinitely
@@ -123,14 +119,14 @@ class Transaction:
         elif self.state == self.TRANSMITTING:
             # Transmit the message with backoff until stopped explicitly, or timing out
             self.retransmit_interval = self.T1
-            self.expiration_plug = zap.time_slot(self.T1 * 64).plug(self.transmission_timed_out)
+            self.expiration_plug.attach_time(self.T1 * 64)
         elif self.state == self.PROVISIONING:
             # Transmit the provisional response somewhat rarely to keep proxies happy
             self.retransmit_interval = self.TP
         elif self.state == self.LINGERING:
             # Just wait to adsorb incoming duplicates, then time out
             self.retransmit_interval = None
-            self.expiration_plug = zap.time_slot(self.T1 * 64).plug(self.finish)
+            self.finish_plug.attach_time(self.T1 * 64)
         else:
             raise Error("Change to what state?")
 
@@ -139,10 +135,9 @@ class Transaction:
         self.manager.transmit(self.outgoing_msg)
 
         if self.retransmit_interval:
-            if self.retransmit_plug:
-                self.retransmit_plug.unplug()
+            self.retransmit_plug.detach()
                 
-            self.retransmit_plug = zap.time_slot(self.retransmit_interval).plug(self.retransmit)
+            self.retransmit_plug.attach_time(self.retransmit_interval)
 
         if self.state == self.TRANSMITTING:
             self.retransmit_interval = min(self.retransmit_interval * 2, self.T2)
@@ -382,9 +377,9 @@ class TransactionManager(Loggable):
         self.client_transactions = {}  # by (branch, method)
         self.server_transactions = {}  # by (branch, method)
         
-        self.message_slot = zap.EventSlot()
+        self.message_slot = EventSlot()
         
-        self.transport_plug = self.transport.process_slot.plug(self.process_message)
+        self.transport_plug = Plug(self.process_message).attach(self.transport.process_slot)
 
         
     def transmit(self, msg):

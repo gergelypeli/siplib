@@ -12,7 +12,7 @@ from registrar import LocalRecord
 from log import setup_logging, log_exception, Oid
 from mgw import MediaGateway
 from switch import Switch
-import zap
+from zap import Plug, loop
 from test import CallerEndpoint, CalleeEndpoint, UnreachableEndpoint, RingingEndpoint, BlindTransferringEndpoint, TestSubscriptionManager, TestLineManager, TestController
 
 
@@ -272,14 +272,17 @@ class SwitchA(TestSwitch):
         self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_LOCAL_CALLEE_LINE))
         
         if TEST == TEST_PICKUPIN:
-            zap.time_slot(3).plug(self.test_caller,
-                dst_username=NUMBER_A_LOCAL_RINGING_LINE, src_username=NUMBER_DDI_CALLER, src_name="Caller")
+            Plug(self.test_caller,
+                dst_username=NUMBER_A_LOCAL_RINGING_LINE, src_username=NUMBER_DDI_CALLER, src_name="Caller"
+            ).attach_time(3)
         
         if TEST == TEST_PICKUPOUT:
-            zap.time_slot(3).plug(self.test_caller,
-                dst_username=NUMBER_A_SNOM_1, src_username=NUMBER_DDI_CALLER, src_name="Caller")
-            zap.time_slot(6).plug(self.test_caller,
-                dst_username="*" + NUMBER_A_SNOM_1, src_username=NUMBER_DDI_CALLER, src_name="Pickuper")
+            Plug(self.test_caller,
+                dst_username=NUMBER_A_SNOM_1, src_username=NUMBER_DDI_CALLER, src_name="Caller"
+            ).attach_time(3)
+            Plug(self.test_caller,
+                dst_username="*" + NUMBER_A_SNOM_1, src_username=NUMBER_DDI_CALLER, src_name="Pickuper"
+            ).attach_time(6)
         
 
     def make_party(self, type):
@@ -373,13 +376,13 @@ class SwitchB(TestSwitch):
         # Allow us to authenticate ourselves at A
         self.account_manager.add_remote_account(A_REALM, B_AUTHNAME, B_HA1)
 
-        zap.time_slot(1).plug(self.reregister_snom, addr=SNOM_WEB, line=1)
+        Plug(self.reregister_snom, addr=SNOM_WEB, line=1).attach_time(1)
 
         if TEST == TEST_DIALOUT:
-            zap.time_slot(3).plug(self.test_dialing)
+            Plug(self.test_dialing).attach_time(3)
             
         if TEST == TEST_DIALIN:
-            zap.time_slot(3).plug(self.test_registering)
+            Plug(self.test_registering).attach_time(3)
 
 
     def make_party(self, type):
@@ -434,7 +437,7 @@ def main():
     switch_b.start(B_REALM, B_ADDR.resolved(), MGW_ADDR.resolved(), media_addrs)
 
     try:
-        zap.loop()
+        loop()
     except Exception:
         logging.critical("Crashed!")
         log_exception(*sys.exc_info())

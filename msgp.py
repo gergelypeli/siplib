@@ -8,7 +8,7 @@ import errno
 from async_net import TcpReconnector, TcpListener
 from log import Loggable
 from format import Addr
-import zap
+from zap import Slot, EventSlot, Plug
 
 
 class MessagePipe(Loggable):
@@ -20,7 +20,7 @@ class MessagePipe(Loggable):
         self.incoming_buffer = b""
         self.incoming_header = None
 
-        self.readable_plug = zap.read_slot(self.socket).plug(self.readable)
+        self.readable_plug = Plug(self.readable).attach_read(self.socket)
 
 
     def write(self, data):
@@ -70,7 +70,7 @@ class MessagePipe(Loggable):
                 break
 
             if not recved:
-                self.readable_plug.unplug()
+                self.readable_plug.detach()
                 
                 self.logger.warning("Socket closed while receiving!")
                 has_failed = True
@@ -97,7 +97,7 @@ class MessagePipe(Loggable):
             break
 
         if has_failed:
-            self.readable_plug.unplug()
+            self.readable_plug.detach()
             self.process_message(None)
             
 
@@ -120,9 +120,9 @@ class TimedMessagePipe(MessagePipe):
     def __init__(self, socket):
         MessagePipe.__init__(self, socket)
         
-        self.process_slot = zap.EventSlot()
-        self.ack_slot = zap.EventSlot()
-        self.error_slot = zap.Slot()
+        self.process_slot = EventSlot()
+        self.ack_slot = EventSlot()
+        self.error_slot = Slot()
         
         self.ack_plugs_by_source = {}
         
@@ -130,7 +130,7 @@ class TimedMessagePipe(MessagePipe):
         self.keepalive_interval = datetime.timedelta(seconds=10)  # TODO
         
         self.keepalive_active = False
-        self.keepalive_plug = None
+        self.keepalive_plug = Plug(self.keepalive_needed)
         
         self.reset_keepalive()
 
@@ -150,11 +150,8 @@ class TimedMessagePipe(MessagePipe):
 
     def reset_keepalive(self):
         self.keepalive_active = False
-        
-        if self.keepalive_plug:
-            self.keepalive_plug.unplug()
-        
-        self.keepalive_plug = zap.time_slot(self.keepalive_interval).plug(self.keepalive_needed)
+        self.keepalive_plug.detach()
+        self.keepalive_plug.attach_time(self.keepalive_interval)
 
 
     def keepalive_needed(self):
@@ -167,10 +164,8 @@ class TimedMessagePipe(MessagePipe):
             self.emit_keepalive()
             self.keepalive_active = True
             
-            if self.keepalive_plug:
-                self.keepalive_plug.unplug()
-                
-            self.keepalive_plug = zap.time_slot(self.ack_timeout).plug(self.keepalive_needed)
+            self.keepalive_plug.detach()
+            self.keepalive_plug.attach_time(self.ack_timeout)
 
 
     def process_message(self, message):
@@ -192,7 +187,7 @@ class TimedMessagePipe(MessagePipe):
         ack_plug = self.ack_plugs_by_source.pop(target, None)
         if ack_plug:
             #self.logger.debug("Acked %s" % seq)
-            ack_plug.unplug()
+            ack_plug.detach()
             self.ack_slot.zap(target)
             
         if source == "!ack":
@@ -212,9 +207,9 @@ class TimedMessagePipe(MessagePipe):
             return False
         
         source, target, body = message
-        self.ack_plugs_by_source[source] = zap.time_slot(self.ack_timeout).plug(self.ack_timed_out, source=source)
+        self.ack_plugs_by_source[source] = Plug(self.ack_timed_out, source=source).attach_time(self.ack_timeout)
         return True
-        
+
         
 
 
@@ -286,9 +281,9 @@ class MsgpStream(Loggable):
     def __init__(self):
         Loggable.__init__(self)
         
-        self.request_slot = zap.EventSlot()
-        self.response_slot = zap.EventSlot()
-        self.error_slot = zap.Slot()
+        self.request_slot = EventSlot()
+        self.response_slot = EventSlot()
+        self.error_slot = Slot()
 
         self.pipe = None
         self.last_sent_seq = 0
@@ -302,7 +297,7 @@ class MsgpStream(Loggable):
 
     def __del__(self):
         for item in self.unresponded_items_by_seq.values():
-            item.response_plug.unplug()
+            item.response_plug.detach()
             self.response_slot.zap(item.origin, None, None)
 
 
@@ -326,9 +321,9 @@ class MsgpStream(Loggable):
             for seq in acked_seqs:
                 self.pipe_acked("#%d" % seq)
 
-        pipe.process_slot.plug(self.pipe_processed)
-        pipe.ack_slot.plug(self.pipe_acked)
-        pipe.error_slot.plug(self.pipe_failed)
+        Plug(self.pipe_processed).attach(pipe.process_slot)
+        Plug(self.pipe_acked).attach(pipe.ack_slot)
+        Plug(self.pipe_failed).attach(pipe.error_slot)
 
 
     def send_item(self, seq, item):
@@ -348,7 +343,7 @@ class MsgpStream(Loggable):
 
         if origin:
             rt = response_timeout or self.response_timeout
-            response_plug = zap.time_slot(rt).plug(self.response_timed_out, seq=seq)
+            response_plug = Plug(self.response_timed_out, seq=seq).attach_time(rt)
         else:
             response_plug = None
 
@@ -412,7 +407,7 @@ class MsgpStream(Loggable):
             item = self.unresponded_items_by_seq.pop(tseq, None)
         
             if item:
-                item.response_plug.unplug()
+                item.response_plug.detach()
                 self.response_slot.zap(item.origin, body, sseq)
             else:
                 self.logger.warning("Unexpected response for message #%d!" % tseq)
@@ -455,9 +450,9 @@ class MsgpDispatcher(Loggable):
     def __init__(self):
         Loggable.__init__(self)
         
-        self.request_slot = zap.EventSlot()
-        self.response_slot = zap.EventSlot()
-        self.status_slot = zap.EventSlot()
+        self.request_slot = EventSlot()
+        self.response_slot = EventSlot()
+        self.status_slot = EventSlot()
         
         self.streams_by_name = {}
         self.handshakes_by_addr = {}
@@ -471,9 +466,9 @@ class MsgpDispatcher(Loggable):
         pipe.set_oid(self.oid.add("pipe", str(addr)))
         handshake = Handshake(pipe)
         
-        handshake.process_plug = pipe.process_slot.plug(self.handshake_processed, addr=addr)
-        handshake.ack_plug = pipe.ack_slot.plug(self.handshake_acked, addr=addr)
-        handshake.error_plug = pipe.error_slot.plug(self.handshake_failed, addr=addr)
+        handshake.process_plug = Plug(self.handshake_processed, addr=addr).attach(pipe.process_slot)
+        handshake.ack_plug = Plug(self.handshake_acked, addr=addr).attach(pipe.ack_slot)
+        handshake.error_plug = Plug(self.handshake_failed, addr=addr).attach(pipe.error_slot)
 
         self.handshakes_by_addr[addr] = handshake
         
@@ -574,9 +569,9 @@ class MsgpDispatcher(Loggable):
             
         name = h.name
         pipe = h.pipe
-        h.process_plug.unplug()
-        h.ack_plug.unplug()
-        h.error_plug.unplug()
+        h.process_plug.detach()
+        h.ack_plug.detach()
+        h.error_plug.detach()
         
         stream = self.streams_by_name.get(name)
     
@@ -584,9 +579,9 @@ class MsgpDispatcher(Loggable):
             self.logger.info("Creating new stream %s" % name)
             stream = MsgpStream()
             stream.set_oid(self.oid.add("stream", name))
-            stream.request_slot.plug(self.process_request, name=name)
-            stream.response_slot.plug(self.process_response, name=name)
-            stream.error_slot.plug(self.process_error, name=name)
+            Plug(self.process_request, name=name).attach(stream.request_slot)
+            Plug(self.process_response, name=name).attach(stream.response_slot)
+            Plug(self.process_error, name=name).attach(stream.error_slot)
             self.streams_by_name[name] = stream
 
             self.status_slot.zap(name, addr)
@@ -664,7 +659,7 @@ class MsgpPeer(MsgpDispatcher):
         
         if local_addr:
             self.listener = TcpListener(local_addr)
-            self.listener.accepted_slot.plug(self.accepted)
+            Plug(self.accepted).attach(self.listener.accepted_slot)
         else:
             self.listener = None
 
@@ -689,7 +684,7 @@ class MsgpPeer(MsgpDispatcher):
     def add_remote_addr(self, remote_addr):
         reconnector = TcpReconnector(remote_addr, datetime.timedelta(seconds=1))
         reconnector.set_oid(self.oid.add("reconnector", str(remote_addr)))
-        reconnector.connected_slot.plug(self.connected)
+        Plug(self.connected).attach(reconnector.connected_slot)
         self.reconnectors_by_addr[remote_addr] = reconnector
         reconnector.start()
         

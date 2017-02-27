@@ -6,6 +6,7 @@ from weakref import proxy
 from format import Nameaddr, Status, Uri, Sip
 from transactions import make_simple_response
 from log import Loggable
+from zap import Plug
 
 
 MAX_FORWARDS = 20
@@ -336,10 +337,8 @@ class Registrar(Loggable):
             route = None  # TODO: do we want to register using a Route?
             next_uri = route[0].uri if route else registrar_uri
         
-            self.switch.select_hop_slot(next_uri).plug(
-                self.hop_resolved,
-                record_uri=record_uri,
-                registrar_uri=registrar_uri
+            Plug(self.hop_resolved, record_uri=record_uri, registrar_uri=registrar_uri).attach(
+                self.switch.select_hop_slot(next_uri)
             )
             return
             

@@ -6,6 +6,7 @@ from sdp import Session
 from endpoint_sip_helpers import SessionHelper
 from endpoint_sip_iuc import InviteUpdateComplex
 from log import Loggable
+from zap import Plug
 
 
 class SipEndpoint(Endpoint, SessionHelper):
@@ -30,7 +31,7 @@ class SipEndpoint(Endpoint, SessionHelper):
         self.state = self.DOWN
 
         self.dialog = dialog
-        self.dialog.message_slot.plug(self.process)
+        Plug(self.process).attach(self.dialog.message_slot)
         
         self.iuc = InviteUpdateComplex(proxy(self), self.USE_RPR)
         
@@ -117,7 +118,7 @@ class SipEndpoint(Endpoint, SessionHelper):
             uri = self.dst.get("uri") or to.uri
             route = self.dst.get("route")
             next_uri = route[0].uri if route else uri
-            self.ground.select_hop_slot(next_uri).plug(self.hop_selected, action=action)
+            Plug(self.hop_selected, action=action).attach(self.ground.select_hop_slot(next_uri))
             return
         else:
             self.logger.info("Doing %s action." % type)

@@ -3,7 +3,7 @@ from collections import namedtuple
 
 from msgp import MsgpPeer
 from log import Loggable
-import zap
+from zap import EventSlot, Plug
 
 
 def label_from_oid(oid):
@@ -129,7 +129,7 @@ class RtpMediaThing(MediaThing):
     def __init__(self):
         MediaThing.__init__(self, "rtp")
 
-        self.event_slot = zap.EventSlot()
+        self.event_slot = EventSlot()
 
     
     def process_request(self, target, params, source):
@@ -152,9 +152,9 @@ class Controller(Loggable):
         self.wthings_by_label = {}
         
         self.msgp = MsgpPeer(None)
-        self.msgp.request_slot.plug(self.process_request)
-        self.msgp.response_slot.plug(self.process_response)
-        self.msgp.status_slot.plug(self.status_changed)
+        Plug(self.process_request).attach(self.msgp.request_slot)
+        Plug(self.process_response).attach(self.msgp.response_slot)
+        Plug(self.status_changed).attach(self.msgp.status_slot)
         
         
     def set_oid(self, oid):

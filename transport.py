@@ -3,7 +3,7 @@ import socket
 from async_net import TcpReconnector, TcpListener, HttpLikeStream, HttpLikeMessage
 from format import Hop, Addr, parse_structured_message, print_structured_message
 from log import Loggable
-import zap
+from zap import EventSlot, Plug
 import resolver
 
 
@@ -15,19 +15,19 @@ class Transport(Loggable):
     def __init__(self):
         Loggable.__init__(self)
         
-        self.recved_slot = zap.EventSlot()
+        self.recved_slot = EventSlot()
 
 
 class TestTransport(Transport):
     def __init__(self):
         Transport.__init__(self)
         
-        self.exchange_slot = zap.EventSlot()
-        self.exchange_plug = None
+        self.exchange_slot = EventSlot()
+        self.exchange_plug = Plug(self.exchanged)
         
         
     def set_peer(self, peer):
-        self.exchange_plug = peer.exchange_slot.plug(self.exchanged)
+        self.exchange_plug.attach(peer.exchange_slot)
         
         
     def send(self, message, raddr):
@@ -43,7 +43,7 @@ class UdpTransport(Transport):
         Transport.__init__(self)
         
         self.socket = socket
-        zap.read_slot(self.socket).plug(self.recved)
+        Plug(self.recved).attach_read(self.socket)
         
         
     def send(self, message, raddr):
@@ -66,7 +66,7 @@ class TcpTransport(Transport):
         
         socket.setblocking(False)
         self.http_like_stream = HttpLikeStream(socket)
-        self.http_like_stream.process_slot.plug(self.process)
+        Plug(self.process).attach(self.http_like_stream.process_slot)
 
 
     def set_oid(self, oid):
@@ -95,12 +95,12 @@ class TransportManager(Loggable):
         self.transports_by_hop = {}
         self.tcp_reconnectors_by_hop = {}
         self.tcp_listeners_by_hop = {}
-        self.process_slot = zap.EventSlot()
+        self.process_slot = EventSlot()
         
         
     def add_transport(self, hop, transport):
         transport.set_oid(self.oid.add("hop", str(hop)))
-        transport.recved_slot.plug(self.process_message, hop=hop)
+        Plug(self.process_message, hop=hop).attach(transport.recved_slot)
         self.transports_by_hop[hop] = transport
         
         if not self.default_hop:
@@ -132,7 +132,7 @@ class TransportManager(Loggable):
                 # TODO: add local address binding!
                 reconnector = TcpReconnector(hop.remote_addr, None)
                 reconnector.set_oid(self.oid.add("reconnector", str(hop)))
-                reconnector.connected_slot.plug(self.tcp_reconnector_connected, hop=hop)
+                Plug(self.tcp_reconnector_connected, hop=hop).attach(reconnector.connected_slot)
                 reconnector.start()
                 
                 self.tcp_reconnectors_by_hop[hop] = reconnector
@@ -142,7 +142,7 @@ class TransportManager(Loggable):
 
                 listener = TcpListener(hop.local_addr)
                 listener.set_oid(self.oid.add("listener", str(hop)))
-                listener.accepted_slot.plug(self.tcp_listener_accepted, hop=hop)
+                Plug(self.tcp_listener_accepted, hop=hop).attach(listener.accepted_slot)
                 
                 self.tcp_listeners_by_hop[hop] = listener
             else:
@@ -174,9 +174,9 @@ class TransportManager(Loggable):
         next_transport = next_uri.params.get("transport", "UDP")  # TODO: tcp for sips
         next_host = next_uri.addr.host
         next_port = next_uri.addr.port
-        slot = zap.EventSlot()
+        slot = EventSlot()
         
-        resolver.resolve_slot(next_host).plug(self.select_hop_finish, port=next_port, transport=next_transport, slot=slot)
+        Plug(self.select_hop_finish, port=next_port, transport=next_transport, slot=slot).attach(resolver.resolve_slot(next_host))
         return slot
 
 
