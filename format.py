@@ -471,7 +471,7 @@ def parse_digest(parser):
     return params
     
 
-class WwwAuth(namedtuple("WwwAuth",
+class WwwAuthenticate(namedtuple("WwwAuthenticate",
     [ "realm", "nonce", "domain", "opaque", "algorithm", "stale", "qop" ]
 )):
     def __new__(cls, realm, nonce, domain=None, opaque=None, algorithm=None, stale=None, qop=None):
@@ -505,7 +505,7 @@ class WwwAuth(namedtuple("WwwAuth",
         return cls(**params)
         
     
-class Auth(namedtuple("Auth",
+class Authorization(namedtuple("Authorization",
     [ "realm", "nonce", "username", "uri", "response", "opaque", "algorithm", "qop", "cnonce", "nc" ]
 )):
     def __new__(cls, realm, nonce, username, uri, response, opaque=None, algorithm=None, qop=None, cnonce=None, nc=None):
@@ -953,9 +953,9 @@ def parse_structured_message(hlm):
             msg[field].extend(parse_comma_separated(Via, x))
             continue
         elif field in ("www_authenticate"):
-            y = WwwAuth.parse(Parser(x))
+            y = WwwAuthenticate.parse(Parser(x))
         elif field in ("authorization"):
-            y = Auth.parse(Parser(x))
+            y = Authorization.parse(Parser(x))
         elif field == "cseq":  # TODO
             parser = Parser(x)
             number = parser.grab_number()

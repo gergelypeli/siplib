@@ -2,7 +2,7 @@ from weakref import proxy
 import uuid
 import hashlib
 
-from format import Auth, WwwAuth
+from format import Authorization, WwwAuthenticate
 from log import Loggable
 
 
@@ -28,17 +28,20 @@ class Authority(Loggable):
         return self.md5("%s:%s:%s" % (authname, realm, password))
         
 
-    def compute_digest(self, method, uri, ha1, nonce, qop=None, cnonce=None, nc=None):
-        if not qop:
-            ha2 = self.md5("%s:%s" % (method, uri))
-            response = self.md5("%s:%s:%s" % (ha1, nonce, ha2))
-            return response
-        elif qop == "auth":
-            ha2 = self.md5("%s:%s" % (method, uri))
-            response = self.md5("%s:%s:%08x:%s:%s:%s" % (ha1, nonce, nc, cnonce, qop, ha2))
-            return response
+    def compute_digest(self, algorithm, method, uri, ha1, nonce, qop=None, cnonce=None, nc=None):
+        if not algorithm or algorithm.upper() == "MD5":
+            if not qop:
+                ha2 = self.md5("%s:%s" % (method, uri))
+                response = self.md5("%s:%s:%s" % (ha1, nonce, ha2))
+                return response
+            elif qop == "auth":
+                ha2 = self.md5("%s:%s" % (method, uri))
+                response = self.md5("%s:%s:%08x:%s:%s:%s" % (ha1, nonce, nc, cnonce, qop, ha2))
+                return response
+            else:
+                raise Exception("Don't know this quality of protection: %s!" % qop)
         else:
-            raise Exception("Don't know this quality of protection: %s!" % qop)
+            raise Exception("Don't know this digest algorithm: %s!" % algorithm)
         
 
     def check_digest(self, method, auth, ha1):
@@ -64,10 +67,6 @@ class Authority(Loggable):
             self.logger.debug("QOP is not auth!")
             return False
         
-        if auth.algorithm not in (None, "MD5"):
-            self.logger.debug("Digest algorithm not MD5!")
-            return False
-        
         if not auth.cnonce:
             self.logger.debug("Cnonce not set!")
             return False
@@ -76,7 +75,7 @@ class Authority(Loggable):
             self.logger.debug("Nc not set!")
             return False
 
-        response = self.compute_digest(method, auth.uri, ha1, auth.nonce, auth.qop, auth.cnonce, auth.nc)
+        response = self.compute_digest(auth.algorithm, method, auth.uri, ha1, auth.nonce, auth.qop, auth.cnonce, auth.nc)
         
         if auth.response != response:
             self.logger.debug("Wrong response!")
@@ -132,12 +131,12 @@ class LocalAccount(Account):
 
     def require_auth(self, request):
         auth = request.get("authorization")
-        stale = auth.nonce not in self.nonce if auth else False  # client should retry
+        stale = auth.nonce not in self.nonces if auth else False  # client should retry
         nonce = self.generate_nonce()
         self.nonces.add(nonce)  # TODO: must clean these up
         realm = self.manager.get_local_realm()
         
-        www_auth = WwwAuth(realm, nonce, stale=stale, qop=[ "auth" ])
+        www_auth = WwwAuthenticate(realm, nonce, stale=stale, qop=[ "auth" ])
         return { 'www_authenticate': www_auth }
 
 
@@ -161,14 +160,11 @@ class RemoteAccount(Account):
             self.logger.debug("Digest QOP auth not available!")
             return None
         
-        if www_auth.algorithm not in (None, "MD5"):
-            self.logger.debug("Digest algorithm not MD5!")
-            return None
-
         method = request.method
         # Since the other and will have no clue how the RURI changed during the routing,
         # it should only use the URI we put in this header for computations.
         uri = request["to"].uri.print()
+        algo = www_auth.algorithm
         realm = www_auth.realm
         nonce = www_auth.nonce
         opaque = www_auth.opaque
@@ -176,8 +172,8 @@ class RemoteAccount(Account):
         cnonce = self.generate_nonce()
         nc = 1  # we don't reuse server nonce-s
 
-        response = self.compute_digest(method, uri, self.ha1, nonce, qop, cnonce, nc)
-        auth = Auth(realm, nonce, self.authname, uri, response, opaque=opaque, qop=qop, cnonce=cnonce, nc=nc)
+        response = self.compute_digest(algo, method, uri, self.ha1, nonce, qop, cnonce, nc)
+        auth = Authorization(realm, nonce, self.authname, uri, response, opaque=opaque, algorithm=algo, qop=qop, cnonce=cnonce, nc=nc)
         return { 'authorization':  auth }
         
 

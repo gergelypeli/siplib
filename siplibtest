@@ -25,6 +25,7 @@ TEST = TEST_DIALIN
 NUMBER_A_PREFIX = "2"
 NUMBER_A_SNOM_1 = "201"
 NUMBER_A_SNOM_2 = "202"
+NUMBER_A_CISCO_1 = "211"
 NUMBER_A_REMOTE_CALLEE = "240"
 NUMBER_A_LOCAL_CALLEE = "250"
 NUMBER_A_LOCAL_UNREACHABLE = "251"
@@ -61,11 +62,17 @@ B_REALM = B_DOMAIN
 B_AUTHNAME = "B_AUTHNAME"
 B_HA1 = "B_HA1"
 
+C_DOMAIN = "192.168.1.2"  # for the stupid Cisco that resolves everything
+
 DDI_DOMAIN = "d.switch"
 
 SNOM_AUTHNAME = "phone"
 SNOM_HA1 = "38450ead4036feb352c45462d8008511"  # md5(phone:a.switch:secret)
 SNOM_WEB = Addr("192.168.1.7", 80)
+
+CISCO_AUTHNAME = "mycisco"
+CISCO_HA1 = "2891f2e30de2dbc69d14127226a096a6"  # md5(mycisco:a.switch:mypassword)
+
 
 CALLER_NAMEADDR = Nameaddr(Uri(Addr(B_DOMAIN, None), "caller"), "Caller")
 CALLEE_NAMEADDR = Nameaddr(Uri(Addr(B_DOMAIN, None), "callee"), "Callee")
@@ -253,6 +260,10 @@ class SwitchA(TestSwitch):
         # SNOM lives on its own device, but also registers here
         snom_aor = Uri(Addr(A_DOMAIN), NUMBER_A_SNOM_1)
         self.add_record_account(snom_aor, SNOM_AUTHNAME, SNOM_HA1, LocalRecord.AUTH_IF_UNREGISTERED)
+
+        # Cisco lives on its own device, but also registers here
+        cisco_aor = Uri(Addr(C_DOMAIN), NUMBER_A_CISCO_1)
+        self.add_record_account(cisco_aor, CISCO_AUTHNAME, CISCO_HA1, LocalRecord.AUTH_IF_UNREGISTERED)
         
         # Allow calls from anyone on switch B as long as they use this hop
         b_aor = Uri(Addr(B_DOMAIN), None)
@@ -265,9 +276,11 @@ class SwitchA(TestSwitch):
 
         # Add a voicemail box to monitor
         self.subscription_manager.add_event_source("voicemail", dict(mailbox="201"))
+        self.subscription_manager.add_event_source("voicemail", dict(mailbox="211"))
         
         # Add line states
         self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_SNOM_1))
+        self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_CISCO_1))
         self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_LOCAL_RINGING_LINE))
         self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_LOCAL_CALLEE_LINE))
         

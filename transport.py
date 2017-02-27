@@ -53,11 +53,14 @@ class UdpTransport(Transport):
     def recved(self):
         packet, raddr = self.socket.recvfrom(65535)
         
-        header, separator, rest = packet.partition(b"\r\n\r\n")
-        message, content_length = HttpLikeMessage.parse(header)
-        message.body = rest[:content_length]
-
-        self.recved_slot.zap(message, Addr(*raddr))
+        try:
+            header, separator, rest = packet.partition(b"\r\n\r\n")
+            message, content_length = HttpLikeMessage.parse(header)
+            message.body = rest[:content_length]
+        except Exception as e:
+            self.logger.error("Invalid UDP message: %s!" % e)
+        else:
+            self.recved_slot.zap(message, Addr(*raddr))
 
 
 class TcpTransport(Transport):
