@@ -1,4 +1,4 @@
-from format import Status, Rack, Sip
+from format import Status, Rack, Sip, make_cease_response
 from sdp import add_sdp, get_sdp, has_sdp, SdpBuilder, SdpParser, Session
 from log import Loggable
 
@@ -458,6 +458,9 @@ class InviteUpdateComplex(Loggable):
                 self.send_message(response)
                 return None, None
 
+            # Stop the RPR retransmissions
+            self.send_message(make_cease_response(self.unresponded_invite))
+            
             sdp = get_sdp(request)
             
             if not sdp:
@@ -509,6 +512,9 @@ class InviteUpdateComplex(Loggable):
             if not self.unacked_final:
                 self.logger.warning("Got unexpected ACK, ignoring!")
                 return None, None
+
+            # Stop the final retransmissions
+            self.send_message(make_cease_response(self.unacked_final.related))
                 
             sdp = get_sdp(request)
             
