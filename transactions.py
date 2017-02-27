@@ -230,7 +230,10 @@ class PlainServerTransaction(Transaction):
 
 
     def send(self, response):
-        self.change_state(self.LINGERING)
+        # Don't change state if we're subclassed to InviteServer, then the state is
+        # always PROVISIONING or TRANSMITTING. TODO: this is not nice.
+        if self.state == self.WAITING:
+            self.change_state(self.LINGERING)
         
         if response.get("via"):
             raise Error("Don't mess with the response Via headers!")
