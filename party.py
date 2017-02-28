@@ -271,7 +271,7 @@ class Bridge(Party):
         self.leg_count = 0
         self.queued_leg_actions = {}
 
-        self.is_ringing = False  # if a ring action was sent to the incoming leg
+        self.is_ringing = False  # if an artificial ring action was sent to the incoming leg
         self.is_anchored = False  # if a routing decision was made on the outgoing legs
         self.is_accepted = False  # if an accept was sent to the incoming leg
         
@@ -525,22 +525,25 @@ class Bridge(Party):
                     pass
             elif type == "transfer":
                 self.process_leg_transfer(li, action)
-            else:
-                # The less important actions
-            
-                if type == "ring":
-                    # This is kinda special because we have a flag for it partially
-                    self.ring_incoming_leg()
-            
-                    if action.get("session"):
-                        action["type"] = "session"
-                        type = "session"
-
-                if type != "ring":
-                    if self.is_anchored:
+            elif type == "ring":
+                # This is kinda special because we have a flag for it partially
+                session = action.get("session")
+                
+                if self.is_anchored:
+                    if not self.is_ringing:
                         self.forward_leg(0, action)
-                    else:
-                        self.queue_leg_action(li, action)
+                    elif session:
+                        self.forward_leg(0, dict(type="session", session=session))
+                else:
+                    self.ring_incoming_leg()
+    
+                    if session:
+                        self.queue_leg_action(li, dict(type="session", session=session))
+            else:
+                if self.is_anchored:
+                    self.forward_leg(0, action)
+                else:
+                    self.queue_leg_action(li, action)
             
         self.may_finish()
 

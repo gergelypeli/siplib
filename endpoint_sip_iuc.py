@@ -4,11 +4,10 @@ from log import Loggable
 
 
 class InviteUpdateComplex(Loggable):
-    def __init__(self, sip_endpoint, use_rpr):
+    def __init__(self, sip_endpoint):
         Loggable.__init__(self)
         
         self.sip_endpoint = sip_endpoint
-        self.use_rpr = use_rpr
         self.is_ever_finished = False
 
         # These are not Loggable (yet)
@@ -95,6 +94,7 @@ class InviteUpdateComplex(Loggable):
         
         self.is_client = None
         self.is_queried = None
+        self.is_rpr_used = None
         
         self.is_established = False
         self.invite_response_sdp = None
@@ -121,7 +121,7 @@ class InviteUpdateComplex(Loggable):
             self.logger.info("Can't finish yet, has %s." % ", ".join(w for w in what if w))
 
     
-    def start(self, is_client, is_queried):
+    def start(self, is_client, is_queried, is_rpr_used):
         if self.is_busy():
             raise Exception("Can't start while busy!")
 
@@ -129,6 +129,7 @@ class InviteUpdateComplex(Loggable):
         
         self.is_client = is_client
         self.is_queried = is_queried
+        self.is_rpr_used = is_rpr_used
 
 
     # Client
@@ -157,13 +158,18 @@ class InviteUpdateComplex(Loggable):
                 self.logger.error("INVITE request can't take a session answer!")
                 return
 
-            if self.use_rpr:
-                request.setdefault("require", set()).add("100rel")
-                request.setdefault("supported", set()).add("100rel")
+            use_rpr = not session.is_query()
             
+            if use_rpr:
+                self.logger.info("Will support 100rel.")
+                #request.setdefault("require", set()).add("100rel")
+                request.setdefault("supported", set()).add("100rel")
+            else:
+                self.logger.info("Won't support 100rel.")
+            
+            self.start(is_client=True, is_queried=session.is_query(), is_rpr_used=use_rpr)
             self.send_message(request)
             
-            self.start(is_client=True, is_queried=session.is_query())
             self.unresponded_invite = request
             return
         elif request.method == "CANCEL":
@@ -421,7 +427,21 @@ class InviteUpdateComplex(Loggable):
             session = self.parse_sdp(sdp, False) if sdp else Session.make_query()
             self.logger.info("Got INVITE request with %s." % ("offer" if sdp else "query"))
             
-            self.start(is_client=False, is_queried=not sdp)
+            use_rpr = sdp is not None
+
+            if not use_rpr and "100rel" in request.get("require", set()):
+                self.logger.warning("Caller required 100rel, but we don't want it, rejecting!")
+                response = Sip.response(status=Status.NOT_ACCEPTABLE, related=request)
+                self.send_message(response)
+                return None, None
+                
+            if use_rpr and "100rel" not in request.get("supported", set()):
+                self.logger.info("Caller does not support 100rel, although we would.")
+                use_rpr = False
+            else:
+                self.logger.info("%s support 100rel." % ("Will" if use_rpr else "Won't"))
+            
+            self.start(is_client=False, is_queried=not sdp, is_rpr_used=use_rpr)
             self.unresponded_invite = request
             return request, session
         elif request.method == "CANCEL":
@@ -586,7 +606,7 @@ class InviteUpdateComplex(Loggable):
                 session = None
             
         if response.status.code < 200:
-            if self.use_rpr:
+            if self.is_rpr_used:
                 if not session:
                     if self.is_queried and not self.is_established:
                         self.logger.info("Can't send reliable INVITE response before offer, must queue.")

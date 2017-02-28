@@ -20,7 +20,7 @@ class SipEndpoint(Endpoint, SessionHelper):
 
     DEFAULT_ALLOWED_METHODS = { "INVITE", "CANCEL", "ACK", "PRACK", "BYE", "UPDATE", "REFER" }
 
-    USE_RPR = True
+    #USE_RPR = True
 
 
     def __init__(self, manager, dialog):
@@ -33,7 +33,7 @@ class SipEndpoint(Endpoint, SessionHelper):
         self.dialog = dialog
         Plug(self.process).attach(self.dialog.message_slot)
         
-        self.iuc = InviteUpdateComplex(proxy(self), self.USE_RPR)
+        self.iuc = InviteUpdateComplex(proxy(self))
         
 
     def set_oid(self, oid):
