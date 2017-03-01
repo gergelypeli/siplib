@@ -7,9 +7,8 @@ from format import Nameaddr, Status, Uri, Sip
 from transactions import make_simple_response
 from log import Loggable
 from zap import Plug
+from util import generate_call_id, generate_tag, MAX_FORWARDS
 
-
-MAX_FORWARDS = 20
 
 class Error(Exception):
     pass
@@ -22,14 +21,6 @@ def safe_update(target, source):
         target[k] = v
 
     return target
-
-
-def generate_call_id():
-    return uuid.uuid4().hex[:8]
-
-
-def generate_tag():
-    return uuid.uuid4().hex[:8]
 
 
 UriHop = collections.namedtuple("UriHop", [ "uri", "hop" ])

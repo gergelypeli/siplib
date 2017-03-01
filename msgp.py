@@ -9,6 +9,7 @@ from async_net import TcpReconnector, TcpListener
 from log import Loggable
 from format import Addr
 from zap import Slot, EventSlot, Plug
+from util import generate_session_id
 
 
 class MessagePipe(Loggable):
@@ -655,7 +656,7 @@ class MsgpPeer(MsgpDispatcher):
         MsgpDispatcher.__init__(self)
         
         self.name = "noname"
-        self.session_id = self.generate_session_id()
+        self.session_id = generate_session_id()
         
         if local_addr:
             self.listener = TcpListener(local_addr)
@@ -677,10 +678,6 @@ class MsgpPeer(MsgpDispatcher):
         self.name = name
 
         
-    def generate_session_id(self):
-        return uuid.uuid4().hex[:8]
-
-
     def add_remote_addr(self, remote_addr):
         reconnector = TcpReconnector(remote_addr, datetime.timedelta(seconds=1))
         reconnector.set_oid(self.oid.add("reconnector", str(remote_addr)))

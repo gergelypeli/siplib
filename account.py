@@ -4,6 +4,7 @@ import hashlib
 
 from format import Authorization, WwwAuthenticate
 from log import Loggable
+from util import generate_nonce
 
 
 class Authority(Loggable):
@@ -13,10 +14,6 @@ class Authority(Loggable):
         self.authname = authname
         self.ha1 = ha1
         self.nonces = set()
-
-
-    def generate_nonce(self):
-        return uuid.uuid4().hex[:8]
 
 
     def md5(self, x):
@@ -132,7 +129,7 @@ class LocalAccount(Account):
     def require_auth(self, request):
         auth = request.get("authorization")
         stale = auth.nonce not in self.nonces if auth else False  # client should retry
-        nonce = self.generate_nonce()
+        nonce = generate_nonce()
         self.nonces.add(nonce)  # TODO: must clean these up
         realm = self.manager.get_local_realm()
         
@@ -169,7 +166,7 @@ class RemoteAccount(Account):
         nonce = www_auth.nonce
         opaque = www_auth.opaque
         qop = "auth"
-        cnonce = self.generate_nonce()
+        cnonce = generate_nonce()
         nc = 1  # we don't reuse server nonce-s
 
         response = self.compute_digest(algo, method, uri, self.ha1, nonce, qop, cnonce, nc)

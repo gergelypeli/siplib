@@ -3,6 +3,7 @@ import collections
 import datetime
 import re
 
+from util import generate_sdp_session_id
 
 STATIC_PAYLOAD_TYPES = {
     0: ("PCMU", 8000, 1, None),
@@ -30,14 +31,6 @@ def get_sdp(params):
 def has_sdp(params):
     return params.get("content_type") == "application/sdp"
     
-
-last_session_id = 0
-
-def generate_session_id():
-    global last_session_id
-    last_session_id += 1
-    return last_session_id
-
 
 def rip_direction(attributes):
     for i, (k, v) in enumerate(attributes):
@@ -113,14 +106,6 @@ class Connection(collections.namedtuple("Connection", "net_type addr_type host")
 
 
 class Origin(collections.namedtuple("Origin", "username session_id session_version net_type addr_type host")):
-    last_session_id = 0
-    
-    @classmethod
-    def generate_session_id(cls):
-        cls.last_session_id += 1
-        return cls.last_session_id
-        
-        
     def print(self):
         return "%s %s %s %s %s %s" % self
         
@@ -345,7 +330,7 @@ class SdpBuilder:
         self.origin_username = "-"
         self.origin_hostname = "127.0.0.1"
         
-        self.session_id = generate_session_id()
+        self.session_id = generate_sdp_session_id()
         self.last_session_version = 0
         
         

@@ -5,6 +5,7 @@ from log import Loggable
 
 from format import Via, Status, make_simple_response, make_non_2xx_ack, make_cease_response, is_cease_response
 from zap import Plug, EventSlot
+from util import generate_branch
 
 # tr id: (branch, method)
 
@@ -386,10 +387,6 @@ class TransactionManager(Loggable):
         self.transport.send_message(msg)
         
 
-    def generate_branch(self):
-        return Via.BRANCH_MAGIC + uuid.uuid4().hex[:8]
-
-
     def identify(self, params):
         try:
             branch = params["via"][0].params["branch"]
@@ -503,7 +500,7 @@ class TransactionManager(Loggable):
             if not invite_tr:
                 raise Error("No transaction to ACK!")
             
-            invite_tr.create_and_send_ack(self.generate_branch(), msg)
+            invite_tr.create_and_send_ack(generate_branch(), msg)
             return
         elif method == "CANCEL":
             if not msg.related:
@@ -531,9 +528,9 @@ class TransactionManager(Loggable):
             
             msg.body = None
         elif method == "INVITE":
-            tr = InviteClientTransaction(proxy(self), self.generate_branch(), method)
+            tr = InviteClientTransaction(proxy(self), generate_branch(), method)
         else:
-            tr = PlainClientTransaction(proxy(self), self.generate_branch(), method)
+            tr = PlainClientTransaction(proxy(self), generate_branch(), method)
 
         self.add_client_transaction(tr)
         tr.send(msg)

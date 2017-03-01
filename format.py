@@ -390,9 +390,6 @@ class Rack(namedtuple("Rack", [ "rseq", "cseq", "method" ])):
 
 
 class Via(namedtuple("Via", [ "transport", "addr", "params" ])):
-    BRANCH_MAGIC = "z9hG4bK"
-
-
     def print(self):
         return "SIP/2.0/%s %s%s" % (self.transport, self.addr, print_generic_params(self.params))
         

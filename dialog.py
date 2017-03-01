@@ -4,9 +4,8 @@ from weakref import WeakValueDictionary
 from format import Uri, Nameaddr, Sip
 from log import Loggable
 from zap import EventSlot
+from util import MAX_FORWARDS, generate_call_id, generate_tag
 
-
-MAX_FORWARDS = 20
 
 class Error(Exception):
     pass
@@ -19,14 +18,6 @@ def safe_update(target, source):
         target[k] = v
 
     return target
-
-
-def generate_tag():
-    return uuid.uuid4().hex[:8]
-
-
-def generate_call_id():
-    return uuid.uuid4().hex[:8]
 
 
 def first(x):
