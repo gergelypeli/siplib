@@ -24,6 +24,7 @@ class Switch(Loggable):
         Loggable.__init__(self)
 
         self.call_count = 0
+        self.unsolicited_ids_by_urihop = {}
 
         self.transport_manager = transport_manager or TransportManager(
         )
@@ -152,8 +153,14 @@ class Switch(Loggable):
             remote_uri = urihop.uri
             hop = urihop.hop
             
-            self.subscription_manager.unsolicited_subscribe(key, local_uri, remote_uri, hop)
-        
+            id = self.subscription_manager.unsolicited_subscribe(key, local_uri, remote_uri, hop)
+            self.unsolicited_ids_by_urihop[urihop] = id
+        elif not info and urihop in self.unsolicited_ids_by_urihop:
+            self.logger.info("A Cisco device unregistered, stopping unsolicited MWI.")
+            key = ("voicemail", aor.username)
+            id = self.unsolicited_ids_by_urihop.pop(urihop)
+            self.subscription_manager.unsolicited_unsubscribe(key, id)
+            
         
     def auth_request(self, request):
         authname, sure = self.registrar.authenticate_request(request)

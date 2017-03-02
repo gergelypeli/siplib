@@ -13,17 +13,10 @@ class Error(Exception):
     pass
 
 
-def safe_update(target, source):
-    for k, v in source.items():
-        if k in target:
-            raise Error("Can't overwrite field %r!" % k)
-        target[k] = v
-
-    return target
-
-
 UriHop = collections.namedtuple("UriHop", [ "uri", "hop" ])
-ContactInfo = collections.namedtuple("ContactInfo", [ "call_id", "cseq", "expiration", "user_agent" ])
+ContactInfo = collections.namedtuple("ContactInfo", [
+    "call_id", "cseq", "user_agent", "expiration_deadline", "expiration_plug"
+])
 
 
 class LocalRecord(Loggable):
@@ -44,24 +37,32 @@ class LocalRecord(Loggable):
 
         self.contact_infos_by_uri_hop = {}
         
-
-    def add_contact(self, uri, hop, call_id, cseq, expiration, user_agent):
-        urihop = UriHop(uri, hop)
-        info = ContactInfo(call_id, cseq, expiration, user_agent)
         
-        if urihop not in self.contact_infos_by_uri_hop:
+    def contact_expired(self, urihop):
+        self.logger.info("Contact expired: %s via %s" % urihop)
+        self.contact_infos_by_uri_hop.pop(urihop)
+        self.registrar.record_changed(self.record_uri, urihop, None)
+
+
+    def refresh_contact(self, urihop, call_id, cseq, user_agent, expiration_deadline, expiration_plug):
+        info = ContactInfo(call_id, cseq, user_agent, expiration_deadline, expiration_plug)
+        oldinfo = self.contact_infos_by_uri_hop.get(urihop)
+        
+        if oldinfo:
+            if oldinfo.expiration_plug:
+                oldinfo.expiration_plug.detach()
+        else:
             # First time registration, invoke triggers
-            # TODO: expiration!
             self.registrar.record_changed(self.record_uri, urihop, info)
         
         self.contact_infos_by_uri_hop[urihop] = info
-        self.logger.info("Registered %s from %s via %s until %s." % (self.record_uri, uri, hop, expiration))
+        self.logger.info("Registered %s from %s via %s until %s." % (self.record_uri, urihop.uri, urihop.hop, expiration_deadline))
 
         
     def add_static_contact(self, uri, hop):
         urihop = UriHop(uri, hop)
         
-        self.contact_infos_by_uri_hop[urihop] = ContactInfo(None, None, None, "static")
+        self.contact_infos_by_uri_hop[urihop] = ContactInfo(None, None, "static", None, None)
         self.logger.info("Registered %s from %s via %s permanently." % (self.record_uri, uri, hop))
         
 
@@ -87,16 +88,19 @@ class LocalRecord(Loggable):
         # No contact is valid for just fetching the registrations
         for contact_nameaddr in contact_nameaddrs:
             uri = contact_nameaddr.uri
-            expires = contact_nameaddr.params.get("expires", request.get("expires"))
-            seconds_left = int(expires) if expires is not None else self.DEFAULT_EXPIRES
-            expiration = now + datetime.timedelta(seconds=seconds_left)
+            urihop = UriHop(uri, hop)
             user_agent = request.get("user_agent")
             
-            self.add_contact(uri, hop, call_id, cseq, expiration, user_agent)
+            expires = contact_nameaddr.params.get("expires", request.get("expires"))
+            seconds_left = int(expires) if expires is not None else self.DEFAULT_EXPIRES
+            expiration_deadline = now + datetime.timedelta(seconds=seconds_left)
+            expiration_plug = Plug(self.contact_expired, urihop=urihop).attach_time(seconds_left)
+            
+            self.refresh_contact(urihop, call_id, cseq, user_agent, expiration_deadline, expiration_plug)
         
         fetched = []
         for urihop, contact_info in self.contact_infos_by_uri_hop.items():
-            seconds_left = int((contact_info.expiration - now).total_seconds())
+            seconds_left = int((contact_info.expiration_deadline - now).total_seconds())
             fetched.append(Nameaddr(uri=urihop.uri, params=dict(expires=str(seconds_left))))
 
         response = Sip.response(status=Status.OK, related=request)
@@ -154,7 +158,8 @@ class LocalRecord(Loggable):
         
         
 class RemoteRecord(Loggable):
-    EXPIRES = 300
+    EXPIRES_SECONDS = 300
+    HAZARD_SECONDS = 5
 
     def __init__(self, registrar, record_uri, registrar_uri, hop):
         Loggable.__init__(self)
@@ -171,10 +176,11 @@ class RemoteRecord(Loggable):
         self.local_tag = generate_tag()  # make it persistent just for the sake of safety
         self.call_id = generate_call_id()
         self.cseq = 0
+        self.refresh_plug = Plug(self.refresh)
         
         
     def refresh(self):
-        expires = self.EXPIRES
+        expires = self.EXPIRES_SECONDS
         contact = [ Nameaddr(self.contact_uri, params=dict(expires=str(expires))) ]
         
         request = Sip.request(method="REGISTER")
@@ -221,13 +227,14 @@ class RemoteRecord(Loggable):
             if contact_nameaddr.uri == self.contact_uri:
                 expires = contact_nameaddr.params.get("expires", response.get("expires"))
                 seconds_left = int(expires)
-                expiration = datetime.datetime.now() + datetime.timedelta(seconds=seconds_left)
-                self.logger.info("Registered at %s until %s" % (self.registrar_uri, expiration))
+                expiration_deadline = datetime.datetime.now() + datetime.timedelta(seconds=seconds_left)
+                self.logger.info("Registered at %s until %s" % (self.registrar_uri, expiration_deadline))
+                
+                self.refresh_plug.detach()
+                self.refresh_plug.attach_time(seconds_left - self.HAZARD_SECONDS)
                 break
         else:
-            self.logger.warning("Couldn't confirm my registration!")
-            
-        # TODO: reschedule!
+            self.logger.warning("Couldn't confirm my registration, consider it expired!")
 
 
 class Registrar(Loggable):

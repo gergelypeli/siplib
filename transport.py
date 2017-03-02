@@ -222,7 +222,8 @@ class TransportManager(Loggable):
                 self.logger.info("Initiating connection for %s." % (hop,))
                 self.add_hop(hop)
         else:
-            self.logger.error("No transport to send message via %s!" % (hop,))
+            # Well, retransmissions are there for a reason, so don't complain too loudly
+            self.logger.debug("No transport to send message via %s!" % (hop,))
 
 
     def process_message(self, message, raddr, hop):

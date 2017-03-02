@@ -8,6 +8,11 @@ from zap import Plug, EventSlot
 from util import generate_call_id, generate_tag, MAX_FORWARDS
 
 
+# The Snom seems to miss the expiration of 60 seconds for some reason.
+MIN_EXPIRES_SECONDS = 60
+MAX_EXPIRES_SECONDS = 300
+
+
 class UnsolicitedDialog:
     def __init__(self, manager, local_uri, remote_uri, hop):
         self.manager = manager
@@ -58,7 +63,7 @@ class EventSource(Loggable):
         
 
     def get_expiry_range(self):
-        return 30, 60
+        return MIN_EXPIRES_SECONDS, MAX_EXPIRES_SECONDS
 
 
     def add_subscription(self, dialog):
@@ -69,7 +74,7 @@ class EventSource(Loggable):
         s = Subscription(dialog)
         self.subscriptions_by_id[id] = s
         
-        s.expiration_plug = Plug(self.expired, id=id)
+        s.expiration_plug = Plug(self.subscription_expired, id=id)
         Plug(self.process, id=id).attach(dialog.message_slot)
         
         return id
@@ -185,7 +190,7 @@ class EventSource(Loggable):
             self.notify_one(id, reason, state)
             
                 
-    def expired(self, id):
+    def subscription_expired(self, id):
         self.logger.info("Expired subscription %s." % id)
         self.notify_one(id, "timeout")
         self.subscriptions_by_id.pop(id)
@@ -360,7 +365,6 @@ class SubscriptionManager(Loggable):
         dialog.recv(request)
 
 
-    # TODO: unsubscribe, too
     def unsolicited_subscribe(self, key, local_uri, remote_uri, hop):
         es = self.event_sources_by_key.get(key)
         if not es:
@@ -372,6 +376,17 @@ class SubscriptionManager(Loggable):
         id = es.add_subscription(dialog)
         es.notify_one(id)
         
+        return id
+        
+        
+    def unsolicited_unsubscribe(self, key, id):
+        es = self.event_sources_by_key.get(key)
+        if not es:
+            self.logger.warning("Ignoring unsubscription for nonexistent event source: %s" % (key,))
+            return
+
+        es.subscription_expired(id)
+
 
     def get_event_source(self, type, id):
         key = (type, id)

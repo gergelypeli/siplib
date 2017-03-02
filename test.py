@@ -86,12 +86,12 @@ class TestEndpoint(PlannedEndpoint):
             self.logger.info("TestEndpoint received a session reject.")
             
             raise Exception("Eiii...")
-        
-        
-    def idle(self):
+
+
+    def idle(self, in_call):
         mt = self.get_media_thing(0, "gen")
         
-        if mt:
+        if mt and in_call:
             self.logger.info("Idle, fading in media.")
             mt.play(self.media_filename, self.media_format, volume=0.1, fade=3)
         else:
@@ -106,7 +106,7 @@ class TestEndpoint(PlannedEndpoint):
                 session = self.update_session(action["session"])
                 if session:
                     self.forward(dict(type="session", session=session))
-            elif type == "tone":
+            elif type == "tone" and in_call:
                 self.logger.info("Okay, got a tone %s, fading out..." % action["name"])
                 break
             elif type == "hangup":
@@ -120,7 +120,7 @@ class TestEndpoint(PlannedEndpoint):
         
         mt = self.get_media_thing(0, "gen")
         
-        if mt:
+        if mt and in_call:
             self.logger.info("Fading out media.")
             mt.play(volume=0, fade=3)
             yield from self.sleep(3)
@@ -128,7 +128,7 @@ class TestEndpoint(PlannedEndpoint):
             self.logger.info("No media to fade out.")
             
         if type != "hangup":
-            self.forward(dict(type="hangup", cause=Cause.WRONG_CALL_STATE))
+            self.forward(dict(type="hangup"))
 
 
 class UnreachableEndpoint(TestEndpoint):
@@ -165,7 +165,7 @@ class RingingEndpoint(TestEndpoint):
         self.forward(dict(type="ring", session=answer))
         self.logger.debug("Now ringing forever.")
 
-        yield from self.idle()
+        yield from self.idle(False)
         self.logger.debug("And now the caller hung up.")
 
 
@@ -236,7 +236,7 @@ class CalleeEndpoint(TestEndpoint):
         self.forward(dict(type="accept"))
         self.logger.debug("Sent accept.")
 
-        yield from self.idle()
+        yield from self.idle(True)
         
         self.logger.debug("Callee done.")
 
@@ -301,7 +301,7 @@ class CallerEndpoint(TestEndpoint):
                 self.logger.error("Hm, we got: %s!" % action["type"])
             
         # Be more flexible here!
-        yield from self.idle()
+        yield from self.idle(True)
 
         self.logger.debug("Caller done.")
 
@@ -311,7 +311,7 @@ class VoicemailEventSource(MessageSummaryEventSource):
         self.mailbox = params["mailbox"]
 
         self.state = 0
-        Plug(self.fake).attach_time(30, True)
+        Plug(self.fake).attach_time(10, True)
         
         return self.mailbox
         
