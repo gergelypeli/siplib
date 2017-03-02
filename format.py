@@ -301,7 +301,6 @@ Addr.__new__.__defaults__ = (None,)
 
 Status = namedtuple("Status", [ "code", "reason" ])
 
-Status.INTERNAL_REQUEST_TIMEOUT = Status(8, "Internal Request Timeout")
 Status.INTERNAL_RESPONSE_CEASED = Status(87, "Internal Response Ceased")
 
 Status.TRYING = Status(100, "Trying")
@@ -610,7 +609,7 @@ class Uri(namedtuple("Uri", "addr username scheme params headers")):
             parser.grab_separator(":")
 
         if scheme not in ("sip", "sips"):
-            return AbsoluteUri.parse(parser, bare_scheme)
+            return AbsoluteUri.parse(parser, scheme)
     
         username = None
         password = None

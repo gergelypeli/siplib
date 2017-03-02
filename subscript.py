@@ -1,9 +1,41 @@
 import datetime
+from weakref import proxy
 
-from format import Status, Sip
+from format import Status, Sip, Nameaddr
 from transactions import make_simple_response
 from log import Loggable
-from zap import Plug
+from zap import Plug, EventSlot
+from util import generate_call_id, generate_tag, MAX_FORWARDS
+
+
+class UnsolicitedDialog:
+    def __init__(self, manager, local_uri, remote_uri, hop):
+        self.manager = manager
+        self.local_uri = local_uri
+        self.remote_uri = remote_uri
+        self.hop = hop
+        
+        self.call_id = generate_call_id()
+        self.last_sent_cseq = 0
+        self.message_slot = EventSlot()  # not used
+        
+        
+    def send(self, msg):
+        if msg.is_response or msg.method != "NOTIFY":
+            raise Exception("WTF?")
+            
+        request = msg
+        self.last_sent_cseq += 1
+        
+        request.uri = self.remote_uri
+        request.hop = self.hop
+        request["from"] = Nameaddr(self.local_uri, params=dict(tag=generate_tag()))
+        request["to"] = Nameaddr(self.remote_uri)
+        request["call_id"] = self.call_id
+        request["cseq"] = self.last_sent_cseq
+        request["max_forwards"] = MAX_FORWARDS
+        
+        self.manager.send_message(msg)
 
 
 class Subscription:
@@ -39,6 +71,8 @@ class EventSource(Loggable):
         
         s.expiration_plug = Plug(self.expired, id=id)
         Plug(self.process, id=id).attach(dialog.message_slot)
+        
+        return id
 
 
     def process(self, msg, id):
@@ -116,19 +150,23 @@ class EventSource(Loggable):
         raise NotImplementedError()
 
 
-    def notify_one(self, id, reason=None, state=None):
+    def notify_one(self, id, reason=None, bulk_state=None):
         subscription = self.subscriptions_by_id[id]
         
-        if not state:
+        if bulk_state:
+            state = bulk_state
+        else:
             # So this is not a bulk notification
             self.logger.info("Notifying subscription %s." % id)
             state = self.get_state()
         
-        if not reason:
+        if reason:
+            ss = "terminated;reason=%s" % reason
+        elif subscription.expiration_deadline:
             expires = subscription.expiration_deadline - datetime.datetime.now()
             ss = "active;expires=%d" % expires.total_seconds()
         else:
-            ss = "terminated;reason=%s" % reason
+            ss = "active"
             
         # Must make copies in case of multiple subscriptions
         req = Sip.request(method="NOTIFY")
@@ -267,14 +305,14 @@ class SubscriptionManager(Loggable):
         self.event_sources_by_key = {}
         
 
-    def transmit(self, msg):
-        # For out of dialog responses
+    def send_message(self, msg):
+        # For out of dialog responses and unsolicited stuff
         self.switch.send_message(msg)
 
         
     def reject_request(self, request, status):
         response = make_simple_response(request, status)
-        self.transmit(response)
+        self.send_message(response)
 
 
     def identify_event_source(self, request):
@@ -321,6 +359,19 @@ class SubscriptionManager(Loggable):
         es.add_subscription(dialog)
         dialog.recv(request)
 
+
+    # TODO: unsubscribe, too
+    def unsolicited_subscribe(self, key, local_uri, remote_uri, hop):
+        es = self.event_sources_by_key.get(key)
+        if not es:
+            self.logger.warning("Ignoring subscription for nonexistent event source: %s" % (key,))
+            return
+        
+        self.logger.info("Will send unsolicited notifications for %s from %s to %s via %s." % (key, local_uri, remote_uri, hop))
+        dialog = UnsolicitedDialog(proxy(self), local_uri, remote_uri, hop)
+        id = es.add_subscription(dialog)
+        es.notify_one(id)
+        
 
     def get_event_source(self, type, id):
         key = (type, id)

@@ -33,6 +33,7 @@ class Switch(Loggable):
         self.registrar = registrar or Registrar(
             proxy(self)
         )
+        Plug(self.record_changed).attach(self.registrar.record_change_slot)
         self.subscription_manager = subscription_manager or SubscriptionManager(
             proxy(self)
         )
@@ -141,6 +142,17 @@ class Switch(Loggable):
     def call_finished(self, call):
         self.logger.debug("Finishing call %s" % call.oid)
         self.calls_by_oid.pop(call.oid)
+
+
+    def record_changed(self, aor, urihop, info):
+        if info and info.user_agent and "Cisco" in info.user_agent:
+            self.logger.info("A Cisco device registered, initiating unsolicited MWI.")
+            key = ("voicemail", aor.username)
+            local_uri = aor._replace(scheme="sip")
+            remote_uri = urihop.uri
+            hop = urihop.hop
+            
+            self.subscription_manager.unsolicited_subscribe(key, local_uri, remote_uri, hop)
         
         
     def auth_request(self, request):

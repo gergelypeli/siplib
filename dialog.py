@@ -1,4 +1,3 @@
-import uuid
 from weakref import WeakValueDictionary
 
 from format import Uri, Nameaddr, Sip

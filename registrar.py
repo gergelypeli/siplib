@@ -1,4 +1,3 @@
-import uuid
 import datetime
 import collections
 from weakref import proxy
@@ -6,7 +5,7 @@ from weakref import proxy
 from format import Nameaddr, Status, Uri, Sip
 from transactions import make_simple_response
 from log import Loggable
-from zap import Plug
+from zap import Plug, EventSlot
 from util import generate_call_id, generate_tag, MAX_FORWARDS
 
 
@@ -24,7 +23,7 @@ def safe_update(target, source):
 
 
 UriHop = collections.namedtuple("UriHop", [ "uri", "hop" ])
-ContactInfo = collections.namedtuple("ContactInfo", [ "call_id", "cseq", "expiration" ])
+ContactInfo = collections.namedtuple("ContactInfo", [ "call_id", "cseq", "expiration", "user_agent" ])
 
 
 class LocalRecord(Loggable):
@@ -46,16 +45,23 @@ class LocalRecord(Loggable):
         self.contact_infos_by_uri_hop = {}
         
 
-    def add_contact(self, uri, hop, call_id, cseq, expiration):
+    def add_contact(self, uri, hop, call_id, cseq, expiration, user_agent):
         urihop = UriHop(uri, hop)
-        self.contact_infos_by_uri_hop[urihop] = ContactInfo(call_id, cseq, expiration)
-        self.logger.info("Registered %s from %s via %s until %s." % (self.record_uri, uri, hop, expiration))
+        info = ContactInfo(call_id, cseq, expiration, user_agent)
         
+        if urihop not in self.contact_infos_by_uri_hop:
+            # First time registration, invoke triggers
+            # TODO: expiration!
+            self.registrar.record_changed(self.record_uri, urihop, info)
+        
+        self.contact_infos_by_uri_hop[urihop] = info
+        self.logger.info("Registered %s from %s via %s until %s." % (self.record_uri, uri, hop, expiration))
+
         
     def add_static_contact(self, uri, hop):
         urihop = UriHop(uri, hop)
         
-        self.contact_infos_by_uri_hop[urihop] = ContactInfo(None, None, None)
+        self.contact_infos_by_uri_hop[urihop] = ContactInfo(None, None, None, "static")
         self.logger.info("Registered %s from %s via %s permanently." % (self.record_uri, uri, hop))
         
 
@@ -84,8 +90,9 @@ class LocalRecord(Loggable):
             expires = contact_nameaddr.params.get("expires", request.get("expires"))
             seconds_left = int(expires) if expires is not None else self.DEFAULT_EXPIRES
             expiration = now + datetime.timedelta(seconds=seconds_left)
+            user_agent = request.get("user_agent")
             
-            self.add_contact(uri, hop, call_id, cseq, expiration)
+            self.add_contact(uri, hop, call_id, cseq, expiration, user_agent)
         
         fetched = []
         for urihop, contact_info in self.contact_infos_by_uri_hop.items():
@@ -230,6 +237,7 @@ class Registrar(Loggable):
         self.switch = switch
         self.local_records_by_uri = {}
         self.remote_records_by_uri = {}
+        self.record_change_slot = EventSlot()
         
         
     def reject_request(self, request, status):
@@ -357,3 +365,7 @@ class Registrar(Loggable):
             record.recv(response)
         else:
             self.logger.warning("Ignoring response to unknown remote record!")
+
+
+    def record_changed(self, aor, urihop, info):
+        self.record_change_slot.zap(aor, urihop, info)

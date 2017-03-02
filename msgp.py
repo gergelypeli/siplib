@@ -1,4 +1,3 @@
-import uuid
 import json
 import collections
 import datetime
@@ -9,7 +8,7 @@ from async_net import TcpReconnector, TcpListener
 from log import Loggable
 from format import Addr
 from zap import Slot, EventSlot, Plug
-from util import generate_session_id
+from util import generate_msgp_session_id
 
 
 class MessagePipe(Loggable):
@@ -656,7 +655,7 @@ class MsgpPeer(MsgpDispatcher):
         MsgpDispatcher.__init__(self)
         
         self.name = "noname"
-        self.session_id = generate_session_id()
+        self.session_id = generate_msgp_session_id()
         
         if local_addr:
             self.listener = TcpListener(local_addr)

@@ -1,26 +1,27 @@
+from uuid import uuid4
 
 MAX_FORWARDS = 20
 BRANCH_MAGIC = "z9hG4bK"
 
 
 def generate_tag():
-    return uuid.uuid4().hex[:8]
+    return uuid4().hex[:8]
 
 
 def generate_call_id():
-    return uuid.uuid4().hex[:8]
+    return uuid4().hex[:8]
 
 
-def generate_msgp_session_id(self):
-    return uuid.uuid4().hex[:8]
+def generate_msgp_session_id():
+    return uuid4().hex[:8]
 
 
-def generate_nonce(self):
-    return uuid.uuid4().hex[:8]
+def generate_nonce():
+    return uuid4().hex[:8]
 
 
-def generate_branch(self):
-    return BRANCH_MAGIC + uuid.uuid4().hex[:8]
+def generate_branch():
+    return BRANCH_MAGIC + uuid4().hex[:8]
 
 
 last_sdp_session_id = 0

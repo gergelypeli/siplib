@@ -1,4 +1,3 @@
-import uuid
 import datetime
 from weakref import proxy
 from log import Loggable
@@ -154,7 +153,7 @@ class PlainClientTransaction(Transaction):
 
     def report(self, response):
         if not response:
-            response = make_simple_response(self.outgoing_msg, Status.INTERNAL_RESPONSE_TIMEOUT)
+            response = make_simple_response(self.outgoing_msg, Status.REQUEST_TIMEOUT)
         else:
             response.related = self.outgoing_msg
             

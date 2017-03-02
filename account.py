@@ -1,5 +1,4 @@
 from weakref import proxy
-import uuid
 import hashlib
 
 from format import Authorization, WwwAuthenticate
