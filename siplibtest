@@ -197,6 +197,12 @@ class SwitchA(TestSwitch):
                 if dst_username.startswith("*"):
                     # Call pickup testing
                     target_number = dst_username[1:]
+                elif dst_username.startswith("x-cisco-serviceuri-blfpickup-"):
+                    target_number = dst_username[29:]
+                else:
+                    target_number = None
+                    
+                if target_number:
                     dst_uri = Uri(Addr(A_DOMAIN), src_username)
                     self.logger.info("Okay, pickup from %s to %s." % (target_number, dst_uri))
 

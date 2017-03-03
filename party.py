@@ -426,7 +426,7 @@ class Bridge(Party):
                     self.remove_leg(0)
                 else:
                     # Havent accepted yet, so send a reject instead
-                    self.reject_incoming_leg(Status.SERVER_INTERNAL_ERROR)
+                    self.reject_incoming_leg(Status.NOT_FOUND)
         else:
             if self.legs:
                 # No incoming leg, no fun
