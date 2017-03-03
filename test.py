@@ -1,10 +1,10 @@
 from weakref import proxy, WeakSet
 import datetime
 
-from format import Uri, Nameaddr, Status, AbsoluteUri, CallInfo, Cause
+from format import Uri, Nameaddr, Status, AbsoluteUri, CallInfo
 from party import PlannedEndpoint, Bridge
 from sdp import Session
-from subscript import SubscriptionManager, MessageSummaryEventSource, DialogEventSource
+from subscript import SubscriptionManager, EventSource, MessageSummaryFormatter, DialogFormatter, PresenceFormatter
 from log import Loggable
 from mgc import Controller  #, PlayerMediaLeg  #, EchoMediaLeg
 from zap import Plug
@@ -306,12 +306,18 @@ class CallerEndpoint(TestEndpoint):
         self.logger.debug("Caller done.")
 
 
-class VoicemailEventSource(MessageSummaryEventSource):
-    def identify(self, params):
-        self.mailbox = params["mailbox"]
+class VoicemailEventSource(EventSource):
+    def __init__(self):
+        EventSource.__init__(self, { "message-summary" })
 
+        self.mailbox = None
         self.state = 0
         Plug(self.fake).attach_time(10, True)
+        self.formatter = MessageSummaryFormatter()
+        
+        
+    def identify(self, params):
+        self.mailbox = params["mailbox"]
         
         return self.mailbox
         
@@ -321,11 +327,15 @@ class VoicemailEventSource(MessageSummaryEventSource):
         self.state += 1
 
         
-    def get_message_state(self):
-        return dict(voice=self.state % 2, voice_old=self.state / 2 % 2)
+    def get_state(self, format):
+        if format == "message-summary":
+            s = dict(voice=self.state % 2, voice_old=self.state / 2 % 2)
+            return self.formatter.format(s)
+        else:
+            raise Exception("Invalid format: %s!" % format)
 
 
-class BusylampEventSource(DialogEventSource):
+class BusylampEventSource(EventSource):
     # To make call pickup work with Snom-s, one of these options should be used,
     # in order of increasing preference:
     #
@@ -340,11 +350,19 @@ class BusylampEventSource(DialogEventSource):
     #
     # * Don't report anything, set explicit pickup prefixes on the phone.
     
-    def identify(self, params):
-        self.set_entity(params["entity"])
+    def __init__(self):
+        EventSource.__init__(self, { "dialog", "presence" })
 
+        self.entity = None
         self.calls_by_number = {}
         self.state = 0
+        self.dialog_formatter = DialogFormatter()
+        self.presence_formatter = PresenceFormatter()
+        
+    
+    def identify(self, params):
+        self.entity = params["entity"]
+        self.dialog_formatter.set_entity(self.entity)
 
         return self.entity
         
@@ -366,8 +384,18 @@ class BusylampEventSource(DialogEventSource):
         self.state += 1
         
         
-    def get_dialog_state(self):
-        return self.calls_by_number
+    def get_state(self, format):
+        if format == "dialog":
+            return self.dialog_formatter.format(self.calls_by_number)
+        elif format == "presence":
+            cisco_is_ringing = any(not s["is_outgoing"] and not s["is_confirmed"] for s in self.calls_by_number.values())
+            cisco_is_busy = bool(self.calls_by_number)
+            cisco_is_dnd = False
+                
+            s = dict(is_open=True, cisco=dict(is_ringing=cisco_is_ringing, is_busy=cisco_is_busy, is_dnd=cisco_is_dnd))
+            return self.presence_formatter.format(s)
+        else:
+            raise Exception("Invalid format: %s!" % format)
             
 
 class TestSubscriptionManager(SubscriptionManager):
@@ -377,16 +405,16 @@ class TestSubscriptionManager(SubscriptionManager):
         self.voicemail_number = voicemail_number
         
         
-    def identify_event_source(self, request):
+    def identify_subscription(self, request):
         event = request["event"]
         from_uri = request["from"].uri
         to_uri = request["to"].uri
         
         if event == "message-summary" and to_uri.username == self.voicemail_number:
-            return "voicemail", from_uri.username
+            return "voicemail", from_uri.username, event
             
-        if event == "dialog":
-            return "busylamp", to_uri.username
+        if event in ("dialog", "presence"):
+            return "busylamp", to_uri.username, event
             
         return None
         
@@ -455,9 +483,8 @@ class TestLine(Bridge):
         dst_username = ctx["dst_username"]
         dst_addr = ctx["dst_addr"]
 
-        self.update_busylamp_state()
-        
         if dst_addr != self.addr or dst_username != self.username:
+            self.update_busylamp_state()
             self.dial(action)
             return
             
@@ -468,6 +495,8 @@ class TestLine(Bridge):
             self.logger.debug("Record %s has no SIP contacts, rejecting!" % (record_uri,))
             self.reject_incoming_leg(Status.NOT_FOUND)
             
+        self.update_busylamp_state()
+        
         self.logger.debug("Record %s has %d SIP contacts." % (record_uri, len(contacts)))
         sip_from = Nameaddr(Uri(src_addr, src_username), src_name)
         sip_to = Nameaddr(Uri(dst_addr, dst_username))

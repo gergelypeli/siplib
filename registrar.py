@@ -319,6 +319,12 @@ class Registrar(Loggable):
         #   None, False -     not found
         
         record_uri = request["from"].uri.canonical_aor()
+        
+        # FIXME, or not....
+        if "Cisco" in request.get("user_agent", "") and request.method == "SUBSCRIBE":
+            host = request["to"].uri.addr.host
+            record_uri = record_uri._replace(addr=record_uri.addr._replace(host=host))
+        
         hop = request.hop
         
         record = self.local_records_by_uri.get(record_uri) or self.local_records_by_uri.get(record_uri._replace(username=None))

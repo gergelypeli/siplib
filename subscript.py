@@ -44,18 +44,20 @@ class UnsolicitedDialog:
 
 
 class Subscription:
-    def __init__(self, dialog):
+    def __init__(self, format, dialog):
+        self.format = format
         self.dialog = dialog
         self.expiration_deadline = None
         self.expiration_plug = None
         
 
 class EventSource(Loggable):
-    def __init__(self):
+    def __init__(self, formats):
         Loggable.__init__(self)
         
         self.subscriptions_by_id = {}
         self.last_subscription_id = 0
+        self.formats = formats
 
 
     def identify(self, params):
@@ -66,12 +68,15 @@ class EventSource(Loggable):
         return MIN_EXPIRES_SECONDS, MAX_EXPIRES_SECONDS
 
 
-    def add_subscription(self, dialog):
+    def add_subscription(self, format, dialog):
+        if format not in self.formats:
+            raise Exception("No formatter for format: %s!" % format)
+            
         self.last_subscription_id += 1
         id = self.last_subscription_id
         self.logger.info("Adding subscription %s." % id)
         
-        s = Subscription(dialog)
+        s = Subscription(format, dialog)
         self.subscriptions_by_id[id] = s
         
         s.expiration_plug = Plug(self.subscription_expired, id=id)
@@ -151,19 +156,14 @@ class EventSource(Loggable):
                 self.logger.warning("Ignoring %s response!" % method)
 
 
-    def get_state(self):
+    def get_state(self, format):
         raise NotImplementedError()
 
 
-    def notify_one(self, id, reason=None, bulk_state=None):
+    def send_notify(self, id, state_by_format, reason=None):
         subscription = self.subscriptions_by_id[id]
         
-        if bulk_state:
-            state = bulk_state
-        else:
-            # So this is not a bulk notification
-            self.logger.info("Notifying subscription %s." % id)
-            state = self.get_state()
+        headers, body = state_by_format[subscription.format]
         
         if reason:
             ss = "terminated;reason=%s" % reason
@@ -176,18 +176,29 @@ class EventSource(Loggable):
         # Must make copies in case of multiple subscriptions
         req = Sip.request(method="NOTIFY")
         req["subscription_state"] = ss
-        req.body = state.pop("body", None)
-        req.update(state)
+        req.update(headers)
+        req.body = body
         
         subscription.dialog.send(req)
+
+
+    def notify_one(self, id, reason=None):
+        self.logger.info("Notifying subscription %s." % id)
         
+        subscription = self.subscriptions_by_id[id]
+        f = subscription.format
+        state_by_format = { f: self.get_state(f) }
+
+        self.send_notify(id, state_by_format, reason)
+
         
     def notify_all(self, reason=None):
         self.logger.info("Notifying all subscriptions.")
-        state = self.get_state()
+        
+        state_by_format = { f: self.get_state(f) for f in self.formats }
         
         for id in self.subscriptions_by_id:
-            self.notify_one(id, reason, state)
+            self.send_notify(id, state_by_format, reason)
             
                 
     def subscription_expired(self, id):
@@ -196,50 +207,47 @@ class EventSource(Loggable):
         self.subscriptions_by_id.pop(id)
 
 
-class MessageSummaryEventSource(EventSource):
+class Formatter:
+    def format(self, state):
+        raise NotImplementedError()
+        
+
+class MessageSummaryFormatter(Formatter):
     # RFC 3458
     MESSAGE_CONTEXT_CLASSES = [ "voice", "fax", "pager", "multimedia", "text" ]
     
-    def get_message_state(self):
-        raise NotImplementedError()
-        
-        
-    def get_state(self):
-        ms = self.get_message_state()
-        
+
+    def format(self, ms):
         waiting = "yes" if any(ms.values()) else "no"
-        body = "Messages-Waiting: %s\r\n" % waiting
+        text = "Messages-Waiting: %s\r\n" % waiting
 
         for mcc in self.MESSAGE_CONTEXT_CLASSES:
             new = ms.get(mcc, 0)
             old = ms.get("%s_old" % mcc, 0)
             
             if new or old:
-                body += "%s-Message: %d/%d\r\n" % (mcc.title(), new, old)
+                text += "%s-Message: %d/%d\r\n" % (mcc.title(), new, old)
         
-        return dict(
+        headers = dict(
             event="message-summary",
-            content_type="application/simple-message-summary",
-            body=body.encode("utf8")
+            content_type="application/simple-message-summary"
         )
-
-
-class DialogEventSource(EventSource):
-    def __init__(self):
-        EventSource.__init__(self)
         
-        self.version = 0
+        body = text.encode("utf8")
+        
+        return headers, body
+
+
+class DialogFormatter(Formatter):
+    def __init__(self):
         self.entity = None
+        self.version = 0
         
         
     def set_entity(self, entity):
         self.entity = entity
         
         
-    def get_dialog_state(self):
-        raise NotImplementedError()
-
-
     def side_lines(self, side, info):
         lines = []
         side_info = info.get(side)
@@ -263,8 +271,7 @@ class DialogEventSource(EventSource):
         return lines
 
         
-    def get_state(self):
-        ds = self.get_dialog_state()
+    def format(self, ds):
         lines = []
         
         lines.append('<?xml version="1.0"?>')
@@ -295,12 +302,79 @@ class DialogEventSource(EventSource):
             
         lines.append('</dialog-info>')
 
-        return dict(
+        headers = dict(
             event="dialog",
-            content_type="application/dialog-info+xml",
-            body="\n".join(lines).encode("utf8")
+            content_type="application/dialog-info+xml"
         )
+        
+        body = "\n".join(lines).encode("utf8")
+        
+        return headers, body
 
+
+class PresenceFormatter(Formatter):
+    XML = """
+<presence entity="%s" xmlns="urn:ietf:params:xml:ns:pidf">
+    <tuple id="siplib">
+        <status>
+            <basic>%s</basic>
+        </status>
+    </tuple>
+</presence>
+"""
+
+    CISCO_XML = """
+<presence entity="%s" xmlns="urn:ietf:params:xml:ns:pidf" xmlns:dm="urn:ietf:params:xml:ns:pidf:data-model" xmlns:e="urn:ietf:params:xml:ns:pidf:status:rpid" xmlns:ce="urn:cisco:params:xml:ns:pidf:rpid">
+    <tuple id="siplib">
+        <status>
+            <basic>%s</basic>
+        </status>
+    </tuple>
+    <dm:person>
+        <e:activities>
+            %s
+        </e:activities>
+    </dm:person>
+</presence>
+"""
+
+    def __init__(self):
+        self.entity = None
+        
+        
+    def set_entity(self, entity):
+        self.entity = entity
+
+
+    def format(self, state):
+        basic = "open" if state["is_open"] else "closed"
+        cisco = state.get("cisco")
+        
+        if not cisco:
+            xml = self.XML % (self.entity, basic)
+        else:
+            activities = ""
+            
+            if cisco["is_ringing"]:
+                activities += "<ce:alerting/>"
+                
+            if cisco["is_busy"]:
+                activities += "<e:on-the-phone/>"
+                
+            if cisco["is_dnd"]:
+                activities += "<ce:dnd/>"
+                
+            xml = self.CISCO_XML % (self.entity, basic, activities)
+
+        headers = dict(
+            event="presence",
+            content_type="application/pidf+xml"
+        )
+        
+        body = xml.encode("utf8")
+        
+        return headers, body
+        
 
 class SubscriptionManager(Loggable):
     def __init__(self, switch):
@@ -320,7 +394,7 @@ class SubscriptionManager(Loggable):
         self.send_message(response)
 
 
-    def identify_event_source(self, request):
+    def identify_subscription(self, request):
         raise NotImplementedError()
 
 
@@ -347,12 +421,15 @@ class SubscriptionManager(Loggable):
         if request.method != "SUBSCRIBE":
             raise Exception("SubscriptionManager has nothing to do with this request!")
         
-        key = self.identify_event_source(request)
+        iden = self.identify_subscription(request)
         
-        if not key:
+        if not iden:
             self.logger.warning("Rejecting subscription for unidentifiable event source!")
             self.reject_request(request, Status.NOT_FOUND)
             return
+        
+        type, id, format = iden
+        key = type, id
         
         es = self.event_sources_by_key.get(key)
         if not es:
@@ -361,26 +438,30 @@ class SubscriptionManager(Loggable):
             return
             
         dialog = self.switch.make_dialog()
-        es.add_subscription(dialog)
+        es.add_subscription(format, dialog)
         dialog.recv(request)
 
 
-    def unsolicited_subscribe(self, key, local_uri, remote_uri, hop):
+    def unsolicited_subscribe(self, es_type, es_id, format, local_uri, remote_uri, hop):
+        key = es_type, es_id
         es = self.event_sources_by_key.get(key)
+        
         if not es:
             self.logger.warning("Ignoring subscription for nonexistent event source: %s" % (key,))
             return
         
         self.logger.info("Will send unsolicited notifications for %s from %s to %s via %s." % (key, local_uri, remote_uri, hop))
         dialog = UnsolicitedDialog(proxy(self), local_uri, remote_uri, hop)
-        id = es.add_subscription(dialog)
+        id = es.add_subscription(format, dialog)
         es.notify_one(id)
         
         return id
         
         
-    def unsolicited_unsubscribe(self, key, id):
+    def unsolicited_unsubscribe(self, es_type, es_id, id):
+        key = es_type, es_id
         es = self.event_sources_by_key.get(key)
+        
         if not es:
             self.logger.warning("Ignoring unsubscription for nonexistent event source: %s" % (key,))
             return
