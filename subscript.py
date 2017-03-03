@@ -364,6 +364,9 @@ class PresenceFormatter(Formatter):
             if cisco["is_dnd"]:
                 activities += "<ce:dnd/>"
                 
+            if not activities:
+                activities = "<ce:available/>"
+                
             xml = self.CISCO_XML % (self.entity, basic, activities)
 
         headers = dict(

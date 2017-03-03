@@ -90,6 +90,7 @@ class TestSwitch(Switch):
         )
         
         self.line_manager = TestLineManager()
+        self.default_domain = None
 
 
     def set_oid(self, oid):
@@ -98,8 +99,9 @@ class TestSwitch(Switch):
         self.line_manager.set_oid(oid.add("lineman"))
         
 
-    def start(self, realm, local_addr, mgw_addr, media_addrs):
+    def start(self, realm, default_domain, local_addr, mgw_addr, media_addrs):
         self.account_manager.set_local_realm(realm)
+        self.default_domain = default_domain
         
         local_addr.assert_resolved()
         mgw_addr.assert_resolved()
@@ -112,6 +114,18 @@ class TestSwitch(Switch):
         
         hop = Hop("TCP", "eth0", local_addr, None)
         self.transport_manager.add_hop(hop)
+
+
+    def fix(self, na):
+        return na._replace(uri=na.uri._replace(addr=na.uri.addr._replace(host=self.default_domain)))
+
+
+    def process(self, msg):
+        if "Cisco" in msg.get("user_agent", "") and self.default_domain:
+            msg["from"] = self.fix(msg["from"])
+            msg["to"] = self.fix(msg["to"])
+    
+        return Switch.process(self, msg)
 
 
     def make_party(self, type):
@@ -250,8 +264,8 @@ class SwitchA(TestSwitch):
             self.logger.error("Not found: %s" % dst_username)
             
 
-    def start(self, realm, local_addr, mgw_addr, media_addrs):
-        TestSwitch.start(self, realm, local_addr, mgw_addr, media_addrs)
+    def start(self, realm, default_domain, local_addr, mgw_addr, media_addrs):
+        TestSwitch.start(self, realm, default_domain, local_addr, mgw_addr, media_addrs)
         
         # CALLEE lives on switch-b, but registers here to take calls from here
         remote_callee_aor = Uri(Addr(A_DOMAIN), NUMBER_A_REMOTE_CALLEE)
@@ -262,7 +276,7 @@ class SwitchA(TestSwitch):
         self.add_record_account(snom_aor, SNOM_AUTHNAME, SNOM_HA1, LocalRecord.AUTH_IF_UNREGISTERED)
 
         # Cisco lives on its own device, but also registers here
-        cisco_aor = Uri(Addr(C_DOMAIN), NUMBER_A_CISCO_1)
+        cisco_aor = Uri(Addr(A_DOMAIN), NUMBER_A_CISCO_1)
         self.add_record_account(cisco_aor, CISCO_AUTHNAME, CISCO_HA1, LocalRecord.AUTH_IF_UNREGISTERED)
         
         # Allow calls from anyone on switch B as long as they use this hop
@@ -374,8 +388,8 @@ class SwitchB(TestSwitch):
             self.logger.error("Not found: %s" % dst_username)
             
             
-    def start(self, realm, local_addr, mgw_addr, media_addrs):
-        TestSwitch.start(self, realm, local_addr, mgw_addr, media_addrs)
+    def start(self, realm, default_domain, local_addr, mgw_addr, media_addrs):
+        TestSwitch.start(self, realm, default_domain, local_addr, mgw_addr, media_addrs)
         
         #phone_uri = Uri(Addr(A_DOMAIN, None), SNOM_NUMBER)
         #self.add_record_account(phone_uri, A_AUTHNAME, A_HA1, LocalRecord.AUTH_IF_UNREGISTERED)
@@ -441,13 +455,13 @@ def main():
     switch_a.set_oid(Oid().add("switch", "a"))
     switch_a.set_name("switch-a")
     media_addrs = { Addr(MEDIA_HOST, port).resolved() for port in range(30000, 30020, 2) }
-    switch_a.start(A_REALM, A_ADDR.resolved(), MGW_ADDR.resolved(), media_addrs)
+    switch_a.start(A_REALM, A_DOMAIN, A_ADDR.resolved(), MGW_ADDR.resolved(), media_addrs)
     
     switch_b = SwitchB()
     switch_b.set_oid(Oid().add("switch", "b"))
     switch_b.set_name("switch-b")
     media_addrs = { Addr(MEDIA_HOST, port).resolved() for port in range(40000, 40020, 2) }
-    switch_b.start(B_REALM, B_ADDR.resolved(), MGW_ADDR.resolved(), media_addrs)
+    switch_b.start(B_REALM, B_DOMAIN, B_ADDR.resolved(), MGW_ADDR.resolved(), media_addrs)
 
     try:
         loop()

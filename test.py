@@ -312,7 +312,7 @@ class VoicemailEventSource(EventSource):
 
         self.mailbox = None
         self.state = 0
-        Plug(self.fake).attach_time(10, True)
+        #Plug(self.fake).attach_time(10, True)
         self.formatter = MessageSummaryFormatter()
         
         
