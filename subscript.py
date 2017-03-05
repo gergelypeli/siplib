@@ -151,7 +151,10 @@ class EventSource(Loggable):
                     self.logger.debug("Got NOTIFY response.")
                 else:
                     self.logger.warning("Got NOTIFY response %d!" % status.code)
-                    self.subscriptions_by_id.pop(id, None)
+                    s = self.subscriptions_by_id.pop(id, None)
+                    
+                    if s:
+                        s.expiration_plug.detach()
             else:
                 self.logger.warning("Ignoring %s response!" % method)
 

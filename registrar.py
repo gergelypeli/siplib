@@ -324,7 +324,7 @@ class Registrar(Loggable):
         record = self.local_records_by_uri.get(record_uri) or self.local_records_by_uri.get(record_uri._replace(username=None))
         
         if not record:
-            self.logger.warning("Rejecting request because caller is unknown!")
+            self.logger.warning("Rejecting %s request because caller %s is unknown!" % (request.method, record_uri))
             return None, False
         
         return record.authenticate_request(hop)

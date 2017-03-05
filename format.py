@@ -1,7 +1,7 @@
 from collections import namedtuple
-import urllib.parse
 import socket
 
+from parser import BaseParser, escape, unescape, quote_unless, ALPHANUM, URLLIB_SAFE
 from async_net import HttpLikeMessage
 
 
@@ -20,10 +20,8 @@ class SipError(Exception):
 
 # The _ESCAPED suffix just reminds us to unescape them after grabbing them from the parser.
 LWS = ' \t'
-ALPHANUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-MARK_URLLIB = '_.-'
-MARK_NON_URLLIB = "!~*'()"
-MARK = MARK_URLLIB + MARK_NON_URLLIB
+SAFE = "!~*'()"
+MARK = URLLIB_SAFE + SAFE
 UNRESERVED = ALPHANUM + MARK
 RESERVED = ";/?:@&=+$,"
 ESCAPED = "%"  # followed by two hex digits, but we ignore that here
@@ -44,186 +42,14 @@ GENERIC_PARAM_KEY = TOKEN
 GENERIC_PARAM_VALUE = TOKEN + HOST_NONTOKEN  # plus quoted
 
 
-class Parser:
-    def __init__(self, text):
-        # The text should end with line terminators, so we don't have to check for length
-        # And should replace all tabs with spaces, which is legal.
-        self.text = text + '\n'
-        self.pos = 0
-
-
-    def __repr__(self):
-        return "Parser(...%r)" % self.text[self.pos:]
-        
-        
-    def startswith(self, what):
-        return self.text.startswith(what)
-
-
-    def skip_lws(self, pos):
-        while True:
-            if self.text[pos] in LWS:
-                pos += 1
-            elif self.text[pos] == '\r' and self.text[pos + 1] == '\n' and self.text[pos + 2] in LWS:
-                pos += 3
-            else:
-                return pos
-            
-        
-    def grab_newline(self):
-        pos = self.pos
-        pos = self.skip_lws(pos)  # Skips line folding, too
-            
-        if self.text[pos] != '\r' or self.text[pos + 1] != '\n':
-            raise Exception("Expected newline!")
-            
-        pos += 2
-        self.pos = pos
-        
-        
-    def grab_whitespace(self):
-        pos = self.skip_lws(self.pos)
-        if pos == self.pos:
-            raise Exception("Expected whitespace at %r" % self)
-            
-        self.pos = pos
-
-
-    def grab_number(self):
-        start = self.pos
-        
-        while self.text[self.pos].isdigit():
-            self.pos += 1
-            
-        end = self.pos
-        number = self.text[start:end]
-        
-        if not number:
-            raise Exception("Expected number!")
-            
-        return int(number)
-
-
-    def grab_until(self, separator):
-        start = self.pos
-        end = self.text.find(separator, start)
-        
-        if end >= 0:
-            self.pos = end + len(separator)
-            return self.text[start:end]
-        else:
-            return None
-
-
-    def can_grab_separator(self, wanted, left_pad=False, right_pad=False):
-        pos = self.pos
-        
-        if left_pad:
-            pos = self.skip_lws(pos)
-            
-        separator = self.text[pos]
-        if separator != wanted:
-            return False
-            
-        pos += 1
-        
-        if right_pad:
-            pos = self.skip_lws(pos)
-            
-        self.pos = pos
-        
-        return True
-
-
-    def grab_separator(self, wanted, left_pad=False, right_pad=False):
-        if not self.can_grab_separator(wanted, left_pad, right_pad):
-            raise Exception("Expected separator %r at %r" % (wanted, self))
-            
-        
+class Parser(BaseParser):
     def grab_token(self, acceptable=TOKEN):
-        start = self.pos
-        pos = start
-        
-        while self.text[pos] in acceptable:
-            pos += 1
-            
-        end = pos
-        token = self.text[start:end]
-        self.pos = pos
-        
-        if not token:
-            raise Exception("Expected token at %r" % self)
-        
-        return token
-        
-
-    def grab_quoted(self):
-        pos = self.skip_lws(self.pos)
-            
-        if self.text[pos] != '"':
-            raise Exception("Expected quoted-string!")
-            
-        pos += 1
-        quoted = ""
-        
-        while self.text[pos] != '"':
-            if self.text[pos] == '\\':
-                pos += 1
-                
-                if self.text[pos] in "\n\r":
-                    raise Exception("Illegal escaping at %r!" % self)
-                
-            quoted += self.text[pos]
-            pos += 1
-        
-        pos += 1
-        self.pos = self.skip_lws(pos)
-        
-        return quoted
+        return BaseParser.grab_token(self, acceptable)
 
 
     def grab_token_or_quoted(self, acceptable=TOKEN):
-        if self.text[self.pos] in '"' + LWS:
-            return self.grab_quoted()
-        else:
-            return self.grab_token(acceptable)
-    
-    
-    def grab_word(self):  # To be used for callid only
-        start = self.pos
-        pos = start
+        return BaseParser.grab_token_or_quoted(self, acceptable)
         
-        while not self.text[pos].isspace():
-            pos += 1
-            
-        end = pos
-        word = self.text[start:end]
-        self.pos = pos
-        
-        return word
-
-
-def unescape(escaped):
-    return urllib.parse.unquote(escaped)
-    
-    
-def escape(raw, allow=''):
-    # The characters not needing escaping vary from entity to entity. But characters in
-    # the UNRESERVED class seems to be allowed always. That's ALPHANUM + MARK. This
-    # function never quotes alphanumeric characters and '_.-', so we only need to
-    # specify the rest explicitly.
-    
-    return urllib.parse.quote(raw, safe=MARK_NON_URLLIB + allow)
-    
-
-# unquoting happens during the parsing, otherwise quoted strings can't even be parsed
-def quote(raw):
-    return '"' + raw.replace('\\', '\\\\').replace('"', '\\"') + '"'
-
-
-def quote_if_not(acceptable, raw):
-    return raw if all(c in acceptable for c in raw) else quote(raw)
-    
 
 def parse_generic_params(parser):
     params = {}
@@ -247,7 +73,7 @@ def print_generic_params(params):
         text += ";" + k
         
         if v is not None:
-            text += "=" + quote_if_not(GENERIC_PARAM_VALUE, v)
+            text += "=" + quote_unless(v, GENERIC_PARAM_VALUE)
             
     return text
 
@@ -583,15 +409,15 @@ class Uri(namedtuple("Uri", "addr username scheme params headers")):
         text = (self.scheme or "any") + ":"
         
         if self.username:
-            text += escape(self.username) + "@"
+            text += escape(self.username, SAFE) + "@"
             
         text += str(self.addr)
         
         if self.params:
-            text += "".join(";" + escape(k) + "=" + escape(v) for k, v in self.params.items())
+            text += "".join(";" + escape(k, SAFE) + "=" + escape(v, SAFE) for k, v in self.params.items())
                 
         if self.headers:
-            text += "?" + "&".join(escape(k.replace("_", "-").title()) + "=" + escape(v) for k, v in self.headers.items())
+            text += "?" + "&".join(escape(k.replace("_", "-").title(), SAFE) + "=" + escape(v, SAFE) for k, v in self.headers.items())
             
         return text
 
@@ -617,6 +443,8 @@ class Uri(namedtuple("Uri", "addr username scheme params headers")):
         userinfo = parser.grab_until("@")
         
         if userinfo:
+            parser.grab_separator("@")
+            
             if ":" in userinfo:
                 username, password = userinfo.split(":")
                 username = unescape(username)
@@ -705,7 +533,7 @@ class Nameaddr(namedtuple("Nameaddr", "uri name params")):
         # If the URI contains URI parameters, not enclosing it in angle brackets would
         # be interpreted as header parameters. So enclose them always just to be safe.
 
-        text = "" if self.name is None else quote_if_not(TOKEN, self.name) + " "
+        text = "" if self.name is None else quote_unless(self.name, TOKEN) + " "
         text += "<" + str(self.uri) + ">"
         text += print_generic_params(self.params)
 
@@ -835,7 +663,7 @@ class Sip(dict):
 def print_structured_message(msg):
     if msg.is_response is True:
         code, reason = msg.status
-        initial_line = "SIP/2.0 %d %s" % (code, escape(reason, allow=' '))
+        initial_line = "SIP/2.0 %d %s" % (code, escape(reason, SAFE + ' '))
     elif msg.is_response is False:
         initial_line = "%s %s SIP/2.0" % (msg.method, msg.uri.print())
     else:

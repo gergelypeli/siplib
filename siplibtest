@@ -6,7 +6,7 @@ import logging.config
 import sys
 from weakref import proxy
 
-from format import Addr, Uri, Nameaddr, Status, Hop
+from format import Addr, Uri, Nameaddr, Hop
 from party import PlannedRouting, Routing
 from registrar import LocalRecord
 from log import setup_logging, log_exception, Oid
@@ -206,7 +206,7 @@ class SwitchA(TestSwitch):
                     dst_uri = Uri(Addr(A_DOMAIN), src_username)
                     self.logger.info("Okay, pickup from %s to %s." % (target_number, dst_uri))
 
-                    self.reject_incoming_leg(Status.DECLINE)
+                    self.reject_incoming_leg(Status.DECLINED)
                     self.ground.switch.line_manager.call_pickup(target_number, dst_uri)
                     return
                 
