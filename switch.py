@@ -8,6 +8,7 @@ from party import Bridge, RecordingBridge, Routing, RedialBridge, SessionNegotia
 from endpoint_sip import SipManager
 from ground import Ground
 from registrar import Registrar
+from publisher import Publisher
 from subscript import SubscriptionManager
 from account import AccountManager
 from log import Loggable
@@ -18,7 +19,7 @@ from zap import Plug
 class Switch(Loggable):
     def __init__(self,
         transport_manager=None, transaction_manager=None,
-        registrar=None, subscription_manager=None,
+        registrar=None, publisher=None, subscription_manager=None,
         dialog_manager=None, sip_manager=None, mgc=None, account_manager=None
     ):
         Loggable.__init__(self)
@@ -35,6 +36,10 @@ class Switch(Loggable):
             proxy(self)
         )
         Plug(self.record_changed).attach(self.registrar.record_change_slot)
+        self.publisher = publisher or Publisher(
+            proxy(self)
+        )
+        Plug(self.state_changed).attach(self.publisher.state_change_slot)
         self.subscription_manager = subscription_manager or SubscriptionManager(
             proxy(self)
         )
@@ -60,6 +65,7 @@ class Switch(Loggable):
 
         self.account_manager.set_oid(oid.add("accman"))
         self.registrar.set_oid(oid.add("registrar"))
+        self.publisher.set_oid(oid.add("publisher"))
         self.subscription_manager.set_oid(oid.add("subman"))
         self.transport_manager.set_oid(oid.add("tportman"))
         self.transaction_manager.set_oid(oid.add("tactman"))
@@ -165,6 +171,10 @@ class Switch(Loggable):
             
             self.subscription_manager.unsolicited_unsubscribe(es_type, es_id, id)
             
+            
+    def state_changed(self, aor, format, etag, info):
+        self.logger.info("State changed for %s format %s etag %s: %s" % (aor, format, etag, info))
+
         
     def auth_request(self, request):
         authname, sure = self.registrar.authenticate_request(request)
@@ -225,6 +235,10 @@ class Switch(Loggable):
                 self.registrar.process_request(request)
                 return
 
+            if method == "PUBLISH":
+                self.publisher.process_request(request)
+                return
+
             if "tag" not in request["to"].params:
                 # Out of dialog requests
                 
@@ -262,6 +276,10 @@ class Switch(Loggable):
         
             if method == "REGISTER":
                 self.registrar.process_response(response)
+                return
+
+            if method == "PUBLISH":
+                self.publisher.process_response(response)
                 return
 
             processed = self.dialog_manager.process(response)

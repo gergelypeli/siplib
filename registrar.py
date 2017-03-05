@@ -59,11 +59,9 @@ class LocalRecord(Loggable):
         self.logger.info("Registered %s from %s via %s until %s." % (self.record_uri, urihop.uri, urihop.hop, expiration_deadline))
 
         
-    def add_static_contact(self, uri, hop):
-        urihop = UriHop(uri, hop)
-        
+    def add_static_contact(self, urihop):
         self.contact_infos_by_uri_hop[urihop] = ContactInfo(None, None, "static", None, None)
-        self.logger.info("Registered %s from %s via %s permanently." % (self.record_uri, uri, hop))
+        self.logger.info("Registered %s from %s via %s permanently." % (self.record_uri, urihop.uri, urihop.hop))
         
 
     def recv(self, request):
@@ -91,8 +89,13 @@ class LocalRecord(Loggable):
             urihop = UriHop(uri, hop)
             user_agent = request.get("user_agent")
             
-            expires = contact_nameaddr.params.get("expires", request.get("expires"))
-            seconds_left = int(expires) if expires is not None else self.DEFAULT_EXPIRES
+            if "expires" in contact_nameaddr.params:
+                seconds_left = int(contact_nameaddr.params["expires"])
+            elif "expires" in request:
+                seconds_left = request["expires"]
+            else:
+                seconds_left = self.DEFAULT_EXPIRES
+                
             expiration_deadline = now + datetime.timedelta(seconds=seconds_left)
             expiration_plug = Plug(self.contact_expired, urihop=urihop).attach_time(seconds_left)
             
@@ -287,7 +290,7 @@ class Registrar(Loggable):
         
         record = self.local_records_by_uri.get(record_uri)
         if not record:
-            self.logger.warning("Local record not found: %s" % record_uri)
+            self.logger.warning("Local record not found: %s" % (record_uri,))
             self.reject_request(request, Status.NOT_FOUND)
             return
         

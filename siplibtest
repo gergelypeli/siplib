@@ -6,9 +6,9 @@ import logging.config
 import sys
 from weakref import proxy
 
-from format import Addr, Uri, Nameaddr, Hop
+from format import Addr, Uri, Nameaddr, Hop, Status
 from party import PlannedRouting, Routing
-from registrar import LocalRecord
+from registrar import LocalRecord, UriHop
 from log import setup_logging, log_exception, Oid
 from mgw import MediaGateway
 from switch import Switch
@@ -158,7 +158,7 @@ class TestSwitch(Switch):
         record = self.registrar.add_local_record(uri, authname, policy)
         
         for hop in hops:
-            record.add_static_contact(uri, hop)  # assume same contact uri as the aor
+            record.add_static_contact(UriHop(uri, hop))  # assume same contact uri as the aor
 
 
     def get_busylamp(self, username):
@@ -303,6 +303,9 @@ class SwitchA(TestSwitch):
         self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_CISCO_1))
         self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_LOCAL_RINGING_LINE))
         self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_LOCAL_CALLEE_LINE))
+
+        # Add publishable states
+        self.publisher.add_local_state(snom_aor, { "presence" })
         
         if TEST == TEST_PICKUPIN:
             Plug(self.test_caller,
