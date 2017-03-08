@@ -155,7 +155,7 @@ class Switch(Loggable):
             self.logger.info("A Cisco device registered, initiating unsolicited MWI.")
             es_type = "voicemail"
             es_id = aor.username
-            format = "message-summary"
+            format = "msgsum"
             local_uri = aor._replace(scheme="sip")
             remote_uri = urihop.uri
             hop = urihop.hop

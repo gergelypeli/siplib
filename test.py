@@ -393,11 +393,12 @@ class BusylampEventSource(EventSource):
             s = dict(is_open=True)
             return self.presence_formatter.format(s)
         elif format == "cisco":
-            cisco_is_ringing = any(not s["is_outgoing"] and not s["is_confirmed"] for s in self.calls_by_number.values())
-            cisco_is_busy = bool(self.calls_by_number)
-            cisco_is_dnd = False
-                
-            s = dict(is_open=True, cisco=dict(is_ringing=cisco_is_ringing, is_busy=cisco_is_busy, is_dnd=cisco_is_dnd))
+            calls = self.calls_by_number.values()
+            is_ringing = any(not call["is_outgoing"] and not call["is_confirmed"] for call in calls)
+            is_busy = any(call["is_confirmed"] for call in calls)
+            is_dnd = False
+
+            s = dict(is_open=True, activities=dict(is_ringing=is_ringing, is_busy=is_busy, is_dnd=is_dnd))
             return self.cisco_presence_formatter.format(s)
         else:
             raise Exception("Invalid format: %s!" % format)
@@ -458,6 +459,8 @@ class PhoneState(LocalState):
         
         
     def add_state(self, etag, state):
+        self.logger.info("Adding state %s: %s." % (etag, state))
+        
         if state:
             self.state[etag] = state
         else:

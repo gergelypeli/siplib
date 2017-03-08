@@ -6,7 +6,7 @@ from format import Status, Sip
 from parser import Xml
 from transactions import make_simple_response
 from log import Loggable
-from zap import Plug, EventSlot
+from zap import Plug
 from util import generate_state_etag, generate_tag
 
 
@@ -16,13 +16,8 @@ class EventParser:
         
         
 class PresenceParser(EventParser):
-    def parse(self, content_type, body):
-        if content_type != "application/pidf+xml":
-            raise Exception("Not pidf+xml content!")
-            
-        xml = Xml.parse(body.decode("utf8"))
-        
-        basic = None
+    def get_is_open(self, xml):
+        is_open = None
         
         if xml.tag == "presence":
             for x in xml.content:
@@ -33,19 +28,24 @@ class PresenceParser(EventParser):
                                 if z.tag == "basic":
                                     for w in z.content:
                                         if not w.tag:
-                                            basic = w.content
+                                            is_open = (True if w.content == "open" else False if w.content == "closed" else None)
         
-        return basic
+        return is_open
 
 
-class CiscoPresenceParser(EventParser):
     def parse(self, content_type, body):
         if content_type != "application/pidf+xml":
             raise Exception("Not pidf+xml content!")
             
         xml = Xml.parse(body.decode("utf8"))
+        is_open = self.get_is_open(xml)
         
-        activity = None
+        return dict(is_open=is_open)
+
+
+class CiscoPresenceParser(PresenceParser):
+    def get_activities(self, xml):
+        activities = dict()
         
         if xml.tag == "presence":
             for x in xml.content:
@@ -53,9 +53,27 @@ class CiscoPresenceParser(EventParser):
                     for y in x.content:
                         if y.tag == "e:activities":
                             for z in y.content:
-                                activity = z.tag
+                                if z.tag == "ce:alerting":
+                                    activities["is_ringing"] = True
+                                elif z.tag == "e:on-the-phone":
+                                    activities["is_busy"] = True
+                                elif z.tag == "ce:dnd":
+                                    activities["is_dnd"] = True
+                                elif z.tag == "ce:available":
+                                    pass
+                    
+        return activities                
+
+
+    def parse(self, content_type, body):
+        if content_type != "application/pidf+xml":
+            raise Exception("Not pidf+xml content!")
+            
+        xml = Xml.parse(body.decode("utf8"))
+        is_open = self.get_is_open(xml)
+        activities = self.get_activities(xml)
         
-        return activity
+        return dict(is_open=is_open, activities=activities)
 
 
 FragmentInfo = collections.namedtuple("FragmentInfo", [

@@ -358,22 +358,22 @@ class CiscoPresenceFormatter(PresenceFormatter):
 
     def format(self, state):
         basic = "open" if state["is_open"] else "closed"
-        cisco = state.get("cisco")
-        activities = ""
+        activities = state.get("activities", {})
+        activity_list = ""
         
-        if cisco["is_ringing"]:
-            activities += "<ce:alerting/>"
+        if activities["is_ringing"]:
+            activity_list += "<ce:alerting/>"
             
-        if cisco["is_busy"]:
-            activities += "<e:on-the-phone/>"
+        if activities["is_busy"]:
+            activity_list += "<e:on-the-phone/>"
             
-        if cisco["is_dnd"]:
-            activities += "<ce:dnd/>"
+        if activities["is_dnd"]:
+            activity_list += "<ce:dnd/>"
             
         if not activities:
-            activities = "<ce:available/>"
+            activity_list = "<ce:available/>"
             
-        xml = self.CISCO_XML % (self.entity, basic, activities)
+        xml = self.XML % (self.entity, basic, activity_list)
 
         event = "presence"
         content_type = "application/pidf+xml"
