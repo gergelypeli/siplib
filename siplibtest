@@ -13,7 +13,7 @@ from log import setup_logging, log_exception, Oid
 from mgw import MediaGateway
 from switch import Switch
 from zap import Plug, loop
-from test import CallerEndpoint, CalleeEndpoint, UnreachableEndpoint, RingingEndpoint, BlindTransferringEndpoint, TestSubscriptionManager, TestLineManager, TestController
+from test import CallerEndpoint, CalleeEndpoint, UnreachableEndpoint, RingingEndpoint, BlindTransferringEndpoint, TestSubscriptionManager, TestPublicationManager, TestLineManager, TestController
 
 
 TEST_DIALIN = 1
@@ -81,12 +81,14 @@ CALLEE_NAMEADDR = Nameaddr(Uri(Addr(B_DOMAIN, None), "callee"), "Callee")
 class TestSwitch(Switch):
     def __init__(self):
         subman = TestSubscriptionManager(proxy(self), NUMBER_A_SERVICE_VOICEMAIL)  # FIXME
+        pubman = TestPublicationManager(proxy(self))
         mgc = TestController()
 
         Switch.__init__(
             self,
             subscription_manager=subman,
-            dialog_manager=None, mgc=mgc, account_manager=None
+            publication_manager=pubman,
+            mgc=mgc
         )
         
         self.line_manager = TestLineManager()
@@ -304,8 +306,9 @@ class SwitchA(TestSwitch):
         self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_LOCAL_RINGING_LINE))
         self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_LOCAL_CALLEE_LINE))
 
-        # Add publishable states
-        self.publisher.add_local_state(snom_aor, { "presence" })
+        # Add local states
+        self.publication_manager.add_local_state("phone", dict(entity=NUMBER_A_SNOM_1))
+        self.publication_manager.add_local_state("phone", dict(entity=NUMBER_A_CISCO_1))
         
         if TEST == TEST_PICKUPIN:
             Plug(self.test_caller,

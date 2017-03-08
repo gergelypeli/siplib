@@ -4,9 +4,10 @@ import datetime
 from format import Uri, Nameaddr, Status, AbsoluteUri, CallInfo
 from party import PlannedEndpoint, Bridge
 from sdp import Session
-from subscript import SubscriptionManager, EventSource, MessageSummaryFormatter, DialogFormatter, PresenceFormatter
+from subscript import SubscriptionManager, EventSource, MessageSummaryFormatter, DialogFormatter, PresenceFormatter, CiscoPresenceFormatter
+from public import PublicationManager, LocalState, PresenceParser, CiscoPresenceParser
 from log import Loggable
-from mgc import Controller  #, PlayerMediaLeg  #, EchoMediaLeg
+from mgc import Controller
 from zap import Plug
 #import resolver
 
@@ -308,7 +309,7 @@ class CallerEndpoint(TestEndpoint):
 
 class VoicemailEventSource(EventSource):
     def __init__(self):
-        EventSource.__init__(self, { "message-summary" })
+        EventSource.__init__(self, { "msgsum" })
 
         self.mailbox = None
         self.state = 0
@@ -328,7 +329,7 @@ class VoicemailEventSource(EventSource):
 
         
     def get_state(self, format):
-        if format == "message-summary":
+        if format == "msgsum":
             s = dict(voice=self.state % 2, voice_old=self.state / 2 % 2)
             return self.formatter.format(s)
         else:
@@ -351,13 +352,14 @@ class BusylampEventSource(EventSource):
     # * Don't report anything, set explicit pickup prefixes on the phone.
     
     def __init__(self):
-        EventSource.__init__(self, { "dialog", "presence" })
+        EventSource.__init__(self, { "snom", "cisco", "basic" })
 
         self.entity = None
         self.calls_by_number = {}
         self.state = 0
         self.dialog_formatter = DialogFormatter()
         self.presence_formatter = PresenceFormatter()
+        self.cisco_presence_formatter = CiscoPresenceFormatter()
         
     
     def identify(self, params):
@@ -385,15 +387,18 @@ class BusylampEventSource(EventSource):
         
         
     def get_state(self, format):
-        if format == "dialog":
+        if format == "snom":
             return self.dialog_formatter.format(self.calls_by_number)
-        elif format == "presence":
+        elif format == "basic":
+            s = dict(is_open=True)
+            return self.presence_formatter.format(s)
+        elif format == "cisco":
             cisco_is_ringing = any(not s["is_outgoing"] and not s["is_confirmed"] for s in self.calls_by_number.values())
             cisco_is_busy = bool(self.calls_by_number)
             cisco_is_dnd = False
                 
             s = dict(is_open=True, cisco=dict(is_ringing=cisco_is_ringing, is_busy=cisco_is_busy, is_dnd=cisco_is_dnd))
-            return self.presence_formatter.format(s)
+            return self.cisco_presence_formatter.format(s)
         else:
             raise Exception("Invalid format: %s!" % format)
             
@@ -411,10 +416,11 @@ class TestSubscriptionManager(SubscriptionManager):
         to_uri = request["to"].uri
         
         if event == "message-summary" and to_uri.username == self.voicemail_number:
-            return "voicemail", from_uri.username, event
+            return "voicemail", from_uri.username, "msgsum"
             
         if event in ("dialog", "presence"):
-            return "busylamp", to_uri.username, event
+            format = "snom" if event == "dialog" else "cisco" if "Cisco" in request.get("user_agent", "") else "basic"
+            return "busylamp", to_uri.username, format
             
         return None
         
@@ -424,6 +430,55 @@ class TestSubscriptionManager(SubscriptionManager):
             return VoicemailEventSource()
         elif type == "busylamp":
             return BusylampEventSource()
+        else:
+            return None
+
+
+class PhoneState(LocalState):
+    def identify(self, params):
+        self.state = {}
+        self.entity = params["entity"]
+        self.presence_parser = PresenceParser()
+        self.cisco_presence_parser = CiscoPresenceParser()
+
+        return self.entity
+        
+
+    def get_state(self, format, content_type, body):
+        if format == "cisco":
+            activity = self.cisco_presence_parser.parse(content_type, body)
+            state = dict(cisco=activity)
+        elif format == "basic":
+            basic = self.presence_parser.parse(content_type, body)
+            state = dict(basic=basic)
+        else:
+            return None
+            
+        return state
+        
+        
+    def add_state(self, etag, state):
+        if state:
+            self.state[etag] = state
+        else:
+            self.state.pop(etag)
+            
+            
+class TestPublicationManager(PublicationManager):
+    def make_local_state(self, type):
+        if type == "phone":
+            return PhoneState()
+        else:
+            PublicationManager.make_local_state(self, type)
+        
+        
+    def identify_publication(self, request):
+        event = request["event"]
+        to_uri = request["to"].uri
+
+        if event == "presence":
+            format = "cisco" if "Cisco" in request.get("user_agent", "") else "basic"
+            return "phone", to_uri.username, format
         else:
             return None
 

@@ -166,7 +166,7 @@ class EventSource(Loggable):
     def send_notify(self, id, state_by_format, reason=None):
         subscription = self.subscriptions_by_id[id]
         
-        headers, body = state_by_format[subscription.format]
+        event, content_type, body = state_by_format[subscription.format]
         
         if reason:
             ss = "terminated;reason=%s" % reason
@@ -179,7 +179,8 @@ class EventSource(Loggable):
         # Must make copies in case of multiple subscriptions
         req = Sip.request(method="NOTIFY")
         req["subscription_state"] = ss
-        req.update(headers)
+        req["event"] = event
+        req["content_type"] = content_type
         req.body = body
         
         subscription.dialog.send(req)
@@ -210,12 +211,12 @@ class EventSource(Loggable):
         self.subscriptions_by_id.pop(id)
 
 
-class Formatter:
+class EventFormatter:
     def format(self, state):
         raise NotImplementedError()
         
 
-class MessageSummaryFormatter(Formatter):
+class MessageSummaryFormatter(EventFormatter):
     # RFC 3458
     MESSAGE_CONTEXT_CLASSES = [ "voice", "fax", "pager", "multimedia", "text" ]
     
@@ -231,17 +232,14 @@ class MessageSummaryFormatter(Formatter):
             if new or old:
                 text += "%s-Message: %d/%d\r\n" % (mcc.title(), new, old)
         
-        headers = dict(
-            event="message-summary",
-            content_type="application/simple-message-summary"
-        )
-        
+        event = "message-summary"
+        content_type = "application/simple-message-summary"
         body = text.encode("utf8")
         
-        return headers, body
+        return event, content_type, body
 
 
-class DialogFormatter(Formatter):
+class DialogFormatter(EventFormatter):
     def __init__(self):
         self.entity = None
         self.version = 0
@@ -305,17 +303,14 @@ class DialogFormatter(Formatter):
             
         lines.append('</dialog-info>')
 
-        headers = dict(
-            event="dialog",
-            content_type="application/dialog-info+xml"
-        )
-        
+        event = "dialog"
+        content_type = "application/dialog-info+xml"
         body = "\n".join(lines).encode("utf8")
         
-        return headers, body
+        return event, content_type, body
 
 
-class PresenceFormatter(Formatter):
+class PresenceFormatter(EventFormatter):
     XML = """
 <presence entity="%s" xmlns="urn:ietf:params:xml:ns:pidf">
     <tuple id="siplib">
@@ -326,7 +321,27 @@ class PresenceFormatter(Formatter):
 </presence>
 """
 
-    CISCO_XML = """
+    def __init__(self):
+        self.entity = None
+        
+        
+    def set_entity(self, entity):
+        self.entity = entity
+
+
+    def format(self, state):
+        basic = "open" if state["is_open"] else "closed"
+        xml = self.XML % (self.entity, basic)
+        
+        event = "presence"
+        content_type = "application/pidf+xml"
+        body = xml.encode("utf8")
+        
+        return event, content_type, body
+
+
+class CiscoPresenceFormatter(PresenceFormatter):
+    XML = """
 <presence entity="%s" xmlns="urn:ietf:params:xml:ns:pidf" xmlns:dm="urn:ietf:params:xml:ns:pidf:data-model" xmlns:e="urn:ietf:params:xml:ns:pidf:status:rpid" xmlns:ce="urn:cisco:params:xml:ns:pidf:rpid">
     <tuple id="siplib">
         <status>
@@ -341,45 +356,30 @@ class PresenceFormatter(Formatter):
 </presence>
 """
 
-    def __init__(self):
-        self.entity = None
-        
-        
-    def set_entity(self, entity):
-        self.entity = entity
-
-
     def format(self, state):
         basic = "open" if state["is_open"] else "closed"
         cisco = state.get("cisco")
+        activities = ""
         
-        if not cisco:
-            xml = self.XML % (self.entity, basic)
-        else:
-            activities = ""
+        if cisco["is_ringing"]:
+            activities += "<ce:alerting/>"
             
-            if cisco["is_ringing"]:
-                activities += "<ce:alerting/>"
-                
-            if cisco["is_busy"]:
-                activities += "<e:on-the-phone/>"
-                
-            if cisco["is_dnd"]:
-                activities += "<ce:dnd/>"
-                
-            if not activities:
-                activities = "<ce:available/>"
-                
-            xml = self.CISCO_XML % (self.entity, basic, activities)
+        if cisco["is_busy"]:
+            activities += "<e:on-the-phone/>"
+            
+        if cisco["is_dnd"]:
+            activities += "<ce:dnd/>"
+            
+        if not activities:
+            activities = "<ce:available/>"
+            
+        xml = self.CISCO_XML % (self.entity, basic, activities)
 
-        headers = dict(
-            event="presence",
-            content_type="application/pidf+xml"
-        )
-        
+        event = "presence"
+        content_type = "application/pidf+xml"
         body = xml.encode("utf8")
         
-        return headers, body
+        return event, content_type, body
         
 
 class SubscriptionManager(Loggable):

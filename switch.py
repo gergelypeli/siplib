@@ -8,7 +8,7 @@ from party import Bridge, RecordingBridge, Routing, RedialBridge, SessionNegotia
 from endpoint_sip import SipManager
 from ground import Ground
 from registrar import Registrar
-from publisher import Publisher
+from public import PublicationManager
 from subscript import SubscriptionManager
 from account import AccountManager
 from log import Loggable
@@ -19,7 +19,7 @@ from zap import Plug
 class Switch(Loggable):
     def __init__(self,
         transport_manager=None, transaction_manager=None,
-        registrar=None, publisher=None, subscription_manager=None,
+        registrar=None, publication_manager=None, subscription_manager=None,
         dialog_manager=None, sip_manager=None, mgc=None, account_manager=None
     ):
         Loggable.__init__(self)
@@ -36,10 +36,9 @@ class Switch(Loggable):
             proxy(self)
         )
         Plug(self.record_changed).attach(self.registrar.record_change_slot)
-        self.publisher = publisher or Publisher(
+        self.publication_manager = publication_manager or PublicationManager(
             proxy(self)
         )
-        Plug(self.state_changed).attach(self.publisher.state_change_slot)
         self.subscription_manager = subscription_manager or SubscriptionManager(
             proxy(self)
         )
@@ -65,7 +64,7 @@ class Switch(Loggable):
 
         self.account_manager.set_oid(oid.add("accman"))
         self.registrar.set_oid(oid.add("registrar"))
-        self.publisher.set_oid(oid.add("publisher"))
+        self.publication_manager.set_oid(oid.add("pubman"))
         self.subscription_manager.set_oid(oid.add("subman"))
         self.transport_manager.set_oid(oid.add("tportman"))
         self.transaction_manager.set_oid(oid.add("tactman"))
@@ -236,7 +235,7 @@ class Switch(Loggable):
                 return
 
             if method == "PUBLISH":
-                self.publisher.process_request(request)
+                self.publication_manager.process_request(request)
                 return
 
             if "tag" not in request["to"].params:
@@ -279,7 +278,7 @@ class Switch(Loggable):
                 return
 
             if method == "PUBLISH":
-                self.publisher.process_response(response)
+                self.publication_manager.process_response(response)
                 return
 
             processed = self.dialog_manager.process(response)
