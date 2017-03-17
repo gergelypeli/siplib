@@ -24,6 +24,7 @@ class LocalRecord(Loggable):
     AUTH_ALWAYS = "AUTH_ALWAYS"
     AUTH_IF_UNREGISTERED = "AUTH_IF_UNREGISTERED"
     AUTH_BY_HOP = "AUTH_BY_HOP"
+    AUTH_ALWAYS_PRESENCE = "AUTH_ALWAYS_PRESENCE"
 
     DEFAULT_EXPIRES = 3600
 
@@ -132,29 +133,36 @@ class LocalRecord(Loggable):
         return any(urihop.hop.contains(hop) for urihop in self.contact_infos_by_uri_hop.keys())
         
 
-    def authenticate_request(self, hop):
+    def authenticate_request(self, request):
         # This is not about REGISTER requests, but about regular requests that
         # just arrived.
         
         if self.auth_policy == self.AUTH_NEVER:
-            self.logger.debug("Accepting request because authentication is never needed")
+            self.logger.debug("Accepting request because authentication is never needed.")
             return self.authname, True
         elif self.auth_policy == self.AUTH_ALWAYS:
-            self.logger.debug("Authenticating request because account always needs it")
+            self.logger.debug("Authenticating request because account always needs it.")
             return self.authname, False
         elif self.auth_policy == self.AUTH_IF_UNREGISTERED:
-            if self.is_contact_hop(hop):
-                self.logger.debug("Accepting request because account is registered")
+            if self.is_contact_hop(request.hop):
+                self.logger.debug("Accepting request because account is registered.")
                 return self.authname, True
             else:
-                self.logger.debug("Authenticating request because account is not registered")
+                self.logger.debug("Authenticating request because account is not registered.")
                 return self.authname, False
         elif self.auth_policy == self.AUTH_BY_HOP:
-            if self.is_contact_hop(hop):
-                self.logger.debug("Accepting request because hop is allowed")
+            if self.is_contact_hop(request.hop):
+                self.logger.debug("Accepting request because hop is allowed.")
                 return self.authname, True
             else:
-                self.logger.debug("Rejecting request because hop address is not allowed")
+                self.logger.debug("Rejecting request because hop address is not allowed.")
+                return None, True
+        elif self.auth_policy == self.AUTH_ALWAYS_PRESENCE:
+            if request.method in ("PUBLISH", "REFER"):
+                self.logger.debug("Authenticating presence request because account always needs it.")
+                return self.authname, False
+            else:
+                self.logger.debug("Rejecting request because it's not for presence.")
                 return None, True
         else:
             raise Exception("WTF?")
@@ -322,15 +330,13 @@ class Registrar(Loggable):
         #   None, False -     not found
         
         record_uri = request["from"].uri.canonical_aor()
-        hop = request.hop
-        
         record = self.local_records_by_uri.get(record_uri) or self.local_records_by_uri.get(record_uri._replace(username=None))
         
         if not record:
             self.logger.warning("Rejecting %s request because caller %s is unknown!" % (request.method, record_uri))
             return None, False
         
-        return record.authenticate_request(hop)
+        return record.authenticate_request(request)
 
         
     def provide_auth(self, response):

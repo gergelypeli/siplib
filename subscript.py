@@ -58,10 +58,20 @@ class EventSource(Loggable):
         self.subscriptions_by_id = {}
         self.last_subscription_id = 0
         self.formats = formats
+        self.state = None
 
 
     def identify(self, params):
         raise NotImplementedError()
+        
+
+    def get_state(self, format):
+        raise NotImplementedError()
+
+        
+    def set_state(self, state):
+        self.state = state
+        self.notify_all()
         
 
     def get_expiry_range(self):
@@ -157,10 +167,6 @@ class EventSource(Loggable):
                         s.expiration_plug.detach()
             else:
                 self.logger.warning("Ignoring %s response!" % method)
-
-
-    def get_state(self, format):
-        raise NotImplementedError()
 
 
     def send_notify(self, id, state_by_format, reason=None):
@@ -312,12 +318,22 @@ class DialogFormatter(EventFormatter):
 
 class PresenceFormatter(EventFormatter):
     XML = """
-<presence entity="%s" xmlns="urn:ietf:params:xml:ns:pidf">
+<presence entity="%s" xmlns="urn:ietf:params:xml:ns:pidf" xmlns:pp="urn:ietf:params:xml:ns:pidf:person" xmlns:ep="urn:ietf:params:xml:ns:pidf:rpid:rpid-person">
     <tuple id="siplib">
         <status>
             <basic>%s</basic>
         </status>
     </tuple>
+    <pp:person>
+        <status>
+            <ep:activities>
+                %s
+            </ep:activities>
+        </status>
+    </pp:person>
+    <note>
+        %s
+    </note>
 </presence>
 """
 
@@ -330,8 +346,20 @@ class PresenceFormatter(EventFormatter):
 
 
     def format(self, state):
-        basic = "open" if state["is_open"] else "closed"
-        xml = self.XML % (self.entity, basic)
+        basic = "open" if state.get("is_open") else "closed"
+        activities = ""
+        note = ""
+        
+        if state.get("is_ringing"):
+            note = "Ringing"
+        
+        if state.get("is_busy"):
+            activities += "<ep:busy/>"
+        
+        if state.get("is_dnd"):
+            activities += "<ep:away/>"
+        
+        xml = self.XML % (self.entity, basic, activities, note)
         
         event = "presence"
         content_type = "application/pidf+xml"
@@ -358,22 +386,21 @@ class CiscoPresenceFormatter(PresenceFormatter):
 
     def format(self, state):
         basic = "open" if state["is_open"] else "closed"
-        activities = state.get("activities", {})
-        activity_list = ""
+        activities = ""
         
-        if activities["is_ringing"]:
-            activity_list += "<ce:alerting/>"
+        if state.get("is_ringing"):
+            activities += "<ce:alerting/>"
             
-        if activities["is_busy"]:
-            activity_list += "<e:on-the-phone/>"
+        if state.get("is_busy"):
+            activities += "<e:on-the-phone/>"
             
-        if activities["is_dnd"]:
-            activity_list += "<ce:dnd/>"
+        if state.get("is_dnd"):
+            activities += "<ce:dnd/>"
             
         if not activities:
-            activity_list = "<ce:available/>"
+            activities = "<ce:available/>"
             
-        xml = self.XML % (self.entity, basic, activity_list)
+        xml = self.XML % (self.entity, basic, activities)
 
         event = "presence"
         content_type = "application/pidf+xml"

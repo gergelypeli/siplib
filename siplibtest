@@ -93,6 +93,8 @@ class TestSwitch(Switch):
         
         self.line_manager = TestLineManager()
         self.default_domain = None
+        self.unsolicited_ids_by_urihop = {}
+        self.states_by_key = {}
 
 
     def set_oid(self, oid):
@@ -145,6 +147,53 @@ class TestSwitch(Switch):
             return self.line_manager.make_line()
         else:
             return Switch.make_party(self, type)
+
+
+    def record_changed(self, aor, urihop, info):
+        if info and info.user_agent and "Cisco" in info.user_agent:
+            self.logger.info("A Cisco device registered, initiating unsolicited MWI.")
+            es_type = "voicemail"
+            es_id = aor.username
+            format = "msgsum"
+            local_uri = aor._replace(scheme="sip")
+            remote_uri = urihop.uri
+            hop = urihop.hop
+            
+            id = self.subscription_manager.unsolicited_subscribe(es_type, es_id, format, local_uri, remote_uri, hop)
+            self.unsolicited_ids_by_urihop[urihop] = id
+        elif not info and urihop in self.unsolicited_ids_by_urihop:
+            self.logger.info("A Cisco device unregistered, stopping unsolicited MWI.")
+            es_type = "voicemail"
+            es_id = aor.username
+            id = self.unsolicited_ids_by_urihop.pop(urihop)
+            
+            self.subscription_manager.unsolicited_unsubscribe(es_type, es_id, id)
+            
+            
+    def state_changed(self, key, etag, state):
+        self.logger.info("State changed for %s=%s/%s: %s" % (*key, etag, state))
+        
+        s = self.states_by_key.setdefault(key, ({}, {}))
+        partial, total = s
+        
+        if state is None:
+            partial.pop(etag, None)
+        else:
+            partial[etag] = state
+            
+        t = {}
+        for p in partial.values():
+            t.update(p)
+
+        if t != total:
+            self.logger.info("Total state changed.")
+            total.clear()
+            total.update(t)
+
+            if key[0] == "phone":
+                self.logger.info("Triggering busylamp for phone state change.")
+                es = self.subscription_manager.get_event_source("busylamp", key[1])
+                es.set_state(total)
 
 
     def reregister_snom(self, addr, line):
@@ -287,7 +336,8 @@ class SwitchA(TestSwitch):
         cisco_aor = Uri(Addr(A_DOMAIN), NUMBER_A_CISCO_1)
         self.add_record_account(cisco_aor, CISCO_AUTHNAME, CISCO_HA1, LocalRecord.AUTH_IF_UNREGISTERED)
         cisco_hack = Uri(Addr(A_DOMAIN), MAC_CISCO_1)
-        self.add_record_account(cisco_hack, CISCO_AUTHNAME, CISCO_HA1, LocalRecord.AUTH_IF_UNREGISTERED)
+        self.add_record_account(cisco_hack, CISCO_AUTHNAME, None, LocalRecord.AUTH_ALWAYS_PRESENCE)
+        self.publication_manager.add_mac_alias(MAC_CISCO_1, NUMBER_A_CISCO_1)
         
         # Allow calls from anyone on switch B as long as they use this hop
         b_aor = Uri(Addr(B_DOMAIN), None)
@@ -309,8 +359,10 @@ class SwitchA(TestSwitch):
         self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_LOCAL_CALLEE_LINE))
 
         # Add local states
-        self.publication_manager.add_local_state("phone", dict(entity=NUMBER_A_SNOM_1))
-        self.publication_manager.add_local_state("phone", dict(entity=MAC_CISCO_1))
+        ls = self.publication_manager.add_local_state("phone", dict(entity=NUMBER_A_SNOM_1))
+        #Plug(self.phone_state_changed, entity=NUMBER_A_SNOM_1).attach(ls.state_change_slot)
+        ls = self.publication_manager.add_local_state("phone", dict(entity=NUMBER_A_CISCO_1))
+        #Plug(self.phone_state_changed, entity=NUMBER_A_CISCO_1).attach(ls.state_change_slot)
         
         if TEST == TEST_PICKUPIN:
             Plug(self.test_caller,
@@ -343,6 +395,15 @@ class SwitchA(TestSwitch):
         
         self.start_call("caller", dst)
 
+
+    #def phone_state_changed(self, state, entity):
+    #    es = self.subscription_manager.get_event_source("busylamp", entity)
+        
+    #    if not es:
+    #        self.logger.error("Oops, no event source for %s!" % (entity,))
+    #        return
+            
+        
         
 
 class SwitchB(TestSwitch):

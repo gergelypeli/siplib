@@ -25,38 +25,46 @@ class Switch(Loggable):
         Loggable.__init__(self)
 
         self.call_count = 0
-        self.unsolicited_ids_by_urihop = {}
 
         self.transport_manager = transport_manager or TransportManager(
         )
+        
         self.transaction_manager = transaction_manager or TransactionManager(
             proxy(self.transport_manager)
         )
+        Plug(self.process).attach(self.transaction_manager.message_slot)
+        
         self.registrar = registrar or Registrar(
             proxy(self)
         )
         Plug(self.record_changed).attach(self.registrar.record_change_slot)
+        
         self.publication_manager = publication_manager or PublicationManager(
             proxy(self)
         )
+        Plug(self.state_changed).attach(self.publication_manager.state_change_slot)
+        
         self.subscription_manager = subscription_manager or SubscriptionManager(
             proxy(self)
         )
+        
         self.dialog_manager = dialog_manager or DialogManager(
             proxy(self)
         )
+        
         self.sip_manager = sip_manager or SipManager(
         )
+        
         self.mgc = mgc or Controller(
         )
+        
         self.account_manager = account_manager or AccountManager(
         )
+        
         self.ground = Ground(
             proxy(self),
             proxy(self.mgc)
         )
-        
-        Plug(self.process).attach(self.transaction_manager.message_slot)
 
 
     def set_oid(self, oid):
@@ -151,29 +159,12 @@ class Switch(Loggable):
 
 
     def record_changed(self, aor, urihop, info):
-        if info and info.user_agent and "Cisco" in info.user_agent:
-            self.logger.info("A Cisco device registered, initiating unsolicited MWI.")
-            es_type = "voicemail"
-            es_id = aor.username
-            format = "msgsum"
-            local_uri = aor._replace(scheme="sip")
-            remote_uri = urihop.uri
-            hop = urihop.hop
-            
-            id = self.subscription_manager.unsolicited_subscribe(es_type, es_id, format, local_uri, remote_uri, hop)
-            self.unsolicited_ids_by_urihop[urihop] = id
-        elif not info and urihop in self.unsolicited_ids_by_urihop:
-            self.logger.info("A Cisco device unregistered, stopping unsolicited MWI.")
-            es_type = "voicemail"
-            es_id = aor.username
-            id = self.unsolicited_ids_by_urihop.pop(urihop)
-            
-            self.subscription_manager.unsolicited_unsubscribe(es_type, es_id, id)
-            
-            
-    def state_changed(self, aor, format, etag, info):
-        self.logger.info("State changed for %s format %s etag %s: %s" % (aor, format, etag, info))
+        pass
 
+            
+    def state_changed(self, key, etag, state):
+        pass
+            
         
     def auth_request(self, request):
         authname, sure = self.registrar.authenticate_request(request)

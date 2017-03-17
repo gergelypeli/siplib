@@ -6,7 +6,7 @@ from format import Status, Sip
 from parser import Xml
 from transactions import make_simple_response
 from log import Loggable
-from zap import Plug
+from zap import Plug, EventSlot
 from util import generate_state_etag, generate_tag
 
 
@@ -17,7 +17,7 @@ class EventParser:
         
 class PresenceParser(EventParser):
     def get_is_open(self, xml):
-        is_open = None
+        is_open = False
         
         if xml.tag == "presence":
             for x in xml.content:
@@ -45,7 +45,7 @@ class PresenceParser(EventParser):
 
 class CiscoPresenceParser(PresenceParser):
     def get_activities(self, xml):
-        activities = dict()
+        is_ringing, is_busy, is_dnd = False, False, False
         
         if xml.tag == "presence":
             for x in xml.content:
@@ -54,15 +54,13 @@ class CiscoPresenceParser(PresenceParser):
                         if y.tag == "e:activities":
                             for z in y.content:
                                 if z.tag == "ce:alerting":
-                                    activities["is_ringing"] = True
+                                    is_ringing = True
                                 elif z.tag == "e:on-the-phone":
-                                    activities["is_busy"] = True
+                                    is_busy = True
                                 elif z.tag == "ce:dnd":
-                                    activities["is_dnd"] = True
-                                elif z.tag == "ce:available":
-                                    pass
+                                    is_dnd = True
                     
-        return activities                
+        return is_ringing, is_busy, is_dnd
 
 
     def parse(self, content_type, body):
@@ -71,9 +69,9 @@ class CiscoPresenceParser(PresenceParser):
             
         xml = Xml.parse(body.decode("utf8"))
         is_open = self.get_is_open(xml)
-        activities = self.get_activities(xml)
+        is_ringing, is_busy, is_dnd = self.get_activities(xml)
         
-        return dict(is_open=is_open, activities=activities)
+        return dict(is_open=is_open, is_ringing=is_ringing, is_busy=is_busy, is_dnd=is_dnd)
 
 
 FragmentInfo = collections.namedtuple("FragmentInfo", [
@@ -89,6 +87,7 @@ class LocalState(Loggable):
     
         self.manager = None
         self.fragment_infos_by_etag = {}
+        self.state_change_slot = EventSlot()
 
 
     def set_manager(self, manager):
@@ -103,14 +102,11 @@ class LocalState(Loggable):
         raise NotImplementedError()
         
         
-    def add_state(self, etag, state):
-        raise NotImplementedError()
-        
-        
     def fragment_expired(self, etag):
         self.logger.info("Fragment expired: %s" % etag)
         self.fragment_infos_by_etag.pop(etag)
-        self.add_state(etag, None)
+        self.state_change_slot.zap(etag, None)
+        #self.add_state(etag, None)
 
 
     def refresh_fragment(self, etag, expiration_deadline, expiration_plug):
@@ -162,7 +158,8 @@ class LocalState(Loggable):
                 self.send(Sip.response(status=Status.BAD_EVENT, related=request))
                 return
 
-            self.add_state(etag, state)
+            self.state_change_slot.zap(etag, state)
+            #self.add_state(etag, state)
         
         seconds_left = request.get("expires", self.DEFAULT_EXPIRES)
         expiration_deadline = now + datetime.timedelta(seconds=seconds_left)
@@ -195,6 +192,7 @@ class PublicationManager(Loggable):
 
         self.switch = switch
         self.local_states_by_key = {}
+        self.state_change_slot = EventSlot()
         
         
     def transmit(self, msg):
@@ -223,6 +221,8 @@ class PublicationManager(Loggable):
         ls.set_oid(self.oid.add(type, id))
         key = (type, id)
         self.local_states_by_key[key] = ls
+        
+        Plug(self.state_changed, key=key).attach(ls.state_change_slot)
 
         return proxy(ls)
 
@@ -261,3 +261,7 @@ class PublicationManager(Loggable):
             return
         
         state.recv(format, request)
+
+
+    def state_changed(self, etag, state, key):
+        self.state_change_slot.zap(key, etag, state)

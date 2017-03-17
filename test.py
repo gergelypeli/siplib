@@ -8,7 +8,7 @@ from subscript import SubscriptionManager, EventSource, MessageSummaryFormatter,
 from public import PublicationManager, LocalState, PresenceParser, CiscoPresenceParser
 from log import Loggable
 from mgc import Controller
-from zap import Plug
+from zap import Plug, EventSlot
 #import resolver
 
 
@@ -312,7 +312,7 @@ class VoicemailEventSource(EventSource):
         EventSource.__init__(self, { "msgsum" })
 
         self.mailbox = None
-        self.state = 0
+        self.fake_state = 0
         Plug(self.fake).attach_time(3600, True)
         self.formatter = MessageSummaryFormatter()
         
@@ -325,12 +325,12 @@ class VoicemailEventSource(EventSource):
         
     def fake(self):
         self.notify_all()
-        self.state += 1
+        self.fake_state += 1
 
         
     def get_state(self, format):
         if format == "msgsum":
-            s = dict(voice=self.state % 2, voice_old=self.state / 2 % 2)
+            s = dict(voice=self.fake_state % 2, voice_old=self.fake_state / 2 % 2)
             return self.formatter.format(s)
         else:
             raise Exception("Invalid format: %s!" % format)
@@ -355,8 +355,7 @@ class BusylampEventSource(EventSource):
         EventSource.__init__(self, { "snom", "cisco", "basic" })
 
         self.entity = None
-        self.calls_by_number = {}
-        self.state = 0
+        #self.calls_by_number = {}
         self.dialog_formatter = DialogFormatter()
         self.presence_formatter = PresenceFormatter()
         self.cisco_presence_formatter = CiscoPresenceFormatter()
@@ -365,6 +364,10 @@ class BusylampEventSource(EventSource):
     def identify(self, params):
         self.entity = params["entity"]
         self.dialog_formatter.set_entity(self.entity)
+        self.presence_formatter.set_entity(self.entity)
+        self.cisco_presence_formatter.set_entity(self.entity)
+
+        self.state = {}  # TODO: decide None or {}
 
         return self.entity
         
@@ -381,24 +384,26 @@ class BusylampEventSource(EventSource):
         self.notify_all()
             
         
-    def fake(self):
-        self.notify_all()
-        self.state += 1
+    #def fake(self):
+    #    self.notify_all()
+    #    self.state += 1
         
         
     def get_state(self, format):
         if format == "snom":
-            return self.dialog_formatter.format(self.calls_by_number)
+            calls_by_number = {}
+            
+            if self.state.get("is_ringing"):
+                calls_by_number[0] = dict(is_outgoing=False, is_confirmed=False)
+            elif self.state.get("is_busy"):
+                calls_by_number[0] = dict(is_outgoing=False, is_confirmed=True)
+            
+            return self.dialog_formatter.format(calls_by_number)
         elif format == "basic":
-            s = dict(is_open=True)
+            s = dict(self.state, is_open=True)
             return self.presence_formatter.format(s)
         elif format == "cisco":
-            calls = self.calls_by_number.values()
-            is_ringing = any(not call["is_outgoing"] and not call["is_confirmed"] for call in calls)
-            is_busy = any(call["is_confirmed"] for call in calls)
-            is_dnd = False
-
-            s = dict(is_open=True, activities=dict(is_ringing=is_ringing, is_busy=is_busy, is_dnd=is_dnd))
+            s = dict(self.state, is_open=True)
             return self.cisco_presence_formatter.format(s)
         else:
             raise Exception("Invalid format: %s!" % format)
@@ -441,6 +446,7 @@ class PhoneState(LocalState):
         self.entity = params["entity"]
         self.presence_parser = PresenceParser()
         self.cisco_presence_parser = CiscoPresenceParser()
+        self.state_change_slot = EventSlot()
 
         return self.entity
         
@@ -458,21 +464,31 @@ class PhoneState(LocalState):
         return state
         
         
-    def add_state(self, etag, state):
-        self.logger.info("Adding state %s: %s." % (etag, state))
+    #def add_state(self, etag, state):
+    #    self.logger.info("Adding state %s: %s." % (etag, state))
         
-        if state:
-            self.state[etag] = state
-        else:
-            self.state.pop(etag)
+    #    if state:
+    #        self.state[etag] = state
+    #    else:
+    #        self.state.pop(etag)
             
             
 class TestPublicationManager(PublicationManager):
+    def __init__(self, switch):
+        PublicationManager.__init__(self, switch)
+        
+        self.usernames_by_mac = {}
+        
+        
+    def add_mac_alias(self, mac, username):
+        self.usernames_by_mac[mac] = username
+        
+        
     def make_local_state(self, type):
         if type == "phone":
             return PhoneState()
         else:
-            PublicationManager.make_local_state(self, type)
+            return PublicationManager.make_local_state(self, type)
         
         
     def identify_publication(self, request):
@@ -480,8 +496,17 @@ class TestPublicationManager(PublicationManager):
         to_uri = request["to"].uri
 
         if event == "presence":
-            format = "cisco" if "Cisco" in request.get("user_agent", "") else "basic"
-            return "phone", to_uri.username, format
+            if "Cisco" in request.get("user_agent", ""):
+                id = self.usernames_by_mac.get(to_uri.username)
+                
+                if id:
+                    return "phone", id, "cisco"
+                else:
+                    self.logger.error("Cisco MAC not configured: %s!" % to_uri.username)
+                    return None
+            else:
+                id = to_uri.username
+                return "phone", id, "basic"
         else:
             return None
 
@@ -523,11 +548,21 @@ class TestLine(Bridge):
         return "%s@%s" % (self.username, self.addr)
         
         
-    def update_busylamp_state(self):
-        es = self.ground.switch.get_busylamp(self.username)
+    def update_phone_state(self):
+        key = ("phone", self.username)
+        etag = "line"
+        state = {}
         
-        if es:
-            es.update(self.call_info["number"], self.is_outgoing, self.is_confirmed)
+        if self.is_confirmed is None:
+            pass
+        elif not self.is_outgoing and not self.is_confirmed:
+            state["is_ringing"] = True
+        elif self.is_confirmed:
+            state["is_busy"] = True
+        
+        #es.update(self.call_info["number"], self.is_outgoing, self.is_confirmed)
+        self.logger.info("Updating phone state %s=%s/%s: %s" % (*key, etag, state))
+        self.ground.switch.state_changed(key, etag, state)
         
         
     def process_dial(self, action):
@@ -542,7 +577,7 @@ class TestLine(Bridge):
         dst_addr = ctx["dst_addr"]
 
         if dst_addr != self.addr or dst_username != self.username:
-            self.update_busylamp_state()
+            self.update_phone_state()
             self.dial(action)
             return
             
@@ -553,7 +588,7 @@ class TestLine(Bridge):
             self.logger.debug("Record %s has no SIP contacts, rejecting!" % (record_uri,))
             self.reject_incoming_leg(Status.NOT_FOUND)
             
-        self.update_busylamp_state()
+        self.update_phone_state()
         
         self.logger.debug("Record %s has %d SIP contacts." % (record_uri, len(contacts)))
         sip_from = Nameaddr(Uri(src_addr, src_username), src_name)
@@ -620,10 +655,10 @@ class TestLine(Bridge):
         
         if type == "accept":
             self.is_confirmed = True
-            self.update_busylamp_state()
+            self.update_phone_state()
         elif type in ("reject", "hangup"):
             self.is_confirmed = None
-            self.update_busylamp_state()
+            self.update_phone_state()
         elif type == "control":
             if action["target"] == "line":
                 if self.is_device_li(li):
