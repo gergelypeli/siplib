@@ -5,7 +5,7 @@ from format import Status, Sip, Nameaddr
 from transactions import make_simple_response
 from log import Loggable
 from zap import Plug, EventSlot
-from util import generate_call_id, generate_tag, MAX_FORWARDS
+from util import generate_call_id, generate_tag, MAX_FORWARDS, EventKey
 
 
 # The Snom seems to miss the expiration of 60 seconds for some reason.
@@ -441,7 +441,7 @@ class SubscriptionManager(Loggable):
         self.logger.debug("Created event source: %s=%s." % (type, id))
 
         es.set_oid(self.oid.add(type, id))
-        key = (type, id)
+        key = EventKey(type, id)
         self.event_sources_by_key[key] = es
         
 
@@ -454,15 +454,12 @@ class SubscriptionManager(Loggable):
         if request.method != "SUBSCRIBE":
             raise Exception("SubscriptionManager has nothing to do with this request!")
         
-        iden = self.identify_subscription(request)
+        key, format = self.identify_subscription(request)
         
-        if not iden:
+        if not key:
             self.logger.warning("Rejecting subscription for unidentifiable event source!")
             self.reject_request(request, Status.NOT_FOUND)
             return
-        
-        type, id, format = iden
-        key = type, id
         
         es = self.event_sources_by_key.get(key)
         if not es:
@@ -475,8 +472,8 @@ class SubscriptionManager(Loggable):
         dialog.recv(request)
 
 
-    def unsolicited_subscribe(self, es_type, es_id, format, local_uri, remote_uri, hop):
-        key = es_type, es_id
+    def unsolicited_subscribe(self, key, format, local_uri, remote_uri, hop):
+        #key = es_type, es_id
         es = self.event_sources_by_key.get(key)
         
         if not es:
@@ -487,12 +484,12 @@ class SubscriptionManager(Loggable):
         dialog = UnsolicitedDialog(proxy(self), local_uri, remote_uri, hop)
         id = es.add_subscription(format, dialog)
         es.notify_one(id)
-        
+
         return id
         
         
-    def unsolicited_unsubscribe(self, es_type, es_id, id):
-        key = es_type, es_id
+    def unsolicited_unsubscribe(self, key, id):
+        #key = es_type, es_id
         es = self.event_sources_by_key.get(key)
         
         if not es:
@@ -502,6 +499,6 @@ class SubscriptionManager(Loggable):
         es.subscription_expired(id)
 
 
-    def get_event_source(self, type, id):
-        key = (type, id)
+    def get_event_source(self, key):
+        #key = (type, id)
         return self.event_sources_by_key.get(key)

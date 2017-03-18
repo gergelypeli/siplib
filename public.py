@@ -7,7 +7,7 @@ from parser import Xml
 from transactions import make_simple_response
 from log import Loggable
 from zap import Plug, EventSlot
-from util import generate_state_etag, generate_tag
+from util import generate_state_etag, generate_tag, EventKey
 
 
 class EventParser:
@@ -219,7 +219,7 @@ class PublicationManager(Loggable):
         self.logger.debug("Created local state: %s=%s." % (type, id))
 
         ls.set_oid(self.oid.add(type, id))
-        key = (type, id)
+        key = EventKey(type, id)
         self.local_states_by_key[key] = ls
         
         Plug(self.state_changed, key=key).attach(ls.state_change_slot)
@@ -244,15 +244,12 @@ class PublicationManager(Loggable):
             self.reject_request(request, Status.FORBIDDEN)
             return
 
-        iden = self.identify_publication(request)
+        key, format = self.identify_publication(request)
         
-        if not iden:
+        if not key:
             self.logger.warning("Rejecting publication for unidentifiable event source!")
             self.reject_request(request, Status.NOT_FOUND)
             return
-        
-        type, id, format = iden
-        key = type, id
         
         state = self.local_states_by_key.get(key)
         if not state:

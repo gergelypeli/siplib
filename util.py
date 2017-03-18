@@ -1,4 +1,5 @@
 from uuid import uuid4
+from collections import namedtuple
 
 MAX_FORWARDS = 20
 BRANCH_MAGIC = "z9hG4bK"
@@ -34,3 +35,6 @@ def generate_sdp_session_id():
     global last_sdp_session_id
     last_sdp_session_id += 1
     return last_sdp_session_id
+
+
+EventKey = namedtuple("EventKey", [ "type", "id" ])

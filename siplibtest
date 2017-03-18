@@ -14,6 +14,7 @@ from mgw import MediaGateway
 from switch import Switch
 from zap import Plug, loop
 from test import CallerEndpoint, CalleeEndpoint, UnreachableEndpoint, RingingEndpoint, BlindTransferringEndpoint, TestSubscriptionManager, TestPublicationManager, TestLineManager, TestController
+from util import EventKey
 
 
 TEST_DIALIN = 1
@@ -152,22 +153,20 @@ class TestSwitch(Switch):
     def record_changed(self, aor, urihop, info):
         if info and info.user_agent and "Cisco" in info.user_agent:
             self.logger.info("A Cisco device registered, initiating unsolicited MWI.")
-            es_type = "voicemail"
-            es_id = aor.username
+            key = EventKey("voicemail", aor.username)
             format = "msgsum"
             local_uri = aor._replace(scheme="sip")
             remote_uri = urihop.uri
             hop = urihop.hop
             
-            id = self.subscription_manager.unsolicited_subscribe(es_type, es_id, format, local_uri, remote_uri, hop)
+            id = self.subscription_manager.unsolicited_subscribe(key, format, local_uri, remote_uri, hop)
             self.unsolicited_ids_by_urihop[urihop] = id
         elif not info and urihop in self.unsolicited_ids_by_urihop:
             self.logger.info("A Cisco device unregistered, stopping unsolicited MWI.")
-            es_type = "voicemail"
-            es_id = aor.username
+            key = EventKey("voicemail", aor.username)
             id = self.unsolicited_ids_by_urihop.pop(urihop)
             
-            self.subscription_manager.unsolicited_unsubscribe(es_type, es_id, id)
+            self.subscription_manager.unsolicited_unsubscribe(key, id)
             
             
     def state_changed(self, key, etag, state):
@@ -190,9 +189,9 @@ class TestSwitch(Switch):
             total.clear()
             total.update(t)
 
-            if key[0] == "phone":
+            if key.type == "phone":
                 self.logger.info("Triggering busylamp for phone state change.")
-                es = self.subscription_manager.get_event_source("busylamp", key[1])
+                es = self.subscription_manager.get_event_source(EventKey("busylamp", key.id))
                 es.set_state(total)
 
 
@@ -210,10 +209,6 @@ class TestSwitch(Switch):
         
         for hop in hops:
             record.add_static_contact(UriHop(uri, hop))  # assume same contact uri as the aor
-
-
-    def get_busylamp(self, username):
-        return self.subscription_manager.get_event_source("busylamp", username)
 
 
 def mkctx(src):
@@ -359,10 +354,8 @@ class SwitchA(TestSwitch):
         self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_LOCAL_CALLEE_LINE))
 
         # Add local states
-        ls = self.publication_manager.add_local_state("phone", dict(entity=NUMBER_A_SNOM_1))
-        #Plug(self.phone_state_changed, entity=NUMBER_A_SNOM_1).attach(ls.state_change_slot)
-        ls = self.publication_manager.add_local_state("phone", dict(entity=NUMBER_A_CISCO_1))
-        #Plug(self.phone_state_changed, entity=NUMBER_A_CISCO_1).attach(ls.state_change_slot)
+        self.publication_manager.add_local_state("phone", dict(entity=NUMBER_A_SNOM_1))
+        self.publication_manager.add_local_state("phone", dict(entity=NUMBER_A_CISCO_1))
         
         if TEST == TEST_PICKUPIN:
             Plug(self.test_caller,
@@ -395,16 +388,6 @@ class SwitchA(TestSwitch):
         
         self.start_call("caller", dst)
 
-
-    #def phone_state_changed(self, state, entity):
-    #    es = self.subscription_manager.get_event_source("busylamp", entity)
-        
-    #    if not es:
-    #        self.logger.error("Oops, no event source for %s!" % (entity,))
-    #        return
-            
-        
-        
 
 class SwitchB(TestSwitch):
     class BRouting(PlannedRouting):

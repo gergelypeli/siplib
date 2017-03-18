@@ -9,6 +9,7 @@ from public import PublicationManager, LocalState, PresenceParser, CiscoPresence
 from log import Loggable
 from mgc import Controller
 from zap import Plug, EventSlot
+from util import EventKey
 #import resolver
 
 
@@ -422,13 +423,13 @@ class TestSubscriptionManager(SubscriptionManager):
         to_uri = request["to"].uri
         
         if event == "message-summary" and to_uri.username == self.voicemail_number:
-            return "voicemail", from_uri.username, "msgsum"
+            return EventKey("voicemail", from_uri.username), "msgsum"
             
         if event in ("dialog", "presence"):
             format = "snom" if event == "dialog" else "cisco" if "Cisco" in request.get("user_agent", "") else "basic"
-            return "busylamp", to_uri.username, format
+            return EventKey("busylamp", to_uri.username), format
             
-        return None
+        return None, None
         
         
     def make_event_source(self, type):
@@ -500,15 +501,15 @@ class TestPublicationManager(PublicationManager):
                 id = self.usernames_by_mac.get(to_uri.username)
                 
                 if id:
-                    return "phone", id, "cisco"
+                    return EventKey("phone", id), "cisco"
                 else:
                     self.logger.error("Cisco MAC not configured: %s!" % to_uri.username)
-                    return None
+                    return None, None
             else:
                 id = to_uri.username
-                return "phone", id, "basic"
+                return EventKey("phone", id), "basic"
         else:
-            return None
+            return None, None
 
 
 class TestController(Controller):
@@ -549,7 +550,7 @@ class TestLine(Bridge):
         
         
     def update_phone_state(self):
-        key = ("phone", self.username)
+        key = EventKey("phone", self.username)
         etag = "line"
         state = {}
         
