@@ -444,6 +444,8 @@ class SubscriptionManager(Loggable):
         key = EventKey(type, id)
         self.event_sources_by_key[key] = es
         
+        return proxy(es)
+        
 
     def process(self, msg):
         if msg.is_response:

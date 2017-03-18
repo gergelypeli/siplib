@@ -222,8 +222,6 @@ class PublicationManager(Loggable):
         key = EventKey(type, id)
         self.local_states_by_key[key] = ls
         
-        Plug(self.state_changed, key=key).attach(ls.state_change_slot)
-
         return proxy(ls)
 
 
@@ -258,7 +256,3 @@ class PublicationManager(Loggable):
             return
         
         state.recv(format, request)
-
-
-    def state_changed(self, etag, state, key):
-        self.state_change_slot.zap(key, etag, state)

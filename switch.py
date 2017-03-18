@@ -42,7 +42,6 @@ class Switch(Loggable):
         self.publication_manager = publication_manager or PublicationManager(
             proxy(self)
         )
-        Plug(self.state_changed).attach(self.publication_manager.state_change_slot)
         
         self.subscription_manager = subscription_manager or SubscriptionManager(
             proxy(self)

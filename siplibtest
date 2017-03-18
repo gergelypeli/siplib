@@ -9,7 +9,7 @@ from weakref import proxy
 from format import Addr, Uri, Nameaddr, Hop, Status
 from party import PlannedRouting, Routing
 from registrar import LocalRecord, UriHop
-from log import setup_logging, log_exception, Oid
+from log import setup_logging, log_exception, Oid, Loggable
 from mgw import MediaGateway
 from switch import Switch
 from zap import Plug, loop
@@ -78,7 +78,47 @@ MAC_CISCO_1 = "1ce6c798d483"  # TODO
 CALLER_NAMEADDR = Nameaddr(Uri(Addr(B_DOMAIN, None), "caller"), "Caller")
 CALLEE_NAMEADDR = Nameaddr(Uri(Addr(B_DOMAIN, None), "callee"), "Callee")
 
+
+class TestState(Loggable):
+    def __init__(self, switch, entity, can_subscribe, can_publish):
+        Loggable.__init__(self)
         
+        self.switch = switch
+        self.ls = None
+        self.es = None
+        
+        if can_publish:
+            self.ls = switch.publication_manager.add_local_state("phone", dict(entity=entity))
+            Plug(self.state_changed).attach(self.ls.state_change_slot)
+        
+        if can_subscribe:
+            self.es = switch.subscription_manager.add_event_source("busylamp", dict(entity=entity))
+        
+        self.partials_by_etag = {}
+        self.total = {}
+        
+        
+    def state_changed(self, etag, state):
+        self.logger.info("Phone state changed for %s: %s" % (etag, state))
+        
+        if state is None:
+            self.partials_by_etag.pop(etag, None)
+        else:
+            self.partials_by_etag[etag] = state
+            
+        t = {}
+        for p in self.partials_by_etag.values():
+            t.update(p)
+
+        if t != self.total:
+            self.logger.info("Total state changed.")
+            self.total = t
+            
+            if self.es:
+                self.logger.info("Notifying.")
+                self.es.set_state(self.total)
+
+
 class TestSwitch(Switch):
     def __init__(self):
         subman = TestSubscriptionManager(proxy(self), NUMBER_A_SERVICE_VOICEMAIL)  # FIXME
@@ -169,32 +209,6 @@ class TestSwitch(Switch):
             self.subscription_manager.unsolicited_unsubscribe(key, id)
             
             
-    def state_changed(self, key, etag, state):
-        self.logger.info("State changed for %s=%s/%s: %s" % (*key, etag, state))
-        
-        s = self.states_by_key.setdefault(key, ({}, {}))
-        partial, total = s
-        
-        if state is None:
-            partial.pop(etag, None)
-        else:
-            partial[etag] = state
-            
-        t = {}
-        for p in partial.values():
-            t.update(p)
-
-        if t != total:
-            self.logger.info("Total state changed.")
-            total.clear()
-            total.update(t)
-
-            if key.type == "phone":
-                self.logger.info("Triggering busylamp for phone state change.")
-                es = self.subscription_manager.get_event_source(EventKey("busylamp", key.id))
-                es.set_state(total)
-
-
     def reregister_snom(self, addr, line):
         post_data = "REREGISTER%3A1=Re-Register"
         url = "http://%s/line_login.htm?l=%d" % (addr, line)
@@ -209,6 +223,19 @@ class TestSwitch(Switch):
         
         for hop in hops:
             record.add_static_contact(UriHop(uri, hop))  # assume same contact uri as the aor
+
+
+    def add_state(self, entity, can_subscribe, can_publish):
+        key = EventKey("phone", entity)
+
+        s = TestState(proxy(self), entity, can_subscribe, can_publish)
+        s.set_oid(self.oid.add("states").add("phone", entity))
+        
+        self.states_by_key[key] = s
+        
+        
+    def get_state(self, key):
+        return self.states_by_key.get(key)
 
 
 def mkctx(src):
@@ -347,15 +374,11 @@ class SwitchA(TestSwitch):
         self.subscription_manager.add_event_source("voicemail", dict(mailbox="201"))
         self.subscription_manager.add_event_source("voicemail", dict(mailbox="211"))
         
-        # Add line states
-        self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_SNOM_1))
-        self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_CISCO_1))
-        self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_LOCAL_RINGING_LINE))
-        self.subscription_manager.add_event_source("busylamp", dict(entity=NUMBER_A_LOCAL_CALLEE_LINE))
-
-        # Add local states
-        self.publication_manager.add_local_state("phone", dict(entity=NUMBER_A_SNOM_1))
-        self.publication_manager.add_local_state("phone", dict(entity=NUMBER_A_CISCO_1))
+        # Add states
+        self.add_state(NUMBER_A_SNOM_1, can_subscribe=True, can_publish=True)
+        self.add_state(NUMBER_A_CISCO_1, can_subscribe=True, can_publish=True)
+        self.add_state(NUMBER_A_LOCAL_RINGING_LINE, can_subscribe=True, can_publish=False)
+        self.add_state(NUMBER_A_LOCAL_CALLEE_LINE, can_subscribe=True, can_publish=False)
         
         if TEST == TEST_PICKUPIN:
             Plug(self.test_caller,

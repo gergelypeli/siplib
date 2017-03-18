@@ -441,7 +441,7 @@ class TestSubscriptionManager(SubscriptionManager):
             return None
 
 
-class PhoneState(LocalState):
+class PhoneLocalState(LocalState):
     def identify(self, params):
         self.state = {}
         self.entity = params["entity"]
@@ -487,7 +487,7 @@ class TestPublicationManager(PublicationManager):
         
     def make_local_state(self, type):
         if type == "phone":
-            return PhoneState()
+            return PhoneLocalState()
         else:
             return PublicationManager.make_local_state(self, type)
         
@@ -550,8 +550,6 @@ class TestLine(Bridge):
         
         
     def update_phone_state(self):
-        key = EventKey("phone", self.username)
-        etag = "line"
         state = {}
         
         if self.is_confirmed is None:
@@ -562,8 +560,15 @@ class TestLine(Bridge):
             state["is_busy"] = True
         
         #es.update(self.call_info["number"], self.is_outgoing, self.is_confirmed)
+        key = EventKey("phone", self.username)
+        etag = "line"
         self.logger.info("Updating phone state %s=%s/%s: %s" % (*key, etag, state))
-        self.ground.switch.state_changed(key, etag, state)
+        s = self.ground.switch.get_state(key)
+        
+        if s:
+            s.state_changed(etag, state)
+        else:
+            self.logger.error("Phone state not found!")
         
         
     def process_dial(self, action):
