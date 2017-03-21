@@ -390,9 +390,6 @@ class AbsoluteUri(namedtuple("AbsoluteUri", [ "scheme", "rest" ])):
 
 class Uri(namedtuple("Uri", "addr username scheme params headers")):
     def __new__(cls, addr, username=None, scheme=None, params=None, headers=None):
-        if scheme == "any":
-            raise Exception("Don't use scheme 'any'!")
-            
         return super().__new__(cls, addr, username, scheme or "sip", params or {}, headers or {})
 
 
@@ -407,7 +404,7 @@ class Uri(namedtuple("Uri", "addr username scheme params headers")):
         
 
     def print(self):
-        text = (self.scheme or "any") + ":"
+        text = "%s:" % self.scheme if self.scheme else ""
         
         if self.username:
             text += escape(self.username, SAFE) + "@"

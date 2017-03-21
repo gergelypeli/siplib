@@ -37,4 +37,6 @@ def generate_sdp_session_id():
     return last_sdp_session_id
 
 
-EventKey = namedtuple("EventKey", [ "type", "id" ])
+class EventKey(namedtuple("EventKey", [ "type", "id" ])):
+    def __str__(self):
+        return "[%s=%s]" % (self.type, self.id)

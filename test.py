@@ -355,39 +355,21 @@ class BusylampEventSource(EventSource):
     def __init__(self):
         EventSource.__init__(self, { "snom", "cisco", "basic" })
 
-        self.entity = None
-        #self.calls_by_number = {}
+        self.uri = None
         self.dialog_formatter = DialogFormatter()
         self.presence_formatter = PresenceFormatter()
         self.cisco_presence_formatter = CiscoPresenceFormatter()
         
     
     def identify(self, params):
-        self.entity = params["entity"]
-        self.dialog_formatter.set_entity(self.entity)
-        self.presence_formatter.set_entity(self.entity)
-        self.cisco_presence_formatter.set_entity(self.entity)
+        self.uri = params["uri"]
+        self.dialog_formatter.set_uri(self.uri)
+        self.presence_formatter.set_uri(self.uri)
+        self.cisco_presence_formatter.set_uri(self.uri)
 
         self.state = {}  # TODO: decide None or {}
 
-        return self.entity
-        
-        
-    def update(self, call_number, is_outgoing, is_confirmed):
-        if is_confirmed is None:
-            self.calls_by_number.pop(call_number)
-        else:
-            state = dict(is_outgoing=is_outgoing, is_confirmed=is_confirmed)
-            self.calls_by_number[call_number] = state
-            
-        self.logger.info("%s: %s" % (self.entity, self.calls_by_number))
-        
-        self.notify_all()
-            
-        
-    #def fake(self):
-    #    self.notify_all()
-    #    self.state += 1
+        return str(self.uri.canonical_aor())
         
         
     def get_state(self, format):
@@ -426,8 +408,9 @@ class TestSubscriptionManager(SubscriptionManager):
             return EventKey("voicemail", from_uri.username), "msgsum"
             
         if event in ("dialog", "presence"):
+            id = str(to_uri.canonical_aor())
             format = "snom" if event == "dialog" else "cisco" if "Cisco" in request.get("user_agent", "") else "basic"
-            return EventKey("busylamp", to_uri.username), format
+            return EventKey("busylamp", id), format
             
         return None, None
         
@@ -444,36 +427,25 @@ class TestSubscriptionManager(SubscriptionManager):
 class PhoneLocalState(LocalState):
     def identify(self, params):
         self.state = {}
-        self.entity = params["entity"]
+        self.uri = params["uri"]
         self.presence_parser = PresenceParser()
         self.cisco_presence_parser = CiscoPresenceParser()
         self.state_change_slot = EventSlot()
 
-        return self.entity
+        return str(self.uri.canonical_aor())
         
 
     def get_state(self, format, content_type, body):
         if format == "cisco":
-            activity = self.cisco_presence_parser.parse(content_type, body)
-            state = dict(cisco=activity)
+            state = self.cisco_presence_parser.parse(content_type, body)
         elif format == "basic":
-            basic = self.presence_parser.parse(content_type, body)
-            state = dict(basic=basic)
+            state = self.presence_parser.parse(content_type, body)
         else:
             return None
             
         return state
         
         
-    #def add_state(self, etag, state):
-    #    self.logger.info("Adding state %s: %s." % (etag, state))
-        
-    #    if state:
-    #        self.state[etag] = state
-    #    else:
-    #        self.state.pop(etag)
-            
-            
 class TestPublicationManager(PublicationManager):
     def __init__(self, switch):
         PublicationManager.__init__(self, switch)
@@ -498,15 +470,16 @@ class TestPublicationManager(PublicationManager):
 
         if event == "presence":
             if "Cisco" in request.get("user_agent", ""):
-                id = self.usernames_by_mac.get(to_uri.username)
+                username = self.usernames_by_mac.get(to_uri.username)
                 
-                if id:
+                if username:
+                    id = str(to_uri._replace(username=username).canonical_aor())
                     return EventKey("phone", id), "cisco"
                 else:
                     self.logger.error("Cisco MAC not configured: %s!" % to_uri.username)
                     return None, None
             else:
-                id = to_uri.username
+                id = str(to_uri.canonical_aor())
                 return EventKey("phone", id), "basic"
         else:
             return None, None

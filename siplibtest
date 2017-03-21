@@ -80,7 +80,7 @@ CALLEE_NAMEADDR = Nameaddr(Uri(Addr(B_DOMAIN, None), "callee"), "Callee")
 
 
 class TestState(Loggable):
-    def __init__(self, switch, entity, can_subscribe, can_publish):
+    def __init__(self, switch, uri, can_subscribe, can_publish):
         Loggable.__init__(self)
         
         self.switch = switch
@@ -88,11 +88,11 @@ class TestState(Loggable):
         self.es = None
         
         if can_publish:
-            self.ls = switch.publication_manager.add_local_state("phone", dict(entity=entity))
+            self.ls = switch.publication_manager.add_local_state("phone", dict(uri=uri))
             Plug(self.state_changed).attach(self.ls.state_change_slot)
         
         if can_subscribe:
-            self.es = switch.subscription_manager.add_event_source("busylamp", dict(entity=entity))
+            self.es = switch.subscription_manager.add_event_source("busylamp", dict(uri=uri))
         
         self.partials_by_etag = {}
         self.total = {}
@@ -225,11 +225,12 @@ class TestSwitch(Switch):
             record.add_static_contact(UriHop(uri, hop))  # assume same contact uri as the aor
 
 
-    def add_state(self, entity, can_subscribe, can_publish):
-        key = EventKey("phone", entity)
+    def add_state(self, uri, can_subscribe, can_publish):
+        id = str(uri.canonical_aor())
+        key = EventKey("phone", id)
 
-        s = TestState(proxy(self), entity, can_subscribe, can_publish)
-        s.set_oid(self.oid.add("states").add("phone", entity))
+        s = TestState(proxy(self), uri, can_subscribe, can_publish)
+        s.set_oid(self.oid.add("states").add("phone", id))
         
         self.states_by_key[key] = s
         
@@ -375,10 +376,13 @@ class SwitchA(TestSwitch):
         self.subscription_manager.add_event_source("voicemail", dict(mailbox="211"))
         
         # Add states
-        self.add_state(NUMBER_A_SNOM_1, can_subscribe=True, can_publish=True)
-        self.add_state(NUMBER_A_CISCO_1, can_subscribe=True, can_publish=True)
-        self.add_state(NUMBER_A_LOCAL_RINGING_LINE, can_subscribe=True, can_publish=False)
-        self.add_state(NUMBER_A_LOCAL_CALLEE_LINE, can_subscribe=True, can_publish=False)
+        ringing_aor = Uri(Addr(A_DOMAIN), NUMBER_A_LOCAL_RINGING_LINE)
+        callee_aor = Uri(Addr(A_DOMAIN), NUMBER_A_LOCAL_CALLEE_LINE)
+        
+        self.add_state(snom_aor, can_subscribe=True, can_publish=True)
+        self.add_state(cisco_aor, can_subscribe=True, can_publish=True)
+        self.add_state(ringing_aor, can_subscribe=True, can_publish=False)
+        self.add_state(callee_aor, can_subscribe=True, can_publish=False)
         
         if TEST == TEST_PICKUPIN:
             Plug(self.test_caller,

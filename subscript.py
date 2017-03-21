@@ -247,12 +247,12 @@ class MessageSummaryFormatter(EventFormatter):
 
 class DialogFormatter(EventFormatter):
     def __init__(self):
-        self.entity = None
+        self.uri = None
         self.version = 0
         
         
-    def set_entity(self, entity):
-        self.entity = entity
+    def set_uri(self, uri):
+        self.uri = uri
         
         
     def side_lines(self, side, info):
@@ -282,8 +282,9 @@ class DialogFormatter(EventFormatter):
         lines = []
         
         lines.append('<?xml version="1.0"?>')
-        
-        lines.append('<dialog-info xmlns="urn:ietf:params:xml:ns:dialog-info" version="%d" state="full" entity="%s">' % (self.version, self.entity))
+
+        entity = str(self.uri)
+        lines.append('<dialog-info xmlns="urn:ietf:params:xml:ns:dialog-info" version="%d" state="full" entity="%s">' % (self.version, entity))
         self.version += 1
         
         for id, info in ds.items():
@@ -320,29 +321,26 @@ class PresenceFormatter(EventFormatter):
     XML = """
 <presence entity="%s" xmlns="urn:ietf:params:xml:ns:pidf" xmlns:pp="urn:ietf:params:xml:ns:pidf:person" xmlns:ep="urn:ietf:params:xml:ns:pidf:rpid:rpid-person">
     <tuple id="siplib">
+        <contact>%s</contact>
         <status>
             <basic>%s</basic>
         </status>
     </tuple>
     <pp:person>
         <status>
-            <ep:activities>
-                %s
-            </ep:activities>
+            <ep:activities>%s</ep:activities>
         </status>
     </pp:person>
-    <note>
-        %s
-    </note>
+    <note>%s</note>
 </presence>
 """
 
     def __init__(self):
-        self.entity = None
+        self.uri = None
         
         
-    def set_entity(self, entity):
-        self.entity = entity
+    def set_uri(self, uri):
+        self.uri = uri
 
 
     def format(self, state):
@@ -359,7 +357,10 @@ class PresenceFormatter(EventFormatter):
         if state.get("is_dnd"):
             activities += "<ep:away/>"
         
-        xml = self.XML % (self.entity, basic, activities, note)
+        entity = str(self.uri._replace(scheme="pres", username=None))
+        contact = str(self.uri)
+        
+        xml = self.XML % (entity, contact, basic, activities, note)
         
         event = "presence"
         content_type = "application/pidf+xml"
@@ -400,7 +401,8 @@ class CiscoPresenceFormatter(PresenceFormatter):
         if not activities:
             activities = "<ce:available/>"
             
-        xml = self.XML % (self.entity, basic, activities)
+        entity = str(self.uri._replace(scheme="pres", username=None))
+        xml = self.XML % (entity, basic, activities)
 
         event = "presence"
         content_type = "application/pidf+xml"
